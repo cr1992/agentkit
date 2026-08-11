@@ -1,0 +1,4 @@
+interface:
+  display_name: "Orchestrate Subagents"
+  short_description: "面向多 Agent 任务的拆分、派发、运行控制与证据验收"
+  default_prompt: "Use $orchestrate-subagents to design and control an auditable subagent task graph."

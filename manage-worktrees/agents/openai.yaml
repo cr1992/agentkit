@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage Worktrees"
+  short_description: "隔离、批量集成并审计 Git worktree 生命周期"
+  default_prompt: "Use $manage-worktrees to plan a reproducible multi-feature integration batch and manage its auditable worktree lifecycle."
