@@ -9,9 +9,11 @@ A practical collection of reusable skills for multi-agent software engineering�
 ```mermaid
 flowchart LR
     A["orchestrate-subagents<br/>任务编排"] --> B["manage-worktrees<br/>隔离与集成"]
-    B --> C["run-agent-verify-loop<br/>独立验收"]
+    B --> C["run-agent-verify-loop<br/>有界实现-验收循环"]
     C -->|"反馈 / feedback"| A
 ```
+
+[Agent Skills 协作架构设计（提案）](./docs/architecture/skill-system-architecture.md)
 
 ## 中文
 
@@ -128,4 +130,3 @@ node --test manage-worktrees/scripts/*.test.mjs
 ## Repository scope
 
 This repository contains only the three distributable skill directories and repository-level documentation. It does not include the source repository's Git history, unrelated private skills, credentials, or organization-specific configuration.
-
