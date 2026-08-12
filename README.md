@@ -4,7 +4,7 @@
 
 一组面向 Agent 软件工程的可复用 Skill：从任务编排、Git worktree 隔离，到一次性独立验收和显式有界循环。
 
-![Agent Skills 显式有界实现—验收循环](./docs/architecture/skill-collaboration.png)
+![Agent Skills 显式有界实现—验收循环](./docs/architecture/skill-collaboration.zh.svg)
 
 图中展示显式 Loop 模式下的典型组合：Controller 冻结合同和 provider 后，Loop 驱动实现、冻结
 Artifact、消费独立验收 Evidence，并把收敛结果交回 Controller。它不表示本组全部 Skill 必须全开；
