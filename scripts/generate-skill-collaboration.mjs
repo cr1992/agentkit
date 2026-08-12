@@ -29,36 +29,19 @@ const fixedTerms = [
 ];
 
 const copy = {
-  zh: {
-    lang: "zh-CN",
-    title: "显式有界 implementation–verification Loop",
-    subtitle: "Controller 显式选择此模式后，Loop 协调彼此独立的 provider capability。",
-    controllerCopy: "freeze Task Contract · choose provider · final authorization",
-    loopMode: "explicit Loop mode",
-    loopAction: "record iteration · consume Evidence · continue / fuse / wait / stop",
-    dispatch: "dispatch implementation",
-    orchestrateAction: "dispatch role · control task state",
-    managedWriter: "managed writer",
-    worktreeAction: "isolate writes · freeze Artifact Ref + Binding",
-    frozenArtifact: "frozen Artifact",
-    verifierAction: "independently verify one frozen Artifact · emit Evidence Package",
-    footer: "每个 provider 都可独立使用。one-shot verification 直接调用 verify-agent-output，不进入此 Loop。",
-  },
-  en: {
-    lang: "en",
-    title: "Explicit bounded implementation–verification loop",
-    subtitle: "The Loop coordinates independent provider capabilities after the Controller explicitly selects this mode.",
-    controllerCopy: "freeze Task Contract · choose providers · final authorization",
-    loopMode: "explicit Loop mode",
-    loopAction: "record iteration · consume Evidence · continue / fuse / wait / stop",
-    dispatch: "dispatch implementation",
-    orchestrateAction: "dispatch roles and control task state",
-    managedWriter: "managed writer",
-    worktreeAction: "isolate writes · freeze Artifact Ref + Binding",
-    frozenArtifact: "frozen Artifact",
-    verifierAction: "verify the current frozen Artifact once · emit Evidence Package",
-    footer: "Each provider also works independently. One-shot verification calls verify-agent-output directly and does not enter this Loop.",
-  },
+  lang: "en",
+  title: "Explicit bounded implementation–verification Loop",
+  subtitle: "The Loop coordinates independent provider capabilities after the Controller explicitly selects this mode.",
+  controllerCopy: "freeze Task Contract · choose providers · final authorization",
+  loopMode: "explicit Loop mode",
+  loopAction: "record iteration · consume Evidence · continue / fuse / wait / stop",
+  dispatch: "dispatch implementation",
+  orchestrateAction: "dispatch roles · control task state",
+  managedWriter: "managed writer",
+  worktreeAction: "isolate writes · freeze Artifact Ref + Binding",
+  frozenArtifact: "frozen Artifact",
+  verifierAction: "verify one frozen Artifact · emit Evidence Package",
+  footer: "Each provider also works independently. One-shot verification calls verify-agent-output directly and does not enter this Loop.",
 };
 
 const escapeXml = (value) => value
@@ -68,8 +51,8 @@ const escapeXml = (value) => value
   .replaceAll('"', "&quot;")
   .replaceAll("'", "&apos;");
 
-function svgFor(locale) {
-  const t = Object.fromEntries(Object.entries(copy[locale]).map(([key, value]) => [key, escapeXml(value)]));
+function svgFor() {
+  const t = Object.fromEntries(Object.entries(copy).map(([key, value]) => [key, escapeXml(value)]));
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1020" viewBox="0 0 1080 1020" role="img" aria-labelledby="title desc" xml:lang="${t.lang}">
   <title id="title">${t.title}</title>
   <desc id="desc">Controller explicitly selects Loop mode. Loop coordinates orchestrate-subagents, manage-worktrees, and verify-agent-output. Evidence Package returns to Loop and Convergence Report returns to Controller.</desc>
@@ -123,22 +106,14 @@ function svgFor(locale) {
 async function main() {
   await mkdir(outputDir, { recursive: true });
   const checkOnly = process.argv.includes("--check");
-  for (const locale of Object.keys(copy)) {
-    const svg = svgFor(locale);
-    for (const name of skillNames) assert.match(svg, new RegExp(`>${name}<`));
-    for (const term of fixedTerms) assert.ok(svg.includes(term), `${locale} missing fixed term: ${term}`);
-    const svgPath = path.join(outputDir, `skill-collaboration.${locale}.svg`);
-    if (checkOnly) {
-      assert.equal(await readFile(svgPath, "utf8"), svg, `${locale} diagram is stale; run node scripts/generate-skill-collaboration.mjs`);
-    } else {
-      await writeFile(svgPath, svg, "utf8");
-    }
-  }
-
-  const zh = await readFile(path.join(outputDir, "skill-collaboration.zh.svg"), "utf8");
-  const en = await readFile(path.join(outputDir, "skill-collaboration.en.svg"), "utf8");
-  for (const term of fixedTerms) {
-    assert.ok(zh.includes(term) && en.includes(term), `locale drift for fixed term: ${term}`);
+  const svg = svgFor();
+  for (const name of skillNames) assert.match(svg, new RegExp(`>${name}<`));
+  for (const term of fixedTerms) assert.ok(svg.includes(term), `diagram missing fixed term: ${term}`);
+  const svgPath = path.join(outputDir, "skill-collaboration.svg");
+  if (checkOnly) {
+    assert.equal(await readFile(svgPath, "utf8"), svg, "diagram is stale; run node scripts/generate-skill-collaboration.mjs");
+  } else {
+    await writeFile(svgPath, svg, "utf8");
   }
 }
 

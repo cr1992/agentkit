@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1020" viewBox="0 0 1080 1020" role="img" aria-labelledby="title desc" xml:lang="zh-CN">
-  <title id="title">显式有界 implementation–verification Loop</title>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1020" viewBox="0 0 1080 1020" role="img" aria-labelledby="title desc" xml:lang="en">
+  <title id="title">Explicit bounded implementation–verification Loop</title>
   <desc id="desc">Controller explicitly selects Loop mode. Loop coordinates orchestrate-subagents, manage-worktrees, and verify-agent-output. Evidence Package returns to Loop and Convergence Report returns to Controller.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#64748b"/></marker>
@@ -9,12 +9,12 @@
     </style>
   </defs>
   <rect class="bg" width="1080" height="1020" rx="28"/>
-  <text class="title" x="62" y="57">显式有界 implementation–verification Loop</text>
-  <text class="subtitle" x="62" y="86">Controller 显式选择此模式后，Loop 协调彼此独立的 provider capability。</text>
+  <text class="title" x="62" y="57">Explicit bounded implementation–verification Loop</text>
+  <text class="subtitle" x="62" y="86">The Loop coordinates independent provider capabilities after the Controller explicitly selects this mode.</text>
   <g filter="url(#shadow)">
     <rect x="300" y="126" width="480" height="96" rx="18" fill="#2454d8"/>
     <text class="controller-name" x="540" y="165" text-anchor="middle">Controller / User Goal</text>
-    <text class="controller-copy" x="540" y="193" text-anchor="middle">freeze Task Contract · choose provider · final authorization</text>
+    <text class="controller-copy" x="540" y="193" text-anchor="middle">freeze Task Contract · choose providers · final authorization</text>
   </g>
   <path class="edge" d="M540 222 L540 270"/><text class="label" x="560" y="250">explicit Loop mode</text>
   <g filter="url(#shadow)">
@@ -26,7 +26,7 @@
   <g filter="url(#shadow)">
     <rect x="100" y="472" width="432" height="112" rx="16" fill="#fff" stroke="#c4b5fd" stroke-width="1.5"/><rect x="100" y="472" width="432" height="8" rx="4" fill="#8b5cf6"/>
     <rect x="128" y="496" width="92" height="22" rx="11" fill="#f3e8ff"/><text class="pill" x="174" y="511" text-anchor="middle" fill="#7e22ce">ORCHESTRATE</text>
-    <text class="name" x="128" y="546">orchestrate-subagents</text><text class="role" x="128" y="574">dispatch role · control task state</text>
+    <text class="name" x="128" y="546">orchestrate-subagents</text><text class="role" x="128" y="574">dispatch roles · control task state</text>
   </g>
   <path class="edge" d="M316 584 L316 638"/><text class="label" x="336" y="616">managed writer</text>
   <g filter="url(#shadow)">
@@ -38,10 +38,10 @@
   <g filter="url(#shadow)">
     <rect x="250" y="817" width="580" height="120" rx="17" fill="#fff" stroke="#7dd3fc" stroke-width="1.5"/><rect x="250" y="817" width="580" height="9" rx="4.5" fill="#0284c7"/>
     <rect x="278" y="842" width="118" height="22" rx="11" fill="#e0f2fe"/><text class="pill" x="337" y="857" text-anchor="middle" fill="#0369a1">INDEPENDENT ONCE</text>
-    <text class="name" x="278" y="891">verify-agent-output</text><text class="role" x="278" y="918">independently verify one frozen Artifact · emit Evidence Package</text>
+    <text class="name" x="278" y="891">verify-agent-output</text><text class="role" x="278" y="918">verify one frozen Artifact · emit Evidence Package</text>
   </g>
   <path class="edge" d="M830 877 C950 824 963 669 963 537 C963 428 908 347 830 333"/>
   <text class="label" x="931" y="635" text-anchor="end">Evidence Package</text><text class="label" x="931" y="656" text-anchor="end">pass · fail · undecidable</text>
   <path class="edge-dashed" d="M830 302 C933 260 919 181 780 174"/><text class="label" x="906" y="238" text-anchor="middle">Convergence Report</text>
-  <line x1="62" y1="971" x2="1018" y2="971" stroke="#dbe2ea"/><text class="footer" x="62" y="997">每个 provider 都可独立使用。one-shot verification 直接调用 verify-agent-output，不进入此 Loop。</text>
+  <line x1="62" y1="971" x2="1018" y2="971" stroke="#dbe2ea"/><text class="footer" x="62" y="997">Each provider also works independently. One-shot verification calls verify-agent-output directly and does not enter this Loop.</text>
 </svg>

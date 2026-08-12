@@ -8,11 +8,8 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dir = path.join(root, "docs", "architecture");
 
-test("localized diagrams preserve Skill names and protocol terms", async () => {
-  const [zh, en] = await Promise.all([
-    readFile(path.join(dir, "skill-collaboration.zh.svg"), "utf8"),
-    readFile(path.join(dir, "skill-collaboration.en.svg"), "utf8"),
-  ]);
+test("shared diagram preserves Skill names and protocol terms", async () => {
+  const svg = await readFile(path.join(dir, "skill-collaboration.svg"), "utf8");
   const fixed = [
     "run-agent-verify-loop",
     "orchestrate-subagents",
@@ -23,12 +20,11 @@ test("localized diagrams preserve Skill names and protocol terms", async () => {
     "Convergence Report",
     "pass · fail · undecidable",
   ];
-  for (const term of fixed) assert.ok(zh.includes(term) && en.includes(term), term);
-  assert.match(zh, /显式有界/);
-  assert.match(en, /Explicit bounded/);
+  for (const term of fixed) assert.ok(svg.includes(term), term);
+  assert.match(svg, /Explicit bounded/);
 });
 
-test("generated diagrams match the single source", () => {
+test("generated diagram matches the single source", () => {
   const result = spawnSync(process.execPath, [path.join(root, "scripts", "generate-skill-collaboration.mjs"), "--check"], {
     cwd: root,
     encoding: "utf8",
