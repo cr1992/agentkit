@@ -13,7 +13,8 @@ description: "管理 Git worktree 隔离、批量集成候选与生命周期：�
 
 - 由 `orchestrate-subagents` 调用时，接收已确认的写入者和并发关系，或已裁决的归属不明 / 路径相交风险；只负责返回目标仓的隔离位置与生命周期记录。
 - `run-agent-verify-loop` 中只有 implementer 写、verifier 只读时不需要 worktree；多个 implementer 并行写或 controller 同时写时才使用本 skill。
-- 用户可以直接要求创建、接管、审计或回收 worktree，此时无需加载另外两个 skill。
+- 用户可以直接要求创建、接管、审计或回收 worktree，此时无需加载其他 skill。
+- 与 `verify-agent-output` 组合时，由本 Skill 输出 Artifact Ref；verifier 只消费冻结身份，不接管 worktree 生命周期。
 
 本 skill 自带 portable runtime，要求 Node.js 18+ 且 `git` 可执行文件在 `PATH`。先从本文件位置解析 skill 目录绝对路径；不要猜固定安装路径，也不要假设当前 shell 是 Bash。
 
@@ -37,6 +38,30 @@ node (Join-Path $SkillDir "scripts/worktree-scan.mjs") <command>
 不要假设目标仓库有同名脚本。仓库可以通过根目录 `.worktree-trace.json` 提供 Profile，但 portable core 不执行 Profile 中的任意 shell command。配置 schema 和项目适配边界见 [references/profile.md](references/profile.md)。
 
 所有命令都必须从**目标 Git 仓库的任意 worktree 内**执行；`SKILL_DIR` 只用于定位脚本，不能先 `cd` 到 skill 安装目录。manager 以当前工作目录解析 repository identity、primary worktree 和 Profile。
+
+### 跨 Skill 稳定产物
+
+需要交给 verifier 或 orchestrator 时，不手抄 SHA 和 owner：
+
+```bash
+node "$SKILL_DIR/scripts/worktree-mgr.mjs" capabilities --json
+node "$SKILL_DIR/scripts/worktree-mgr.mjs" binding <selector> --json
+node "$SKILL_DIR/scripts/worktree-mgr.mjs" artifact <selector> --json
+node "$SKILL_DIR/scripts/worktree-mgr.mjs" verify-artifact <artifact.json> --json
+```
+
+`artifact` 只接受存在、clean 的 worktree，绑定 repository identity、完整 commit、worktree ID 和
+ownership epoch。`verify-artifact` 重算 object format、commit ancestry、owner epoch 与 live HEAD；
+任何漂移都要求重新冻结 Artifact，不能沿用旧验证结果。Binding 只表达隔离与归属，`task_status:
+done` 不代表验证通过或全局任务完成。
+
+碰撞、漂移、交接或回收异常可用 `incident <selector> --input <json>` 记录带 trace event 摘要的
+Reflection，再用 `propose-improvement --reflection <uuid> --input <json>` 形成 `proposed` 候选。
+这些文件写入 Git common-dir 下的运行状态，不进入业务源码，也不自动修改 Profile 或 Skill。
+
+manager 的 trace/common-dir 状态只应由受信 operator/controller 与 runtime 写入。event digest 链用于
+发现部分、追加、乱序和意外损坏，不是签名或外部不可变审计锚；拥有该状态完整写权限的进程可重写
+一条自洽历史。Artifact/owner epoch 的机械保证以诚实 runtime 和受信状态 writer 为权限边界。
 
 ## 强制流程
 

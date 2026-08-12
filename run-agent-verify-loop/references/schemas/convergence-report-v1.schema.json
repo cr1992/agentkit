@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-skills.local/schemas/convergence-report-v1.schema.json",
+  "title": "Convergence Report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "report_id", "loop_id", "contract_digest", "skill_set", "outcome", "iterations", "failure_signatures", "strategy_changes", "verification_aborts", "verification_gaps", "reflection_refs", "improvement_proposal_refs", "generated_at", "report_digest"],
+  "properties": { "schema_version": { "const": 1 }, "report_id": { "type": "string" }, "loop_id": { "type": "string" }, "contract_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }, "skill_set": { "type": "array" }, "outcome": { "enum": ["completed", "stopped"] }, "iterations": { "type": "integer", "minimum": 0 }, "failure_signatures": { "type": "array" }, "strategy_changes": { "type": "array" }, "verification_aborts": { "type": "array" }, "verification_gaps": { "type": "array" }, "reflection_refs": { "type": "array" }, "improvement_proposal_refs": { "type": "array" }, "generated_at": { "type": "string", "format": "date-time" }, "report_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" } }
+}

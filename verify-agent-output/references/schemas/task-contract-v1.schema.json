@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-skills.example/schemas/task-contract-v1.schema.json",
+  "title": "Task Contract v1",
+  "type": "object",
+  "required": ["schema_version", "contract_id", "objective", "scope", "acceptance", "permissions", "environment", "skill_set", "stop_conditions", "extensions", "contract_digest"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "contract_id": { "type": "string", "minLength": 1 },
+    "objective": { "type": "string", "minLength": 1 },
+    "scope": {
+      "type": "object",
+      "required": ["include", "exclude"],
+      "properties": {
+        "include": { "type": "array" },
+        "exclude": { "type": "array" }
+      }
+    },
+    "acceptance": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["contract_item_id", "requirement"],
+        "properties": {
+          "contract_item_id": { "type": "string", "minLength": 1 },
+          "requirement": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "permissions": { "type": "object" },
+    "environment": { "type": "object" },
+    "skill_set": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "version", "content_digest", "provider_mode"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "version": { "type": "string", "minLength": 1 },
+          "content_digest": { "$ref": "#/$defs/digest" },
+          "provider_mode": { "enum": ["primary", "optional"] }
+        }
+      }
+    },
+    "stop_conditions": { "type": "array" },
+    "extensions": { "type": "object" },
+    "contract_digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": { "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" } }
+}

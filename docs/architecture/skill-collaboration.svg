@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">Four Agent Skills collaboration architecture</title>
+  <desc id="desc">The controller routes work on demand to orchestration, worktree isolation, one-shot verification, and a bounded verification loop. Skills exchange frozen contracts, artifacts, evidence, and convergence reports.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/>
+    </marker>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 26px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .node-title { font: 700 18px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #0f172a; }
+      .node-copy { font: 400 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .controller-title { font: 700 20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #ffffff; }
+      .controller-copy { font: 400 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #dbeafe; }
+      .edge { fill: none; stroke: #64748b; stroke-width: 2; marker-end: url(#arrow); }
+      .edge-primary { fill: none; stroke: #2563eb; stroke-width: 2.4; marker-end: url(#arrowBlue); }
+      .edge-dashed { fill: none; stroke: #64748b; stroke-width: 2; stroke-dasharray: 7 6; marker-end: url(#arrow); }
+      .edge-label { font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #334155; paint-order: stroke; stroke: #f8fafc; stroke-width: 5px; stroke-linejoin: round; }
+      .legend { font: 400 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1200" height="760" rx="24"/>
+  <text class="title" x="60" y="55">Four independent skills, composed on demand</text>
+  <text class="subtitle" x="60" y="83">Controller owns routing and final authorization; arrows carry frozen envelopes or provider results.</text>
+
+  <g filter="url(#shadow)">
+    <rect x="420" y="112" width="360" height="105" rx="18" fill="#1d4ed8"/>
+    <text class="controller-title" x="600" y="151" text-anchor="middle">Controller / User Goal</text>
+    <text class="controller-copy" x="600" y="178" text-anchor="middle">Contract · routing · provider choice · final authorization</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="60" y="305" width="250" height="125" rx="16" fill="#ffffff" stroke="#a78bfa" stroke-width="2"/>
+    <rect x="60" y="305" width="250" height="8" rx="4" fill="#8b5cf6"/>
+    <text class="node-title" x="185" y="350" text-anchor="middle">orchestrate-subagents</text>
+    <text class="node-copy" x="185" y="380" text-anchor="middle">Task graph · barriers</text>
+    <text class="node-copy" x="185" y="402" text-anchor="middle">dispatch ledger · batch fuse</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="335" y="305" width="250" height="125" rx="16" fill="#ffffff" stroke="#22c55e" stroke-width="2"/>
+    <rect x="335" y="305" width="250" height="8" rx="4" fill="#16a34a"/>
+    <text class="node-title" x="460" y="350" text-anchor="middle">manage-worktrees</text>
+    <text class="node-copy" x="460" y="380" text-anchor="middle">Git isolation · owner epoch</text>
+    <text class="node-copy" x="460" y="402" text-anchor="middle">Artifact Ref + Binding</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="610" y="305" width="250" height="125" rx="16" fill="#ffffff" stroke="#38bdf8" stroke-width="2"/>
+    <rect x="610" y="305" width="250" height="8" rx="4" fill="#0284c7"/>
+    <text class="node-title" x="735" y="350" text-anchor="middle">verify-agent-output</text>
+    <text class="node-copy" x="735" y="380" text-anchor="middle">Smoke L0 · independent L1</text>
+    <text class="node-copy" x="735" y="402" text-anchor="middle">Final L0 · immutable Evidence</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="885" y="305" width="255" height="125" rx="16" fill="#ffffff" stroke="#fb923c" stroke-width="2"/>
+    <rect x="885" y="305" width="255" height="8" rx="4" fill="#ea580c"/>
+    <text class="node-title" x="1012" y="350" text-anchor="middle">run-agent-verify-loop</text>
+    <text class="node-copy" x="1012" y="380" text-anchor="middle">Implement · verify · decide</text>
+    <text class="node-copy" x="1012" y="402" text-anchor="middle">Bounded retries · fuse · H gate</text>
+  </g>
+
+  <path class="edge-primary" d="M520 217 C430 245 270 252 185 305"/>
+  <text class="edge-label" x="318" y="247" text-anchor="middle">multi-node / parallel</text>
+  <path class="edge-primary" d="M565 217 C520 252 485 265 460 305"/>
+  <text class="edge-label" x="489" y="260" text-anchor="middle">Git isolation</text>
+  <path class="edge-primary" d="M635 217 C680 252 710 265 735 305"/>
+  <text class="edge-label" x="711" y="260" text-anchor="middle">verify once</text>
+  <path class="edge-primary" d="M680 217 C770 245 925 252 1012 305"/>
+  <text class="edge-label" x="880" y="247" text-anchor="middle">explicit convergence</text>
+
+  <path class="edge" d="M310 365 L335 365"/>
+  <text class="edge-label" x="323" y="350" text-anchor="middle">managed writer</text>
+  <path class="edge" d="M585 365 L610 365"/>
+  <text class="edge-label" x="598" y="350" text-anchor="middle">Artifact</text>
+  <path class="edge" d="M860 365 L885 365"/>
+  <text class="edge-label" x="873" y="350" text-anchor="middle">Evidence provider</text>
+
+  <path class="edge" d="M185 430 C185 545 440 585 515 217"/>
+  <text class="edge-label" x="282" y="520">Task Contract · ledger</text>
+  <path class="edge" d="M735 430 C735 520 670 552 635 217"/>
+  <text class="edge-label" x="716" y="508" text-anchor="end">Evidence Package</text>
+  <path class="edge" d="M1012 430 C1012 570 780 612 680 217"/>
+  <text class="edge-label" x="930" y="535" text-anchor="end">Convergence Report · fuse · H gate</text>
+
+  <g>
+    <rect x="855" y="565" width="285" height="84" rx="14" fill="#f1f5f9" stroke="#94a3b8" stroke-dasharray="7 5"/>
+    <text class="node-title" x="997" y="598" text-anchor="middle" font-size="16">embedded reviewer adapter</text>
+    <text class="node-copy" x="997" y="624" text-anchor="middle">freeze-time fallback when verifier is absent</text>
+    <path class="edge-dashed" d="M997 565 L1010 432"/>
+  </g>
+
+  <line x1="60" y1="690" x2="1140" y2="690" stroke="#cbd5e1"/>
+  <text class="legend" x="60" y="721">Each skill can run independently. Ordinary tasks may use none. Loop is not the global entry point.</text>
+</svg>

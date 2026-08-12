@@ -3,7 +3,7 @@
 
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +40,8 @@ import {
 } from './worktree-trace.mjs';
 
 const PREFIX = '[worktree-mgr]';
+const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 const FETCH_TIMEOUT_MS = 10_000;
 const SUBMIT_PUSH_TIMEOUT_MS = 60_000;
 const CODEGRAPH_TIMEOUT_MS = 10 * 60_000;
@@ -124,6 +126,26 @@ export function runFileCapture(command, args, options = {}) {
 /** @param {string[]} args @param {string} [cwd] @param {{timeoutMs?:number,stdio?:any}} [options] */
 function gitTry(args, cwd = process.cwd(), options = {}) {
   return runFileTry('git', args, { cwd, ...options });
+}
+
+/** @param {string|Buffer} value */
+function contentDigest(value) {
+  return `sha256:${createHash('sha256').update(value).digest('hex')}`;
+}
+
+/** Installation-path-independent digest used in cross-Skill contracts. */
+export function worktreeSkillDigest(root = SKILL_ROOT) {
+  const files = [];
+  const visit = (absolute, relativePath) => {
+    const stat = lstatSync(absolute);
+    if (stat.isDirectory()) for (const name of readdirSync(absolute).sort()) visit(join(absolute, name), relativePath ? `${relativePath}/${name}` : name);
+    else if (stat.isFile() || stat.isSymbolicLink()) {
+      const bytes = readFileSync(absolute);
+      files.push({ path: relativePath, size: bytes.length, sha256: contentDigest(bytes) });
+    }
+  };
+  for (const name of ['SKILL.md', 'agents', 'references', 'scripts']) if (existsSync(join(root, name))) visit(join(root, name), name);
+  return contentDigest(Buffer.from(JSON.stringify(files.sort((a, b) => a.path.localeCompare(b.path)))));
 }
 
 /** @param {{error?:unknown}} result @param {string} fallback */
@@ -1327,11 +1349,11 @@ function cmdAudit(args) {
 }
 
 /** @param {unknown} value */
-function canonicalJson(value) {
+export function canonicalJson(value) {
   if (Array.isArray(value)) return value.map(canonicalJson);
   if (value && typeof value === 'object') {
     return Object.fromEntries(
-      Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
+      Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
         .map(([key, child]) => [key, canonicalJson(child)]),
     );
   }
@@ -1761,6 +1783,37 @@ function cmdDoctor(args) {
   if (loaded.context.current_worktree !== loaded.context.primary_worktree) {
     const local = join(loaded.context.current_worktree, PROFILE_FILENAME);
     if (existsSync(local) && existsSync(loaded.profile_path) && readFileSync(local, 'utf8') !== readFileSync(loaded.profile_path, 'utf8')) findings.push({ code: 'PROFILE_DRIFT', severity: 'warning', path: local, authoritative: loaded.profile_path });
+  }
+  const learning = learningRoot(loaded.context.common_dir);
+  const reflectionById = new Map();
+  const reflectionDir = join(learning, 'reflections');
+  if (existsSync(reflectionDir)) for (const name of readdirSync(reflectionDir).filter((item) => item.endsWith('.json'))) {
+    const path = join(reflectionDir, name);
+    try {
+      const value = JSON.parse(readFileSync(path, 'utf8'));
+      const clone = { ...value }; delete clone.reflection_digest;
+      if (contentDigest(Buffer.from(JSON.stringify(canonicalJson(clone)))) !== value.reflection_digest) throw new Error('reflection digest mismatch');
+      const eventRef = value.evidence_refs?.find((item) => item.type === 'event');
+      const match = /^([^:]+):(.+)$/u.exec(eventRef?.id ?? '');
+      if (!match) throw new Error('event ref invalid');
+      const event = readEventChain(loaded.context.common_dir, match[1]).find((item) => item.event_id === match[2]);
+      if (!event || contentDigest(Buffer.from(JSON.stringify(canonicalJson(event)))) !== eventRef.digest) throw new Error('event evidence digest mismatch');
+      reflectionById.set(value.reflection_id, value);
+    } catch (error) {
+      findings.push({ code: 'LEARNING_REFLECTION_INVALID', severity: 'error', path, detail: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  const proposalDir = join(learning, 'proposals');
+  if (existsSync(proposalDir)) for (const name of readdirSync(proposalDir).filter((item) => item.endsWith('.json'))) {
+    const path = join(proposalDir, name);
+    try {
+      const value = JSON.parse(readFileSync(path, 'utf8'));
+      const clone = { ...value }; delete clone.proposal_digest;
+      if (value.lifecycle !== 'proposed' || contentDigest(Buffer.from(JSON.stringify(canonicalJson(clone)))) !== value.proposal_digest) throw new Error('proposal digest/lifecycle invalid');
+      if (!(value.source_reflections ?? []).every((item) => reflectionById.get(item.reflection_id)?.reflection_digest === item.reflection_digest)) throw new Error('proposal reflection binding invalid');
+    } catch (error) {
+      findings.push({ code: 'LEARNING_PROPOSAL_INVALID', severity: 'error', path, detail: error instanceof Error ? error.message : String(error) });
+    }
   }
   if (args.flags.get('json')) console.log(JSON.stringify({ findings }, null, 2));
   else { log(`doctor findings=${findings.length}`); for (const finding of findings) console.log(`  [${finding.severity}] ${finding.code} ${finding.path ?? finding.worktree_id ?? ''}`); }
@@ -2782,6 +2835,172 @@ function cmdReclaim(args) {
   log(`已回收 ${result.record.worktree_id.slice(0, 8)} ${result.record.branch ?? '(detached)'}；branch=${result.branch_cleanup?.status ?? 'legacy'}${recovery}，审计历史保留。`);
 }
 
+function worktreeEnvelopeContext(args) {
+  const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
+  const record = selectRecord(loadRecords(loaded.context.common_dir), args.positionals[0] ?? null, flag(args.flags, 'id'));
+  const identity = ensureRepositoryIdentity(loaded.context);
+  const snapshot = liveGitSnapshot(record);
+  return { loaded, record, identity, snapshot };
+}
+
+function buildBinding(record, identity, snapshot) {
+  return {
+    schema_version: 1,
+    provider: 'manage-worktrees',
+    repository_id: identity.repository_id,
+    worktree_id: record.worktree_id,
+    workdir: record.path,
+    branch: record.branch,
+    owner: { agent: record.agent.host, agent_id: record.agent.id, epoch: record.ownership_epochs?.length ?? 0 },
+    base_sha: record.base_sha,
+    head_sha: snapshot.head ?? record.last_head,
+    task_status: record.task_status,
+    worktree_state: record.worktree_state,
+  };
+}
+
+function buildArtifact(record, identity, snapshot, cwd) {
+  if (!snapshot.present) die('Artifact 要求 worktree 当前存在。', 2);
+  if (snapshot.dirty !== false) die('Artifact 要求 worktree clean。', 2);
+  if (!snapshot.head) die('Artifact 无法冻结 HEAD。', 2);
+  const objectFormat = git(['rev-parse', '--show-object-format'], cwd);
+  return {
+    schema_version: 1,
+    provider: 'manage-worktrees',
+    repository_id: identity.repository_id,
+    object_format: objectFormat,
+    base_sha: record.base_sha,
+    artifact_sha: snapshot.head,
+    branch_hint: record.branch ?? undefined,
+    worktree_id: record.worktree_id,
+    ownership_epoch: record.ownership_epochs?.length ?? 0,
+  };
+}
+
+function cmdBinding(args) {
+  rejectUnknownFlags(args.flags, ['json', 'id', 'config']);
+  const { record, identity, snapshot } = worktreeEnvelopeContext(args);
+  console.log(JSON.stringify(buildBinding(record, identity, snapshot), null, 2));
+}
+
+function cmdArtifact(args) {
+  rejectUnknownFlags(args.flags, ['json', 'id', 'config']);
+  const { loaded, record, identity, snapshot } = worktreeEnvelopeContext(args);
+  console.log(JSON.stringify(buildArtifact(record, identity, snapshot, loaded.context.current_worktree), null, 2));
+}
+
+export function verifyArtifactEnvelope(artifact, loaded, records = loadRecords(loaded.context.common_dir)) {
+  if (!artifact || artifact.schema_version !== 1 || artifact.provider !== 'manage-worktrees') throw new Error('Artifact schema/provider 无效');
+  if (typeof artifact.worktree_id !== 'string' || !artifact.worktree_id) throw new Error('Artifact worktree_id 缺失');
+  if (!Number.isInteger(artifact.ownership_epoch) || artifact.ownership_epoch < 1) throw new Error('Artifact ownership_epoch 缺失或无效');
+  const identity = readRepositoryIdentity(loaded.context);
+  if (!identity || artifact.repository_id !== identity.repository_id) throw new Error('Artifact repository_id 不匹配');
+  const objectFormat = git(['rev-parse', '--show-object-format'], loaded.context.current_worktree);
+  if (artifact.object_format !== objectFormat) throw new Error('Artifact object_format 不匹配');
+  const length = objectFormat === 'sha256' ? 64 : objectFormat === 'sha1' ? 40 : 0;
+  for (const field of ['base_sha', 'artifact_sha']) {
+    if (!new RegExp(`^[0-9a-f]{${length}}$`, 'u').test(String(artifact[field] ?? ''))) throw new Error(`${field} 不是完整 object id`);
+    if (!gitTry(['cat-file', '-e', `${artifact[field]}^{commit}`], loaded.context.current_worktree).ok) throw new Error(`${field} 不是可达 commit`);
+  }
+  if (!gitTry(['merge-base', '--is-ancestor', artifact.base_sha, artifact.artifact_sha], loaded.context.current_worktree).ok) throw new Error('Artifact base 不是 artifact ancestor');
+  const record = records.find((candidate) => candidate.worktree_id === artifact.worktree_id);
+  if (!record) throw new Error('Artifact worktree_id 不存在');
+  if (record.base_sha !== artifact.base_sha) throw new Error('Artifact base_sha 与 worktree record 不匹配');
+  if (artifact.ownership_epoch !== (record.ownership_epochs?.length ?? 0)) throw new Error('Artifact ownership_epoch 已 stale');
+  const live = liveGitSnapshot(record);
+  if (!live.present) throw new Error('Artifact worktree 已不存在');
+  if (live.head !== artifact.artifact_sha) throw new Error('Artifact SHA 与 live HEAD 不一致');
+  if (live.dirty !== false) throw new Error('Artifact worktree 已变脏');
+  return { valid: true, repository_id: artifact.repository_id, artifact_sha: artifact.artifact_sha, object_format: artifact.object_format };
+}
+
+function cmdVerifyArtifact(args) {
+  rejectUnknownFlags(args.flags, ['json', 'config']);
+  const path = args.positionals[0];
+  if (!path) die('verify-artifact 需要 Artifact JSON 文件。', 2);
+  const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
+  const artifact = JSON.parse(readFileSync(resolve(path), 'utf8'));
+  console.log(JSON.stringify(verifyArtifactEnvelope(artifact, loaded), null, 2));
+}
+
+function sanitizeLearningText(value) {
+  return oneLine(String(value ?? '').replace(/\bBearer\s+\S+/giu, 'Bearer [REDACTED]').replace(/\/(?:Users|home)\/[^\s"']+/gu, '[LOCAL_PATH]'), 'reflection text', 1000);
+}
+
+function learningRoot(commonDir) {
+  return join(traceLayout(commonDir).root, 'learning');
+}
+
+function cmdIncident(args) {
+  rejectUnknownFlags(args.flags, ['input', 'id', 'config']);
+  const inputPath = flag(args.flags, 'input');
+  if (!inputPath) die('incident 需要 --input <json>。', 2);
+  const { loaded, record } = worktreeEnvelopeContext(args);
+  const input = JSON.parse(readFileSync(resolve(inputPath), 'utf8'));
+  if (!DIGEST_PATTERN.test(String(input.contract_digest ?? ''))) die('incident contract_digest 无效。', 2);
+  if (!['contract_gap', 'skill_gap', 'verification_gap', 'tool_gap', 'environment_gap', 'false_positive', 'false_negative', 'inefficiency'].includes(input.classification)) die('incident classification 无效。', 2);
+  const chain = readEventChain(loaded.context.common_dir, record.worktree_id);
+  const latest = chain.at(-1);
+  if (!latest) die('worktree record 没有可引用事件。', 2);
+  const eventDigest = contentDigest(Buffer.from(JSON.stringify(canonicalJson(latest))));
+  const reflection = {
+    schema_version: 1,
+    reflection_id: randomUUID(),
+    trigger: input.trigger ?? 'unexpected_outcome',
+    scope: { contract_digest: input.contract_digest },
+    affected_skill: { name: 'manage-worktrees', version: 'unversioned', content_digest: worktreeSkillDigest() },
+    classification: input.classification,
+    observation: sanitizeLearningText(input.observation),
+    evidence_refs: [{ type: 'event', id: `${record.worktree_id}:${latest.event_id}`, digest: eventDigest }],
+    impact: input.impact ?? 'medium',
+    confidence: input.confidence ?? 'high',
+    recommended_disposition: input.recommended_disposition ?? 'continue',
+    recorded_at: new Date().toISOString(),
+  };
+  reflection.reflection_digest = contentDigest(Buffer.from(JSON.stringify(canonicalJson(reflection))));
+  const directory = join(learningRoot(loaded.context.common_dir), 'reflections');
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const path = join(directory, `${reflection.reflection_id}.json`);
+  writeFileSync(path, `${JSON.stringify(reflection, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+  console.log(JSON.stringify({ reflection, ref: path }, null, 2));
+}
+
+function cmdProposeImprovement(args) {
+  rejectUnknownFlags(args.flags, ['reflection', 'input', 'config']);
+  const reflectionId = flag(args.flags, 'reflection');
+  const inputPath = flag(args.flags, 'input');
+  if (!reflectionId || !inputPath || !/^[0-9a-f-]{36}$/iu.test(reflectionId)) die('propose-improvement 需要 --reflection <uuid> --input <json>。', 2);
+  const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
+  const reflectionPath = join(learningRoot(loaded.context.common_dir), 'reflections', `${reflectionId}.json`);
+  if (!existsSync(reflectionPath)) die('Reflection 不存在。', 2);
+  const reflection = JSON.parse(readFileSync(reflectionPath, 'utf8'));
+  const input = JSON.parse(readFileSync(resolve(inputPath), 'utf8'));
+  if (!reflection.evidence_refs?.length) die('Proposal 必须来自有证据的 Reflection。', 2);
+  const proposal = {
+    schema_version: 1,
+    proposal_id: randomUUID(),
+    target_skill: { name: 'manage-worktrees', based_on_version: 'unversioned', based_on_digest: reflection.affected_skill.content_digest },
+    source_reflections: [{ reflection_id: reflection.reflection_id, reflection_digest: reflection.reflection_digest }],
+    problem: { type: input.problem_type ?? 'skill_gap', evidence_refs: reflection.evidence_refs },
+    proposed_change: sanitizeLearningText(input.proposed_change),
+    affected_scope: (input.affected_scope ?? []).map(sanitizeLearningText),
+    counterexamples: (input.counterexamples ?? []).map(sanitizeLearningText),
+    validation_plan: { replay_cases: input.validation_plan?.replay_cases ?? [], regression_suites: input.validation_plan?.regression_suites ?? [], independent_review: 'required', ...(input.validation_plan?.canary ? { canary: input.validation_plan.canary } : {}) },
+    lifecycle: 'proposed',
+  };
+  proposal.proposal_digest = contentDigest(Buffer.from(JSON.stringify(canonicalJson(proposal))));
+  const directory = join(learningRoot(loaded.context.common_dir), 'proposals');
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const path = join(directory, `${proposal.proposal_id}.json`);
+  writeFileSync(path, `${JSON.stringify(proposal, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+  console.log(JSON.stringify({ proposal, ref: path }, null, 2));
+}
+
+function cmdCapabilities(args) {
+  rejectUnknownFlags(args.flags, ['json']);
+  console.log(JSON.stringify({ skill: 'manage-worktrees', runtime_version: '1.0.0', contracts: { worktree_binding: [1], artifact_ref: [1], reflection_record: [1], improvement_proposal: [1] }, features: ['git-common-dir-ledger', 'ownership-epochs', 'artifact-verification', 'incident-reflection', 'proposed-only-improvement'], content_digest: worktreeSkillDigest() }, null, 2));
+}
+
 function usage() {
   console.log(`${PREFIX} portable multi-Agent worktree manager
 
@@ -2802,6 +3021,12 @@ resume-all [--json]
 unwatch <selector> [--id <uuid>]
 reclaim <selector> --pushed <sha> [--id <uuid>]
 reclaim <selector> --superseded-by <replacement-selector> [--discard <exact-old-head>] [--id <uuid>] [--replacement-id <uuid>]
+binding <selector> [--id <uuid>] [--json]
+artifact <selector> [--id <uuid>] [--json]
+verify-artifact <artifact.json> [--json]
+incident <selector> --input <json> [--id <uuid>]
+propose-improvement --reflection <uuid> --input <json>
+capabilities [--json]
 
 所有命令支持 --config <path>；默认 Profile 固定从 primary worktree 读取。`);
 }
@@ -2828,6 +3053,12 @@ function main() {
     unwatch: cmdUnwatch,
     'watch-worker': cmdWatchWorker,
     reclaim: cmdReclaim,
+    binding: cmdBinding,
+    artifact: cmdArtifact,
+    'verify-artifact': cmdVerifyArtifact,
+    incident: cmdIncident,
+    'propose-improvement': cmdProposeImprovement,
+    capabilities: cmdCapabilities,
   };
   if (!commands[sub]) die(`未知子命令: ${sub}`, 2);
   commands[sub](args);

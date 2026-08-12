@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-skills.local/schemas/worktree-binding-v1.schema.json",
+  "title": "Worktree Binding v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "provider", "repository_id", "worktree_id", "workdir", "branch", "owner", "base_sha", "head_sha", "task_status", "worktree_state"],
+  "properties": {
+    "schema_version": { "const": 1 }, "provider": { "const": "manage-worktrees" }, "repository_id": { "type": "string" }, "worktree_id": { "type": "string" }, "workdir": { "type": "string" }, "branch": { "type": ["string", "null"] },
+    "owner": { "type": "object", "additionalProperties": false, "required": ["agent", "agent_id", "epoch"], "properties": { "agent": { "type": "string" }, "agent_id": { "type": "string" }, "epoch": { "type": "integer", "minimum": 1 } } },
+    "base_sha": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" }, "head_sha": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+    "task_status": { "enum": ["active", "blocked", "ready_for_review", "integrating", "done", "abandoned"] }, "worktree_state": { "enum": ["present", "missing", "reclaim_ready", "reclaimed"] }
+  }
+}

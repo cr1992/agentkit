@@ -1,4 +1,4 @@
 interface:
   display_name: "Agent Verify Loop"
-  short_description: "通过实现者与独立验收者隔离运行可恢复的证据验收闭环"
-  default_prompt: "Use $run-agent-verify-loop to run an evidence-backed implementer and independent verifier loop."
+  short_description: "显式运行可恢复、可熔断且带人工门的实现与独立验收有界循环"
+  default_prompt: "Use $run-agent-verify-loop to run an explicit bounded implementer and independent verifier loop."

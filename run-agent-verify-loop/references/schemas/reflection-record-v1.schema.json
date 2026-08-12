@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-skills.local/schemas/reflection-record-v1.schema.json",
+  "title": "Reflection Record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "reflection_id", "trigger", "scope", "affected_skill", "classification", "observation", "evidence_refs", "impact", "confidence", "recommended_disposition", "recorded_at", "reflection_digest"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "reflection_id": { "type": "string", "minLength": 1 },
+    "trigger": { "enum": ["repeated_failure", "undecidable", "user_correction", "runtime_abort", "workaround", "protocol_conflict", "unexpected_outcome", "terminal_retrospective"] },
+    "scope": { "type": "object", "required": ["contract_digest"], "properties": { "contract_digest": { "$ref": "#/$defs/digest" }, "loop_id": { "type": ["string", "null"] }, "iteration": { "type": ["integer", "null"] }, "run_id": { "type": ["string", "null"] } }, "additionalProperties": false },
+    "affected_skill": { "type": "object", "required": ["name", "version", "content_digest"], "properties": { "name": { "type": "string" }, "version": { "type": "string" }, "content_digest": { "$ref": "#/$defs/digest" } }, "additionalProperties": false },
+    "classification": { "enum": ["contract_gap", "skill_gap", "verification_gap", "tool_gap", "environment_gap", "false_positive", "false_negative", "inefficiency"] },
+    "observation": { "type": "string", "minLength": 1 },
+    "evidence_refs": { "type": "array", "items": { "type": "object", "required": ["type", "id", "digest"], "properties": { "type": { "enum": ["artifact", "evidence", "event", "diagnostic"] }, "id": { "type": "string" }, "digest": { "$ref": "#/$defs/digest" } }, "additionalProperties": false } },
+    "impact": { "enum": ["low", "medium", "high", "safety"] },
+    "confidence": { "enum": ["low", "medium", "high"] },
+    "recommended_disposition": { "enum": ["continue", "undecidable", "abort", "re_contract", "human_gate"] },
+    "recorded_at": { "type": "string", "format": "date-time" },
+    "reflection_digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": { "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" } }
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-skills.example/schemas/embedded-verification-record-v1.schema.json",
+  "title": "Embedded Verification Record v1",
+  "type": "object",
+  "required": ["schema_version", "record_type", "record_id", "loop_id", "iteration", "contract_digest", "verification_profile_digest", "artifact_ref", "l0_result", "l1_result", "independent_context", "outcome", "record_digest"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "record_type": { "const": "embedded_verification_record" },
+    "record_id": { "type": "string", "minLength": 1 },
+    "loop_id": { "type": "string", "minLength": 1 },
+    "iteration": { "type": "integer", "minimum": 1 },
+    "contract_digest": { "$ref": "#/$defs/digest" },
+    "verification_profile_digest": { "$ref": "#/$defs/digest" },
+    "artifact_ref": { "type": "object" },
+    "l0_result": { "type": "object" },
+    "l1_result": { "$ref": "review-result-v1.schema.json" },
+    "independent_context": {
+      "type": "object",
+      "required": ["assurance", "reviewer_run_id"],
+      "properties": {
+        "assurance": { "enum": ["host_reported", "user_relayed"] },
+        "reviewer_run_id": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "outcome": { "enum": ["pass", "fail", "undecidable", "blocked_safety"] },
+    "record_digest": { "$ref": "#/$defs/digest" }
+  },
+  "additionalProperties": false,
+  "$defs": { "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" } }
+}

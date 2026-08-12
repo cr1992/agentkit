@@ -1,6 +1,6 @@
 ---
 name: orchestrate-subagents
-description: "编排子 Agent：决定任务拆分、角色、并发、派发契约、模型、权限、运行控制和最终验收。仅当用户明确要求子 Agent、多 Agent、并行或委派，或者当前任务已经确定需要实际派生至少一个子 Agent 时使用。普通 Workflow、单 Agent 闭环、单点查询、单文档审查和小型修改不适用。"
+description: "编排子 Agent：决定任务拆分、角色、并发、派发契约、模型、权限、运行控制和最终验收。仅当用户明确要求子 Agent、多 Agent、并行或委派，或者当前任务已经确定需要实际派生至少一个子 Agent 时使用。普通 Workflow、单 Agent 闭环、单点查询、单文档审查、小型修改，以及固定单一 Artifact、单个只读 reviewer 的一次性独立验收不适用；后者应直接使用 verify-agent-output。"
 ---
 
 # orchestrate-subagents：子 Agent 编排控制协议
@@ -13,12 +13,16 @@ description: "编排子 Agent：决定任务拆分、角色、并发、派发契
 
 | 条件 | 动作 |
 |---|---|
-| 用户明确要求实现者与验收者隔离，或任务契约要求 verifier 多轮证伪 | `run-agent-verify-loop` 可用时用它增补验证循环；不可用时只执行本 skill 的普通编排，不宣称完整闭环 |
+| 固定单一 Artifact、单个只读 reviewer、只验一次 | 不启动本 skill；直接使用 `verify-agent-output`，由当前 controller 消费 Evidence |
+| reviewer 是多节点任务图的一部分，或需要并发、不同权限、多个 critic | 本 skill 建任务图；节点的一次性 Evidence 可由 `verify-agent-output` 提供 |
+| 用户明确要求实现者与验收者反复收敛 | `run-agent-verify-loop` 可用时用它执行有界循环；Loop 内的一次性验证只作为 provider 调用，不再创建第二个全局 orchestrator |
 | 已确认同仓存在多个并行写入者、写路径碰撞，或写入归属不明且相交 / 丢失代价高，或用户明确要求 worktree | `manage-worktrees` 可用时用它建立和维护隔离；不可用时执行第 3 节安全下限 |
 | 只有一个写入者，其他 Agent 只读 | 共享树，不使用 `manage-worktrees` |
-| 普通批量、仓库 dirty、理论上可能并发 | 不足以启用另外两个 skill |
+| 普通批量、仓库 dirty、理论上可能并发 | 不足以启用其他专项 skill |
 
-controller 只维护一份公共任务契约和一份运行台账。`run-agent-verify-loop` 只增补验证字段；`manage-worktrees` 只回填 `environment.isolation / workdir / branch / owner`。专项 skill 不得重建任务图、改变授权或夺取最终完成判断。
+controller 只维护一份公共任务契约和一份运行台账。`verify-agent-output` 只返回一次性 Evidence；
+`run-agent-verify-loop` 只维护循环状态；`manage-worktrees` 只回填隔离与 Artifact 身份。专项 skill
+不得重建任务图、改变授权或夺取最终完成判断。
 
 ## 控制面不变量与派发台账
 
@@ -48,6 +52,36 @@ pipeline/制品链接，或稳定报告路径。只读审计可以状态包 + �
 台账同时是回收清单：会话结束前确认没有孤儿 worker、孤儿 worktree 或遗留运行时资源；端口、数据库等只在确实使用时作为环境备注。若用户明确要求表格汇报，即使没有派生 worker，也用“工作进展”表呈现 controller 工作。
 
 台账活在对话里，但每次更新时点须把任务图与三张表同步快照到仓库外的会话临时位置的 durable 状态文件；controller 失效后它是接手协议（见第 6 节）的台账输入，闭环审计通过后随本轮临时资源一并清理，不进项目仓。
+
+### 机械台账工具
+
+先用 `contract-tool.mjs normalize / validate / digest / review-view / diff` 固定公共 Task Contract；
+再以仓库外 state root 初始化 `orchestration-ledger.mjs`。脚本不直接派发 Agent，controller 把宿主
+派发回执写入 `dispatch-record`：
+
+```text
+capabilities
+init --contract <json> --state-root <dir>
+add-node / add-edge / dispatch-record / update / attach
+batch-init / batch-record / batch-status / batch-fuse
+record-reflection / propose-improvement
+status / inspect / rebuild / doctor
+```
+
+所有修改命令支持 `--expected-revision`。节点必须绑定 Artifact、Evidence、Loop report 等稳定产物后
+才能进入 `passed`；依赖和 barrier 未通过时不能派发下游。批量任务由 orchestrator 为每个 work item
+建立独立 Loop，并在 batch ledger 按稳定 failure key 做连续同因熔断；Loop 本身不维护批队列。
+完整命令和边界见 [编排运行时](references/orchestration-runtime.md)。
+
+Reflection 只记录合同、路由、并行、资源或批级异常的证据化观察；Improvement Proposal 永远是
+`proposed`，当前执行面不读取它，也不自动改变模型路由、授权或验收规则。
+
+### 台账信任边界
+
+orchestration state root 只应由 controller/operator 与 ledger runtime 写入。journal digest chain
+用于发现部分、追加、乱序和意外损坏并支持恢复，不是数字签名或外部不可变审计日志；拥有完整写权限
+的进程可重写整条自洽历史。跨 run/Loop 的 Artifact safety、Evidence 和失败记忆只有在该受信 writer
+边界内才是持久台账，不得把本地 hash chain 描述成对恶意 state-root writer 的保证。
 
 ## 1. 先过闸门
 

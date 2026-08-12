@@ -1,6 +1,6 @@
 # Agent Skills 协作架构设计
 
-> 状态：提案（Proposed）
+> 状态：v1 已实现，试点中（Pilot）
 >
 > 范围：`orchestrate-subagents`、`manage-worktrees`、
 > `verify-agent-output` 与 `run-agent-verify-loop`
@@ -202,8 +202,8 @@ Agent 必须执行当前冻结协议，同时持续审计以下冲突：
   provider 选择和所有 extension；freeze 后专项 Skill 只读合同，通过独立 receipt / state
   envelope 回报结果，不再写合同。
 
-以下各节描述目标 v1 行为。除第 8.1 节明确标记为“已有”的脚本外，其余 runtime、命令和
-第四个 Skill 都尚未实现，不能当作当前仓库已经提供的能力。
+以下各节描述目标 v1 行为。第 8.1 节记录当前源码成熟度；Phase 1a runtime 已进入本仓实现与测试，
+尚未评审、合入或发布的能力不能当作稳定版本承诺，Phase 1b 及后续阶段仍属于 proposed。
 
 ## 5. 每个 Skill 如何独立使用
 
@@ -618,6 +618,7 @@ review_result_id: "<uuid>"
 contract_digest: "sha256:..."
 verification_profile_digest: "sha256:..."
 artifact_ref: {}
+challenge_nonce: "<controller-issued nonce>"
 verdict: fail | no_defect_found | undecidable
 findings:
   - contract_item_id: permission-boundary
@@ -632,7 +633,8 @@ review_result_digest: "sha256:..."
 `verify-agent-output/references/verification-protocol.md` 是 reviewer 行为、输入隔离、证伪步骤和
 三态 verdict 语义的唯一真源。Review Result schema 是跨 Skill 契约；unknown
 `contract_item_id`、无 evidence finding、`no_defect_found` 无 forensics、以及包含 safety finding
-却试图按普通 pass 处理都必须被脚本拒绝。
+却试图按普通 pass 处理都必须被脚本拒绝。`challenge_nonce` 由 runtime 在当前验收轮生成并放入
+reviewer input；Review Result 必须原样绑定它，以阻止跨 run/iteration 重放。
 
 ### 7.7 Evidence Package
 
@@ -818,10 +820,10 @@ proposal_digest: "sha256:..."
 
 | Skill | 当前脚本化程度 | 判断 |
 | --- | --- | --- |
-| `orchestrate-subagents` | 已有宿主能力缓存与模型策略脚本 | 有局部工具，但任务图与 ledger 仍主要靠协议 |
-| `manage-worktrees` | 已有 manager、scan、profile、trace、provider 及测试 | 已接近完整可执行运行时 |
-| `verify-agent-output` | 尚未创建 | 需要新增 Skill 与运行时 |
-| `run-agent-verify-loop` | 当前没有 scripts | 状态、熔断和恢复仍停留在文档层，必须补强 |
+| `orchestrate-subagents` | Phase 3 已增加 contract tool、任务图 ledger、稳定 attachment、batch fuse、reflection/proposal 与恢复测试 | 控制面核心台账已机械化；宿主派发仍由 controller 调用 |
+| `manage-worktrees` | Phase 2 已增加 Artifact / Binding / capabilities / incident runtime 与测试 | Git 隔离、生命周期和跨 Skill 稳定产物已脚本化 |
+| `verify-agent-output` | Phase 1a/1b 已新增 verification、Reflection 与 proposal runtime | 一次性 Git Artifact 验收和受控改进输入已实现 |
+| `run-agent-verify-loop` | Phase 1a/1b 已新增 loop、embedded、report、Reflection 与 proposal runtime | 单 Loop 状态、恢复、防重放、熔断和收敛报告已脚本化；批量责任已迁移到 orchestrator |
 
 ### 8.2 通用脚本约束
 
@@ -974,8 +976,8 @@ Loop 不维护第二套 verifier protocol。`embedded-review-adapter.md` 只定�
 三态 verdict、finding class、取证要求和输入隔离以
 `verify-agent-output/references/verification-protocol.md` 与第 7.6 节 Review Result v1 为唯一
 语义真源。独立安装的 Loop 随版本化 JSON schema 携带必要的机器校验规则，但不能复制或改写完整
-行为协议。现有 `run-agent-verify-loop/references/verifier-protocol.md` 只有在 verifier Skill、
-新 adapter 和兼容测试同时落地后才删除，避免迁移窗口失去独立验收规则。
+行为协议。Phase 1a 已在 verifier Skill、embedded adapter、共享 Review Result schema 和兼容测试
+同批落地后删除旧 `run-agent-verify-loop/references/verifier-protocol.md`，迁移窗口未丢失独立验收规则。
 
 建议 CLI：
 
@@ -1010,13 +1012,9 @@ Loop 不维护第二套 verifier protocol。`embedded-review-adapter.md` 只定�
 `record-embedded-review` 同样校验 loop ID、iteration、contract、profile、Artifact 和 record digest，
 但只生成 `embedded_verification_record`。它没有进入通用 Evidence 消费注册表的资格。
 
-当前 `run-agent-verify-loop/SKILL.md` 中的“批量队列”属于现状协议。落地本架构时应迁移为：
-orchestrator 为每个 work item 建立独立 Loop，并在自己的任务图中管理批状态；Loop runtime 只维护
-单个收敛对象。
-
-迁移必须等到 Phase 3 的 orchestration ledger、`batch-init / batch-record / batch-fuse` 和恢复测试
-全部可用，再与 Loop 的旧批量条款做同批切换。此前 `run-agent-verify-loop/SKILL.md` 继续保留
-现有批量队列与“连续 3 项同因失败”规则，并标注“迁移中”；不得提前删除造成批级熔断保证倒退。
+批量责任已经迁移：orchestrator 为每个 work item 建立独立 Loop，并在自己的任务图中管理批状态；
+Loop runtime 只维护单个收敛对象。`batch-init / batch-record / batch-status / batch-fuse`、journal 恢复
+和连续同因失败组合测试与旧条款删除同批落地，迁移窗口没有降低批级熔断保证。
 
 ## 9. 验证、证据与安全内核
 
@@ -1092,6 +1090,9 @@ Loop 收到 verification abort 时：
 
 ### 9.6 不可调安全内核
 
+以下不变量由诚实运行的 runtime 在冻结合同、受信 controller 和受信 state-root writer 的权限边界内
+执行；它们不是针对可任意重写 state root 的本地攻击者所作的密码学承诺：
+
 - reviewer 不能读取实现者过程叙事；
 - verifier 不能修改业务 Artifact；
 - implementer 不能改写冻结验证定义；
@@ -1103,6 +1104,22 @@ Loop 收到 verification abort 时：
 - Reflection / Proposal 不能修改当前 Contract、Profile、verdict、fuse 或 H gate；
 - 发现 Skill 缺陷影响验收时必须 undecidable / abort / re-contract，不能现场修规则继续判 pass；
 - 任何 Skill 都不能扩大用户权限。
+
+### 9.7 威胁模型与持久性边界
+
+- state root 是本地授权边界，只应由 controller / operator 和对应 runtime 写入；目录权限、备份和
+  外部审计由宿主负责。拥有完整写权限的进程可以重写 snapshot、journal 和身份文件，v1 不声称能
+  对抗这种进程。
+- journal 的 digest chain 用于发现非合作写入造成的部分、追加、乱序和意外损坏，并支持 crash
+  recovery；它不是数字签名，也没有外部不可变锚。能重写整条链的 writer 可以生成另一条自洽历史。
+- safety finding 在当前冻结 run / Loop 的诚实执行链中优先于其他 verdict，不能被投票抵消。跨新 run
+  的同一 Artifact 安全记忆属于 controller / orchestration ledger / 维护流程；一次性 verifier 不把
+  自己描述为 Artifact 级永久安全台账。
+- `challenge_nonce` 只拒绝未经修改的跨 run Review Result 重放。nonce 对 state-root writer 可见，
+  `host_reported` isolation assurance 是调用方声明，不是 runtime 对宿主隔离的证明。
+- state-root identity 能拒绝未修改的目录复制或移动。`adopt-root` 是 operator 对现有完整 history 的
+  显式重新授权，不是自动修复；拥有写权限的进程仍可删除、改写身份后重新授权，因而该机制不是
+  防复制的密码学证明。
 
 ## 10. 典型工作流
 
@@ -1246,17 +1263,19 @@ assurance:
 
 ### 12.4 文档真源与实施位置
 
-本文件当前是公开分发仓中的提案评审副本。架构定稿时必须完成一次真源迁移：
+本文件是四个 Skill 架构的 authoritative source。公开分发仓中的同路径文件是提案与发布镜像，
+按以下规则维护：
 
-1. 把架构文档纳入四个 Skill 的 authoritative source repository；
-2. 在该仓维护规则中登记：行为、schema、trigger 或 runtime 边界变化时，同一变更必须更新架构；
-3. 把文档加入从真源到公开分发仓的单向白名单同步；
-4. 公开仓只接收同步结果，不反向覆盖真源；
-5. 发布检查验证两边文档摘要与 Skill 版本兼容矩阵。
+1. 行为、schema、trigger 或 runtime 边界变化时，同一变更必须更新本文件；
+2. 本文件属于从真源到公开分发仓的单向白名单；
+3. 公开仓只接收同步结果，不反向覆盖本文件；
+4. 发布检查验证两边文档摘要与 Skill 版本兼容矩阵；
+5. 公开仓可维护自己的 README、许可证与仓库级说明，但不得另行定义 Skill 行为真源。
 
 `verify-agent-output`、`loop-runtime` 及后续脚本必须在 authoritative source repository 开发和测试，
 再按白名单同步到公开分发仓；不得因为提案文档暂时位于公开仓，就直接在分发副本实现后反向搬运。
-在上述维护规则落地前，Phase 0 不算完成。
+上述维护规则已同时登记到本地执行规则 `AGENTS.md` 和受版本控制的仓库 `README.md`；同步实现与
+发布检查仍须在后续交付中持续验证。
 
 ## 13. 测试策略
 
@@ -1373,7 +1392,7 @@ assurance:
 2. `run-agent-verify-loop/scripts/loop-runtime.mjs`；
 3. Verification Profile、Review Result、Evidence、Embedded Record、Loop State 的 schema、状态机和测试；
 4. 更新 verifier / orchestrator frontmatter，落实单 reviewer carve-out；
-5. 将 Loop 的现有 `verifier-protocol.md` 安全迁移为 canonical protocol + embedded adapter；
+5. 将 Loop 的旧 `verifier-protocol.md` 安全迁移为 canonical protocol + embedded adapter；
 6. 实现 Skill provenance / content digest / drift 检查，保证运行中变化触发 abort / re-contract；
 7. 保留现有 Loop 批量条款并标记“迁移中”，本阶段不转移批级熔断。
 
@@ -1395,6 +1414,9 @@ Convergence Report 或 Improvement Proposal runtime 即可交付。
 Phase 0 仍先冻结反思 schema 与安全边界；Phase 1b 只后移 runtime 实现顺序，不把学习结果接入
 当前任务执行链路。
 
+当前源码状态：Phase 1a/1b 已实现；旧批量兼容条款已在 Phase 3 mechanical batch ledger 与迁移
+组合测试落地后删除。
+
 ### Phase 2：统一联动契约
 
 - 为 `manage-worktrees` 增加 Artifact Ref / Binding 输出；
@@ -1403,6 +1425,10 @@ Phase 0 仍先冻结反思 schema 与安全边界；Phase 1b 只后移 runtime �
 - 接通 Artifact → Verification；
 - 为 worktree incident 增加结构化 Reflection Record；
 - 验证 sibling Skill 不存在时的 standalone 行为。
+
+当前源码状态：Artifact Ref / Binding / capabilities / incident reflection 已实现，且已通过
+`manage-worktrees → Artifact → verify-agent-output` 真实组合测试；standalone 与任意组合安装矩阵在
+Phase 4 统一执行。
 
 ### Phase 3：增强 orchestrator 机械台账
 
@@ -1415,6 +1441,9 @@ Phase 0 仍先冻结反思 schema 与安全边界；Phase 1b 只后移 runtime �
 - 从 event 重建用户可见台账；
 - 增加闭环 doctor。
 
+当前源码状态：contract tool、任务图/attachment ledger、batch ledger/fuse、journal rebuild、doctor、
+reflection/proposal 已实现。批级连续失败组合测试通过后，Loop 的旧批量条款已同批删除。
+
 ### Phase 4：组合压力测试与发布
 
 - fault injection；
@@ -1426,6 +1455,11 @@ Phase 0 仍先冻结反思 schema 与安全边界；Phase 1b 只后移 runtime �
 - 四 Skill 独立安装测试；
 - 任意组合安装测试；
 - 文档、宿主映射和分发同步。
+
+当前源码状态：fault injection、并发 revision 冲突、journal/snapshot crash recovery、公共 schema
+兼容、Reflection/Proposal 篡改与脱敏、既有 acceptance 回放、四 Skill 独立安装和全部 15 种非空
+安装组合测试均已实现。源码 release candidate 通过后更新本机宿主映射；公开分发提升仍以维护者
+接受本分阶段提交并进入权威分支为门，不从评审分支反向覆盖分发副本。
 
 ## 15. 反思、沉淀与受控改进
 

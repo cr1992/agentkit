@@ -1,0 +1,4 @@
+interface:
+  display_name: "Verify Agent Output"
+  short_description: "对冻结产物执行一次独立、可追溯且不可变的标准证据验收"
+  default_prompt: "Use $verify-agent-output to independently verify this frozen artifact once and return immutable evidence."

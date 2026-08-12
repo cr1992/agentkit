@@ -78,6 +78,61 @@ test('回收通知 adapter 使用固定 argv，关闭或平台不可用都不影
   assert.equal(unavailable.attempted, false);
 });
 
+test('Artifact/Binding 可机械联动 verifier，incident 只生成 proposed 改进候选', (t) => {
+  const fixture = makeRepo();
+  t.after(fixture.cleanup);
+  manager(fixture.repo, ['spawn', 'artifact-contract', '--agent', 'codex', '--agent-id', 'artifact-thread', '--purpose', 'freeze artifact']);
+  const listed = JSON.parse(manager(fixture.repo, ['list', '--json']));
+  const tracked = listed.worktrees.find((row) => row.kind === 'TRACKED');
+  writeFileSync(join(tracked.path, 'artifact.txt'), 'frozen\n');
+  git(tracked.path, ['add', 'artifact.txt']);
+  git(tracked.path, ['commit', '-m', 'feat: frozen artifact']);
+
+  const binding = JSON.parse(manager(fixture.repo, ['binding', 'artifact-contract', '--json']));
+  const artifact = JSON.parse(manager(fixture.repo, ['artifact', 'artifact-contract', '--json']));
+  assert.equal(binding.worktree_id, artifact.worktree_id);
+  assert.equal(binding.head_sha, artifact.artifact_sha);
+  assert.equal(binding.owner.epoch, artifact.ownership_epoch);
+  const artifactPath = join(fixture.sandbox, 'artifact-ref.json');
+  writeFileSync(artifactPath, JSON.stringify(artifact));
+  assert.equal(JSON.parse(manager(fixture.repo, ['verify-artifact', artifactPath, '--json'])).valid, true);
+  for (const [name, mutate] of [
+    ['missing-worktree', (value) => { delete value.worktree_id; }],
+    ['missing-epoch', (value) => { delete value.ownership_epoch; }],
+    ['stale-epoch', (value) => { value.ownership_epoch += 1; }],
+  ]) {
+    const invalid = structuredClone(artifact);
+    mutate(invalid);
+    const invalidPath = join(fixture.sandbox, `${name}.json`);
+    writeFileSync(invalidPath, JSON.stringify(invalid));
+    assert.throws(() => manager(fixture.repo, ['verify-artifact', invalidPath, '--json']), /Artifact/);
+  }
+  writeFileSync(join(tracked.path, 'dirty.txt'), 'dirty\n');
+  assert.throws(() => manager(fixture.repo, ['verify-artifact', artifactPath, '--json']), /变脏/);
+  rmSync(join(tracked.path, 'dirty.txt'));
+  writeFileSync(join(tracked.path, 'drift.txt'), 'drift\n');
+  git(tracked.path, ['add', 'drift.txt']);
+  git(tracked.path, ['commit', '-m', 'feat: drift head']);
+  assert.throws(() => manager(fixture.repo, ['verify-artifact', artifactPath, '--json']), /live HEAD/);
+
+  const capabilities = JSON.parse(manager(fixture.repo, ['capabilities', '--json']));
+  assert.deepEqual(capabilities.contracts.artifact_ref, [1]);
+  const incidentInput = join(fixture.sandbox, 'incident.json');
+  writeFileSync(incidentInput, JSON.stringify({ contract_digest: `sha256:${'1'.repeat(64)}`, classification: 'tool_gap', observation: 'trace event 暴露了可复现边界', impact: 'medium', confidence: 'high', recommended_disposition: 'continue' }));
+  const incident = JSON.parse(manager(fixture.repo, ['incident', 'artifact-contract', '--input', incidentInput]));
+  assert.equal(incident.reflection.evidence_refs.length, 1);
+  const proposalInput = join(fixture.sandbox, 'worktree-proposal.json');
+  writeFileSync(proposalInput, JSON.stringify({ problem_type: 'skill_gap', proposed_change: '强化 owner epoch 校验', affected_scope: ['artifact'], counterexamples: [], validation_plan: { replay_cases: ['handoff'], regression_suites: ['worktree-mgr'] } }));
+  const proposed = JSON.parse(manager(fixture.repo, ['propose-improvement', '--reflection', incident.reflection.reflection_id, '--input', proposalInput]));
+  assert.equal(proposed.proposal.lifecycle, 'proposed');
+  assert.equal(existsSync(proposed.ref), true);
+  assert.equal(JSON.parse(manager(fixture.repo, ['doctor', '--json'])).findings.some((item) => item.code.startsWith('LEARNING_')), false);
+  const tampered = JSON.parse(readFileSync(proposed.ref, 'utf8'));
+  tampered.lifecycle = 'accepted';
+  writeFileSync(proposed.ref, JSON.stringify(tampered));
+  assert.equal(JSON.parse(manager(fixture.repo, ['doctor', '--json'])).findings.some((item) => item.code === 'LEARNING_PROPOSAL_INVALID'), true);
+});
+
 /** @param {string} cwd @param {string[]} args */
 function git(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();

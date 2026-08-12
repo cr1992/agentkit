@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-skills.example/schemas/artifact-ref-v1.schema.json",
+  "title": "Artifact Ref v1",
+  "type": "object",
+  "required": ["schema_version", "provider", "repository_id", "object_format", "base_sha", "artifact_sha"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "provider": { "enum": ["manage-worktrees", "caller-supplied"] },
+    "repository_id": { "type": "string", "minLength": 1 },
+    "object_format": { "enum": ["sha1", "sha256"] },
+    "base_sha": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+    "artifact_sha": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+    "branch_hint": { "type": "string" },
+    "worktree_id": { "type": "string", "minLength": 1 },
+    "ownership_epoch": { "type": "integer", "minimum": 1 },
+    "target_sha": { "type": "string" },
+    "ordered_input_shas": { "type": "array", "items": { "type": "string" } },
+    "batch_fingerprint": { "type": "string" }
+  },
+  "allOf": [{ "if": { "properties": { "provider": { "const": "manage-worktrees" } } }, "then": { "required": ["worktree_id", "ownership_epoch"] } }],
+  "additionalProperties": false
+}

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-skills.example/schemas/evidence-package-v1.schema.json",
+  "title": "Evidence Package v1",
+  "type": "object",
+  "required": ["schema_version", "run_id", "protocol_version", "runtime_version", "contract_digest", "verification_profile_digest", "artifact_ref", "stages", "terminal_outcome", "completion_scope", "human_gate_required", "provenance", "evidence_digest"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "protocol_version": { "const": 1 },
+    "runtime_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?$" },
+    "contract_digest": { "$ref": "#/$defs/digest" },
+    "verification_profile_digest": { "$ref": "#/$defs/digest" },
+    "artifact_ref": { "type": "object" },
+    "stages": {
+      "type": "object",
+      "required": ["smoke_l0", "l1_review", "final_l0"],
+      "properties": {
+        "smoke_l0": { "type": "object" },
+        "l1_review": { "type": "object" },
+        "final_l0": { "type": "object" }
+      }
+    },
+    "terminal_outcome": { "enum": ["pass", "fail", "undecidable", "blocked_safety"] },
+    "completion_scope": { "const": "verification_only" },
+    "human_gate_required": { "type": "boolean" },
+    "provenance": {
+      "type": "object",
+      "required": ["provider", "verified_at", "verifier_run_id", "isolation_assurance", "limitations"],
+      "properties": {
+        "provider": { "const": "verify-agent-output" },
+        "verified_at": { "type": "string" },
+        "verifier_run_id": { "type": "string" },
+        "isolation_assurance": { "enum": ["host_reported", "user_relayed"] },
+        "limitations": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "evidence_digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": { "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" } }
+}

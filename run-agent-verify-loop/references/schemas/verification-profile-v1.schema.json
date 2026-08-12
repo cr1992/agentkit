@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-skills.example/schemas/verification-profile-v1.schema.json",
+  "title": "Verification Profile v1",
+  "type": "object",
+  "required": ["schema_version", "profile_id", "l0_checks", "l1_review", "protected_verifier_paths", "allowed_validation_changes", "runtime", "human_gate", "verification_profile_digest"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "profile_id": { "type": "string", "minLength": 1 },
+    "l0_checks": { "type": "array", "minItems": 1, "items": { "type": "object", "required": ["check_id", "argv", "cwd_rel", "stage", "timeout_ms", "expected_exit_codes"], "properties": { "check_id": { "type": "string", "minLength": 1 }, "argv": { "type": "array", "minItems": 1, "items": { "type": "string" } }, "cwd_rel": { "type": "string", "minLength": 1 }, "stage": { "enum": ["smoke", "final", "both"] }, "timeout_ms": { "type": "integer", "minimum": 1 }, "expected_exit_codes": { "type": "array", "minItems": 1, "items": { "type": "integer" } } }, "additionalProperties": false } },
+    "l1_review": { "type": "array", "minItems": 1, "items": { "type": "object", "required": ["contract_item_id", "lenses"], "properties": { "contract_item_id": { "type": "string", "minLength": 1 }, "lenses": { "type": "array", "items": { "enum": ["functional", "scope", "verification_definition", "safety"] } } }, "additionalProperties": false } },
+    "protected_verifier_paths": { "type": "array", "items": { "type": "string" } },
+    "allowed_validation_changes": { "type": "array", "items": { "type": "string" } },
+    "runtime": { "type": "object", "required": ["env_allowlist", "executable_paths", "cache_policy", "network_policy", "max_log_bytes"], "properties": { "env_allowlist": { "type": "array", "items": { "type": "string" } }, "executable_paths": { "type": "object", "additionalProperties": { "type": "string" } }, "cache_policy": { "enum": ["disabled", "isolated", "trusted_identity"] }, "network_policy": { "enum": ["denied", "contract_authorized"] }, "max_log_bytes": { "type": "integer", "minimum": 1 } } },
+    "human_gate": { "enum": ["none", "release", "destructive", "external_side_effect"] },
+    "verification_profile_digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": { "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" } }
+}
