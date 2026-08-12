@@ -8,11 +8,13 @@ A practical collection of reusable skills for agentic software engineering—fro
 
 ![Agent engineering skills selected and composed on demand](./docs/architecture/skill-collaboration.png)
 
-图中是四种可独立选择的能力，不是一条必须依次执行的流水线。普通任务可以一个也不用；组合使用时，
-Controller 仍负责路由、provider 选择和最终授权。
+蓝色表示 Controller 按需选择能力；灰色箭头展示完整组合时的可选契约流：Task Contract →
+Artifact Ref / Binding → Evidence Package → Convergence Report。它不是必须依次执行的流水线；普通任务
+可以一个也不用。组合使用时，Controller 仍负责路由、provider 选择和最终授权。
 
-The diagram shows independently selectable capabilities, not a mandatory pipeline. Ordinary tasks may use none;
-the controller retains routing, provider choice, and final authorization when skills are composed.
+Blue denotes controller routing. Gray arrows show an optional full-composition contract flow: Task Contract →
+Artifact Ref / Binding → Evidence Package → Convergence Report. This is not a mandatory pipeline; ordinary tasks
+may use none. The controller retains routing, provider choice, and final authorization when skills are composed.
 
 [Agent Skills 协作契约与安全边界 / Collaboration Contracts and Safety Boundaries（v1 · Pilot）](./docs/architecture/skill-system-architecture.md)
 
