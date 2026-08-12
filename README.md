@@ -8,13 +8,14 @@ A practical collection of reusable skills for agentic software engineering—fro
 
 ![Agent engineering skills selected and composed on demand](./docs/architecture/skill-collaboration.png)
 
-蓝色表示 Controller 按需选择能力；灰色箭头展示完整组合时的可选契约流：Task Contract →
-Artifact Ref / Binding → Evidence Package → Convergence Report。它不是必须依次执行的流水线；普通任务
-可以一个也不用。组合使用时，Controller 仍负责路由、provider 选择和最终授权。
+图中展示显式 Loop 模式下的典型组合：Controller 冻结合同和 provider 后，Loop 驱动实现、冻结
+Artifact、消费独立验收 Evidence，并把收敛结果交回 Controller。它不表示本组全部 Skill 必须全开；
+一次性验收直接使用 `verify-agent-output`，不进入 Loop。
 
-Blue denotes controller routing. Gray arrows show an optional full-composition contract flow: Task Contract →
-Artifact Ref / Binding → Evidence Package → Convergence Report. This is not a mandatory pipeline; ordinary tasks
-may use none. The controller retains routing, provider choice, and final authorization when skills are composed.
+The diagram shows a typical explicit Loop composition. After the controller freezes the contract and providers,
+the Loop drives implementation, freezes the Artifact, consumes independent verification Evidence, and returns the
+convergence result to the controller. Not every Skill is required; one-shot verification calls
+`verify-agent-output` directly without entering the Loop.
 
 [Agent Skills 协作契约与安全边界 / Collaboration Contracts and Safety Boundaries（v1 · Pilot）](./docs/architecture/skill-system-architecture.md)
 
