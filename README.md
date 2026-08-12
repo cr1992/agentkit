@@ -1,27 +1,18 @@
 # Awesome Agent Skills
 
-[中文](#中文) · [English](#english)
+**中文** · [English](./README.en.md)
 
 一组面向 Agent 软件工程的可复用 Skill：从任务编排、Git worktree 隔离，到一次性独立验收和显式有界循环。
 
-A practical collection of reusable skills for agentic software engineering—from task orchestration and Git worktree isolation to one-shot independent verification and explicit bounded loops.
-
-![Agent engineering skills selected and composed on demand](./docs/architecture/skill-collaboration.png)
+![Agent Skills 显式有界实现—验收循环](./docs/architecture/skill-collaboration.png)
 
 图中展示显式 Loop 模式下的典型组合：Controller 冻结合同和 provider 后，Loop 驱动实现、冻结
 Artifact、消费独立验收 Evidence，并把收敛结果交回 Controller。它不表示本组全部 Skill 必须全开；
 一次性验收直接使用 `verify-agent-output`，不进入 Loop。
 
-The diagram shows a typical explicit Loop composition. After the controller freezes the contract and providers,
-the Loop drives implementation, freezes the Artifact, consumes independent verification Evidence, and returns the
-convergence result to the controller. Not every Skill is required; one-shot verification calls
-`verify-agent-output` directly without entering the Loop.
+[Agent Skills 协作契约与安全边界（v1 · Pilot）](./docs/architecture/skill-system-architecture.md)
 
-[Agent Skills 协作契约与安全边界 / Collaboration Contracts and Safety Boundaries（v1 · Pilot）](./docs/architecture/skill-system-architecture.md)
-
-## 中文
-
-### 包含的 Skill
+## 包含的 Skill
 
 | Skill | 用途 |
 | --- | --- |
@@ -30,11 +21,11 @@ convergence result to the controller. Not every Skill is required; one-shot veri
 | [`verify-agent-output`](./verify-agent-output/) | 对冻结的单一 Git Artifact 做一次独立验收，执行 L0/L1/L0 并输出与摘要绑定、可复核的 Evidence Package；不修改产物、不自动重试。 |
 | [`run-agent-verify-loop`](./run-agent-verify-loop/) | 让实现 Agent 与隔离上下文中的验收 Agent 形成闭环，通过确定性检查、证据台账、熔断和人工门控制收敛。 |
 
-本组目前包含 4 个 Skill。它们都可以独立使用，也可以通过冻结的 JSON envelope 联动。普通任务不必加载任何一个；固定
-Artifact 只验一次时直接使用 `verify-agent-output`；只有明确要求反复修复和独立复验时才使用 Loop。
-多节点编排和 worktree 隔离同样按实际需要添加，不是默认必经步骤。
+本组目前包含 4 个 Skill。它们都可以独立使用，也可以通过冻结的 JSON envelope 联动。普通任务不必
+加载任何一个；固定 Artifact 只验一次时直接使用 `verify-agent-output`；只有明确要求反复修复和独立
+复验时才使用 Loop。多节点编排和 worktree 隔离同样按实际需要添加，不是默认必经步骤。
 
-### 安装
+## 安装
 
 安装全部 Skill：
 
@@ -48,9 +39,10 @@ npx skills add https://github.com/cr1992/awesome-agent-skills.git -g --agent '*'
 npx skills add https://github.com/cr1992/awesome-agent-skills.git -g --agent '*' --skill manage-worktrees
 ```
 
-将 `manage-worktrees` 替换为表中的其他 Skill 名称即可。安装或更新后，建议新建 Agent 任务；部分宿主会缓存 Skill 清单或正文，需要重启后才会加载新版本。
+将 `manage-worktrees` 替换为表中的其他 Skill 名称即可。安装或更新后，建议新建 Agent 任务；部分宿主
+会缓存 Skill 清单或正文，需要重启后才会加载新版本。
 
-### 使用方式
+## 使用方式
 
 安装完成后，直接用自然语言描述目标，并明确触发对应能力，例如：
 
@@ -61,16 +53,17 @@ npx skills add https://github.com/cr1992/awesome-agent-skills.git -g --agent '*'
 用 run-agent-verify-loop 让一个 Agent 实现、另一个 Agent 独立验收，直到通过或触发停止条件。
 ```
 
-Skill 会根据当前宿主可用的 Agent、终端、Git 和任务控制能力进行适配。宿主缺少某项能力时，应遵循各 Skill 中的降级路径，而不是假设某个特定产品或工具一定存在。
+Skill 会根据当前宿主可用的 Agent、终端、Git 和任务控制能力进行适配。宿主缺少某项能力时，应遵循
+各 Skill 中的降级路径，而不是假设某个特定产品或工具一定存在。
 
-### 环境要求
+## 环境要求
 
 - Git。
 - Node.js 18 或更高版本（四个 Skill 的确定性 runtime 与辅助脚本）。
 - Python 3.9 或更高版本（`orchestrate-subagents` 的模型策略与配置辅助脚本，仅使用标准库）。
 - 若要实际派生和隔离多个 Agent，上层宿主需要提供相应的任务或子 Agent 能力。
 
-### 本地验证
+## 本地验证
 
 ```bash
 python3 -m unittest discover -s orchestrate-subagents/scripts -p 'test_*.py'
@@ -81,69 +74,6 @@ node --test \
   run-agent-verify-loop/scripts/*.test.mjs
 ```
 
-## English
+## 仓库范围
 
-### Included skills
-
-| Skill | Purpose |
-| --- | --- |
-| [`orchestrate-subagents`](./orchestrate-subagents/) | Decides whether a task should be delegated, builds dependency-aware task contracts, selects suitable agent capabilities, and keeps final acceptance with the controller agent. |
-| [`manage-worktrees`](./manage-worktrees/) | Detects write collisions, creates auditable Git worktrees, produces commit-pinned batch integration plans, and safely reclaims worktrees. |
-| [`verify-agent-output`](./verify-agent-output/) | Independently verifies one frozen Git Artifact through L0/L1/L0 and emits digest-bound, reviewable Evidence without modifying or retrying the artifact. |
-| [`run-agent-verify-loop`](./run-agent-verify-loop/) | Runs an implementer/verifier loop with isolated context, deterministic checks, evidence tracking, circuit breakers, and human gates. |
-
-This group currently contains four skills. Each works independently and composes through frozen JSON envelopes. Ordinary tasks need none of them. Use
-`verify-agent-output` for one-shot verification of a fixed Artifact, and use the Loop only when bounded repeated
-implementation and independent re-verification are explicitly requested. Add orchestration and worktrees only when
-the task actually needs multiple nodes or Git isolation.
-
-### Installation
-
-Install all skills:
-
-```bash
-npx skills add https://github.com/cr1992/awesome-agent-skills.git -g --agent '*'
-```
-
-Install a single skill:
-
-```bash
-npx skills add https://github.com/cr1992/awesome-agent-skills.git -g --agent '*' --skill manage-worktrees
-```
-
-Replace `manage-worktrees` with any other skill name in the table as needed. After an install or update, start a new agent task. Some hosts cache skill discovery or contents and may require a restart.
-
-### Usage
-
-Invoke a skill in natural language and state the intended workflow explicitly:
-
-```text
-Use orchestrate-subagents to split this feature across multiple agents.
-Use manage-worktrees to prepare batch integration acceptance for these feature branches.
-Use verify-agent-output to independently verify this fixed commit once and emit Evidence.
-Use run-agent-verify-loop so one agent implements and another independently verifies until it passes or a stop condition fires.
-```
-
-Each skill adapts to the agents, terminal, Git, and task-control primitives available in the current host. When a capability is unavailable, follow the documented fallback path instead of assuming a specific agent product or tool exists.
-
-### Requirements
-
-- Git.
-- Node.js 18 or newer for the deterministic runtimes and helper scripts in all four skills.
-- Python 3.9 or newer for the `orchestrate-subagents` model-policy and configuration helpers; they use only the standard library.
-- A host with task or sub-agent isolation primitives when actual multi-agent execution is required.
-
-### Local validation
-
-```bash
-python3 -m unittest discover -s orchestrate-subagents/scripts -p 'test_*.py'
-node --test \
-  manage-worktrees/scripts/*.test.mjs \
-  orchestrate-subagents/scripts/*.test.mjs \
-  verify-agent-output/scripts/*.test.mjs \
-  run-agent-verify-loop/scripts/*.test.mjs
-```
-
-## Repository scope
-
-This repository contains the four distributable skill directories and repository-level documentation. It does not include unrelated skills, credentials, or organization-specific configuration.
+本仓库只包含上述 4 个可分发 Skill 目录和仓库级文档，不包含无关 Skill、凭证或组织专用配置。
