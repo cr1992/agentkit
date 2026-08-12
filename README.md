@@ -6,7 +6,7 @@
 
 A practical collection of reusable skills for agentic software engineering—from task orchestration and Git worktree isolation to one-shot independent verification and explicit bounded loops.
 
-![Four Agent Skills collaboration architecture](./docs/architecture/skill-collaboration.svg)
+![Four Agent Skills collaboration architecture](./docs/architecture/skill-collaboration.png)
 
 箭头表示可选的 envelope / provider 联动，不表示四个 Skill 必须全开。Controller 始终拥有路由和最终
 授权；Loop 只服务显式的有界收敛，不反向成为整个系统的统一入口。
