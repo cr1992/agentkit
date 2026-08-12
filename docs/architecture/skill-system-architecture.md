@@ -1,4 +1,4 @@
-# Agent Skills 协作架构设计
+# Agent Skills 协作契约与安全边界
 
 > 状态：v1 已实现，试点中（Pilot）
 >
@@ -189,7 +189,7 @@ Agent 必须执行当前冻结协议，同时持续审计以下冲突：
 | --- | --- | --- | --- | --- |
 | `orchestrate-subagents` | 任务图、角色、权限、模型路由、进度、全局收敛 | 一份可执行任务图、派发契约和验收结论 | 向 worktree / verification / loop provider 传递公共契约 | Git 生命周期、具体 verifier 协议、业务实现 |
 | `manage-worktrees` | Git 写入隔离、owner、分支、精确 SHA、交接与回收 | 可审计的 worktree 生命周期 | 输出标准 `artifact_ref` 与 isolation binding | 任务拆分、验证 verdict、循环策略 |
-| `verify-agent-output` | 对冻结产物做一次 smoke L0 → L1 → final L0 | 一份不可变 Evidence Package | 给 orchestrator 或 Loop 提供标准验证结果 | 修改业务产物、重试循环、Agent 池 |
+| `verify-agent-output` | 对冻结产物做一次 smoke L0 → L1 → final L0 | 一份只写新文件、与摘要绑定的 Evidence Package | 给 orchestrator 或 Loop 提供标准验证结果 | 修改业务产物、重试循环、Agent 池 |
 | `run-agent-verify-loop` | 显式实现—验收循环的有界收敛、恢复与熔断 | 一条可恢复的独立验证循环 | 消费 controller 冻结的 provider、Artifact / Evidence 并回报终态 | 全局任务图、provider 选择、全局授权、批队列 |
 
 ### 4.1 控制权规则
@@ -281,7 +281,7 @@ Agent 必须执行当前冻结协议，同时持续审计以下冲突：
 
 独立触发场景：
 
-- 用户明确要求“一个 Agent 实现、另一个持续验收，直到通过”；
+- 用户明确要求“一个 Agent 实现、另一个持续验收，直到通过或触发停止条件”；
 - 高风险工作需要有界修复—证伪；
 - 需要 max iterations、failure fuse、恢复和人工门。
 
@@ -1261,21 +1261,14 @@ assurance:
 - 旧 Evidence 和旧 ledger 的只读验证；
 - 不存在兄弟 Skill 目录时不崩溃。
 
-### 12.4 文档真源与实施位置
+### 12.4 文档与实现一致性
 
-本文件是四个 Skill 架构的 authoritative source。公开分发仓中的同路径文件是提案与发布镜像，
-按以下规则维护：
+本文件描述当前发布版四个 Skill 的协作契约与安全边界。维护时遵守以下规则：
 
-1. 行为、schema、trigger 或 runtime 边界变化时，同一变更必须更新本文件；
-2. 本文件属于从真源到公开分发仓的单向白名单；
-3. 公开仓只接收同步结果，不反向覆盖本文件；
-4. 发布检查验证两边文档摘要与 Skill 版本兼容矩阵；
-5. 公开仓可维护自己的 README、许可证与仓库级说明，但不得另行定义 Skill 行为真源。
-
-`verify-agent-output`、`loop-runtime` 及后续脚本必须在 authoritative source repository 开发和测试，
-再按白名单同步到公开分发仓；不得因为提案文档暂时位于公开仓，就直接在分发副本实现后反向搬运。
-上述维护规则已同时登记到本地执行规则 `AGENTS.md` 和受版本控制的仓库 `README.md`；同步实现与
-发布检查仍须在后续交付中持续验证。
+1. 行为、schema、trigger 或 runtime 边界变化时，同一发布必须更新本文件；
+2. README 只提供稳定能力摘要，不能另行定义或弱化本文件中的行为语义；
+3. 发布检查必须验证文档摘要、Skill 版本和组合兼容矩阵；
+4. 运行时实现、测试、schema 与本文件冲突时，停止发布并完成重新评审，不能在发布副本中临时改写契约。
 
 ## 13. 测试策略
 
@@ -1348,7 +1341,7 @@ assurance:
 - 四个 Skill 安装顺序任意。
 - 单 Artifact、单 reviewer 不误触发完整 orchestrator；
 - 批量条款只在 orchestration ledger 和 batch fuse 已通过恢复测试后迁移；
-- authoritative source 与公开分发副本的架构摘要一致；
+- 发布文档与四个 Skill 的架构摘要一致；
 - Skill 内容摘要被合同冻结，运行中 Skill 文件变化触发 abort / re-contract；
 - Skill tree manifest 在不同安装绝对路径下产生相同 content digest；
 - Reflection Record 只能引用不可变证据，不能修改旧 Evidence；
@@ -1382,7 +1375,7 @@ assurance:
 - 固定 Skill provenance、Reflection Record、Convergence Report 与 Improvement Proposal；
 - 明确显式 Loop 启动协议、Goal 绑定和 completion 边界；
 - 明确 standalone / combined assurance；
-- 完成架构文档真源迁移和单向同步维护规则。
+- 完成架构文档维护规则和发布一致性检查。
 
 ### Phase 1a：一次性验收与 Loop 执行核心
 
@@ -1454,12 +1447,12 @@ reflection/proposal 已实现。批级连续失败组合测试通过后，Loop �
 - 历史案例 replay，验证候选改进不会降低旧 acceptance；
 - 四 Skill 独立安装测试；
 - 任意组合安装测试；
-- 文档、宿主映射和分发同步。
+- 文档、宿主映射和发布一致性检查。
 
 当前源码状态：fault injection、并发 revision 冲突、journal/snapshot crash recovery、公共 schema
 兼容、Reflection/Proposal 篡改与脱敏、既有 acceptance 回放、四 Skill 独立安装和全部 15 种非空
-安装组合测试均已实现。源码 release candidate 通过后更新本机宿主映射；公开分发提升仍以维护者
-接受本分阶段提交并进入权威分支为门，不从评审分支反向覆盖分发副本。
+安装组合测试均已实现。release candidate 通过后更新本机宿主映射；正式发布仍以维护者接受本分阶段
+提交并进入稳定分支为门，不能绕过评审门直接提升评审中的副本。
 
 ## 15. 反思、沉淀与受控改进
 
