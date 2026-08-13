@@ -35,3 +35,59 @@ test('strict parser 拒绝 duplicate key，diff 识别必须重签', () => {
   assert.equal(contractDiff(left, right).requires_resign, true);
   assert.notEqual(envelopeDigest(left), envelopeDigest(right));
 });
+
+test('project 从父合同 verbatim 切出条目子集，并写入可校验血缘', () => {
+  const f = fixture();
+  try {
+    f.value.acceptance = [{ contract_item_id: 'a', requirement: 'A 通过' }, { contract_item_id: 'b', requirement: 'B 通过' }, { contract_item_id: 'c', requirement: 'C 通过' }];
+    writeFileSync(f.path, JSON.stringify(f.value));
+    const parent = main(['normalize', '--input', f.path]);
+    writeFileSync(f.path, JSON.stringify(parent));
+
+    const projected = main(['project', '--input', f.path, '--items', 'a,c']);
+    assert.deepEqual(projected.acceptance, [parent.acceptance[0], parent.acceptance[2]]);
+    assert.equal(projected.extensions.projection.parent_contract_digest, parent.contract_digest);
+    assert.deepEqual(projected.extensions.projection.projected_item_ids, ['a', 'c']);
+    assert.notEqual(projected.contract_digest, parent.contract_digest);
+    assert.equal(projected.contract_digest, envelopeDigest(projected));
+    assert.match(projected.contract_id, /^contract--proj-[0-9a-f]{8}$/u);
+    for (const field of ['objective', 'scope', 'permissions', 'environment', 'skill_set', 'stop_conditions']) assert.deepEqual(projected[field], parent[field]);
+
+    // parent 的额外顶层字段原样继承，不被静默丢弃
+    const withExtra = { ...parent, owner_team: 'moii-app', custom_budget: { max_rounds: 3 } };
+    const extraPath = join(f.root, 'with-extra.json'); writeFileSync(extraPath, JSON.stringify(withExtra));
+    const signedExtra = main(['normalize', '--input', extraPath]); writeFileSync(extraPath, JSON.stringify(signedExtra));
+    const projectedExtra = main(['project', '--input', extraPath, '--items', 'b']);
+    assert.equal(projectedExtra.owner_team, 'moii-app');
+    assert.deepEqual(projectedExtra.custom_budget, { max_rounds: 3 });
+
+    const projectedPath = join(f.root, 'projected.json');
+    writeFileSync(projectedPath, JSON.stringify(projected));
+    assert.equal(main(['validate', '--input', projectedPath]).valid, true);
+    assert.equal(main(['project', '--input', f.path, '--items', 'b', '--contract-id', 'node-b']).contract_id, 'node-b');
+
+    assert.throws(() => main(['project', '--input', f.path, '--items', 'a,zzz']), /不在 parent acceptance 中: zzz/u);
+    assert.throws(() => main(['project', '--input', f.path, '--items', '']), /items 不能为空/u);
+    assert.throws(() => main(['project', '--input', f.path]), /items 不能为空/u);
+    assert.throws(() => main(['project', '--input', f.path, '--items', 'a,a']), /items 重复/u);
+
+    const unsigned = { ...parent }; delete unsigned.contract_digest;
+    const unsignedPath = join(f.root, 'unsigned.json'); writeFileSync(unsignedPath, JSON.stringify(unsigned));
+    assert.throws(() => main(['project', '--input', unsignedPath, '--items', 'a']), /contract_digest 无效/u);
+    const drifted = { ...parent, objective: '被改写的父合同目标' };
+    const driftedPath = join(f.root, 'drifted.json'); writeFileSync(driftedPath, JSON.stringify(drifted));
+    assert.throws(() => main(['project', '--input', driftedPath, '--items', 'a']), /contract_digest 无效/u);
+  } finally { f.cleanup(); }
+});
+
+test('verification extension 只接受已知 provider', () => {
+  const f = fixture();
+  try {
+    f.value.extensions = { verification: { provider: 'verify-agent-output' } };
+    writeFileSync(f.path, JSON.stringify(f.value));
+    assert.equal(main(['normalize', '--input', f.path]).extensions.verification.provider, 'verify-agent-output');
+    f.value.extensions.verification.provider = 'local';
+    writeFileSync(f.path, JSON.stringify(f.value));
+    assert.throws(() => main(['normalize', '--input', f.path]), /extensions\.verification/);
+  } finally { f.cleanup(); }
+});

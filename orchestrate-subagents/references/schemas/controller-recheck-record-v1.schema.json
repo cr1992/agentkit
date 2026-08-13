@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-skills.example/schemas/controller-recheck-record-v1.schema.json",
+  "title": "Controller Recheck Record v1",
+  "type": "object",
+  "required": ["schema_version", "report_type", "contract_digest", "stable_output_digests", "outcome", "checked_at"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "report_type": { "const": "controller_recheck" },
+    "contract_digest": { "$ref": "#/$defs/digest" },
+    "stable_output_digests": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/digest" }
+    },
+    "outcome": { "const": "pass" },
+    "checked_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false,
+  "$defs": { "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" } }
+}

@@ -89,6 +89,9 @@ node "$SKILL_DIR/scripts/worktree-scan.mjs" scan --target path/a.ts,path/b.css
 
 - `COLLIDE`、目标多、范围不确定或重做成本高：创建独立 worktree。
 - `CLEAR` 且改动小、文件归属明确：可以留在当前树。
+- `match=exact|ancestor, confidence=high` 表示仓库根路径直接重叠；`match=suffix-relative,
+  confidence=low` 只来自声明了 app 相对路径的任务 adapter，保持保守 `COLLIDE`，但先人工确认路径
+  基准再决定是否隔离。Git worktree / recent commit 来源不做 basename 或后缀模糊匹配。
 - 拿不准时选择 worktree；额外集成成本低于覆盖别人未提交改动的风险。
 
 portable scan 默认检查所有 worktree 的 dirty 文件和近期 commit。任务看板等额外来源只能由仓库 Profile 以 adapter 显式开启。

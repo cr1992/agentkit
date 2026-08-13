@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,7 @@ import test from 'node:test';
 
 import {
   OperationalAbort,
+  RUNTIME_VERSION,
   ValidationError,
   acquireLock,
   canonicalJson,
@@ -52,7 +53,7 @@ function makeFixture(options = {}) {
     environment: { repository: repo, isolation: 'caller_supplied' },
     skill_set: [{ name: 'verify-agent-output', version: '1.0.0', content_digest: digest, provider_mode: 'primary' }],
     stop_conditions: [],
-    extensions: {},
+    extensions: options.contractExtensions ?? {},
   };
   contract.contract_digest = envelopeDigest(contract, 'contract_digest');
   const script = options.script ?? 'process.stdout.write("Bearer secret-token-value\\n")';
@@ -142,6 +143,50 @@ test('发布的 v1 JSON Schema 均为严格可解析 JSON', () => {
   }
 });
 
+test('scaffold/digest 生成可复用骨架并冻结当前 Skill 摘要', () => {
+  const fixture = makeFixture();
+  try {
+    const contract = main(['scaffold', '--kind', 'contract', '--workdir', fixture.repo]);
+    assert.equal(contract.contract_digest, envelopeDigest(contract, 'contract_digest'));
+    assert.equal(contract.skill_set[0].content_digest, skillContentDigest());
+    const profile = main(['scaffold', '--kind', 'profile']);
+    assert.equal(profile.verification_profile_digest, envelopeDigest(profile, 'verification_profile_digest'));
+    assert.equal(profile.runtime.cache_policy, 'trusted_identity');
+    const artifact = main(['scaffold', '--kind', 'artifact', '--workdir', fixture.repo, '--base-sha', fixture.artifact.base_sha]);
+    assert.equal(artifact.artifact_sha, fixture.artifact.artifact_sha);
+
+    delete profile.verification_profile_digest;
+    const path = join(fixture.sandbox, 'profile-without-digest.json');
+    writeFileSync(path, JSON.stringify(profile));
+    const digested = main(['digest', '--kind', 'profile', '--input', path]);
+    assert.equal(digested.verification_profile_digest, envelopeDigest(digested, 'verification_profile_digest'));
+    assert.throws(() => main(['scaffold']), /contract\|profile\|artifact\|review\|bundle/);
+    assert.throws(() => main(['digest', '--unknown', 'value']), /digest --kind contract\|profile\|review --input/);
+    assert.throws(() => main(['digest', '--kind', 'profile']), /digest --kind contract\|profile\|review --input/);
+  } finally { fixture.cleanup(); }
+});
+
+test('preflight 与 init 一次汇总 Profile 形状、枚举、摘要和隔离 assurance 错误', () => {
+  const fixture = makeFixture();
+  try {
+    delete fixture.profile.runtime.cache_policy;
+    fixture.profile.l1_review = [{}];
+    fixture.profile.human_gate = 'sometimes';
+    fixture.profile.runtime.network_policy = 'denied';
+    fixture.profile.verification_profile_digest = 'sha256:bad';
+    writeFileSync(join(fixture.sandbox, 'profile.json'), JSON.stringify(fixture.profile));
+    const args = ['--contract', join(fixture.sandbox, 'contract.json'), '--profile', join(fixture.sandbox, 'profile.json'), '--artifact', join(fixture.sandbox, 'artifact.json')];
+    const report = main(['preflight', ...args]);
+    assert.equal(report.valid, false);
+    const combined = report.errors.join('\n');
+    for (const expected of ['cache_policy', 'contract_item_id', 'human_gate', 'verification_profile_digest', 'network-isolated']) assert.match(combined, new RegExp(expected));
+    const cli = spawnSync(process.execPath, [join(SCRIPT_DIR, 'verification-runtime.mjs'), 'preflight', ...args], { encoding: 'utf8' });
+    assert.equal(cli.status, 2);
+    assert.equal(JSON.parse(cli.stdout).valid, false);
+    assert.throws(() => main(['init', ...args, '--workdir', fixture.repo, '--state-root', fixture.stateRoot, '--isolation-assurance', 'host_reported']), /cache_policy[\s\S]*human_gate|human_gate[\s\S]*cache_policy/);
+  } finally { fixture.cleanup(); }
+});
+
 test('Reflection 验证不可变证据并脱敏，Proposal 永远停留在 proposed', () => {
   const fixture = makeFixture();
   try {
@@ -194,7 +239,16 @@ test('一次性验收按 smoke → L1 → final 生成可验证 Evidence', () =>
     assert.equal(smoke.status, 'smoke_passed');
     const input = main(['review-input', '--run', initialized.run_dir]);
     assert.equal(input.reviewer_view[0].contract_item_id, 'content');
+    assert.equal(input.contract_digest, fixture.contract.contract_digest);
+    assert.equal(input.verification_profile_digest, fixture.profile.verification_profile_digest);
     assert.equal(JSON.stringify(input).includes('Bearer secret-token-value'), true, 'argv 属于冻结验证入口');
+    const reviewInputPath = join(fixture.sandbox, 'review-input.json');
+    writeFileSync(reviewInputPath, JSON.stringify(input));
+    const reviewScaffold = main(['scaffold', '--kind', 'review', '--review-input', reviewInputPath]);
+    assert.equal(reviewScaffold.contract_digest, input.contract_digest);
+    assert.equal(reviewScaffold.verification_profile_digest, input.verification_profile_digest);
+    assert.equal(reviewScaffold.verdict, 'undecidable');
+    assert.equal(reviewScaffold.findings[0].contract_item_id, 'content');
     const logPath = join(initialized.run_dir, smoke.stages.smoke_l0.checks[0].log_ref);
     assert.equal(readFileSync(logPath, 'utf8').includes('secret-token-value'), false, '日志必须预写脱敏');
     const review = validReview(fixture);
@@ -429,7 +483,191 @@ test('冻结 workdir 内被 gitignore 的 argv 文件并检测替换', () => {
 
 test('capabilities --json 保持统一能力发现兼容', () => {
   const output = execFileSync(process.execPath, [join(SCRIPT_DIR, 'verification-runtime.mjs'), 'capabilities', '--json'], { encoding: 'utf8' });
-  assert.equal(JSON.parse(output).skill, 'verify-agent-output');
+  const value = JSON.parse(output);
+  assert.equal(value.skill, 'verify-agent-output');
+  assert.equal(value.runtime_version, RUNTIME_VERSION);
+  for (const feature of ['review-bundle', 'readiness-preconditions', 'prepare-scaffold-chain']) assert.ok(value.features.includes(feature), feature);
+});
+
+test('review-bundle 打包自包含派发输入，并按投影标注 contract_kind', () => {
+  for (const item of [
+    { kind: 'public', extensions: {} },
+    { kind: 'projected', extensions: { projection: { parent_contract_digest: `sha256:${'a'.repeat(64)}`, projected_item_ids: ['content'] } } },
+  ]) {
+    const fixture = makeFixture({ contractExtensions: item.extensions });
+    try {
+      const initialized = initialize(fixture);
+      assert.throws(() => main(['review-bundle', '--run', initialized.run_dir]), /review-input 不接受状态 initialized/u);
+      main(['run-smoke', '--run', initialized.run_dir]);
+      const bundle = main(['review-bundle', '--run', initialized.run_dir]);
+
+      assert.equal(bundle.contract_kind, item.kind, item.kind);
+      assert.equal(bundle.bundle_kind, 'reviewer_dispatch');
+      assert.equal(bundle.runtime_version, RUNTIME_VERSION);
+      assert.equal(bundle.run_id, initialized.run_id);
+      // review-input 全量（含两个 digest、nonce、reviewer_view）随 bundle 一起下发。
+      assert.equal(bundle.review_input.contract_digest, fixture.contract.contract_digest);
+      assert.equal(bundle.review_input.verification_profile_digest, fixture.profile.verification_profile_digest);
+      assert.equal(bundle.review_input.challenge_nonce, initialized.review_challenge_nonce);
+      assert.equal(bundle.review_input.reviewer_view[0].contract_item_id, 'content');
+      // 投影场景下 bundle 的 contract 部分就是投影合同本身，不做二次裁剪。
+      assert.equal(canonicalJson(bundle.review_input.contract.acceptance), canonicalJson(fixture.contract.acceptance));
+      // 内联 Review Result v1 schema、Artifact、workdir、权限与停止条件。
+      assert.equal(canonicalJson(bundle.review_result_schema), canonicalJson(parseJsonStrict(readFileSync(join(SCRIPT_DIR, '..', 'references', 'schemas', 'review-result-v1.schema.json'), 'utf8'))));
+      assert.equal(canonicalJson(bundle.artifact_ref), canonicalJson(fixture.artifact));
+      assert.equal(bundle.workdir, main(['status', '--run', initialized.run_dir]).workdir);
+      assert.equal(bundle.permissions.mode, 'read_only');
+      assert.match(bundle.permissions.forbidden_operations.join('|'), /git commit/u);
+      assert.match(bundle.permissions.forbidden_operations.join('|'), /git checkout/u);
+      assert.ok(bundle.stop_conditions.length > 0);
+      assert.match(bundle.digest_backfill.command, /digest --kind review --input/u);
+      // 标准 reviewer 提示词：证伪任务原文 + 三态 + finding 五字段 + forensics + safety 不可抵消。
+      const protocol = readFileSync(join(SCRIPT_DIR, '..', 'references', 'verification-protocol.md'), 'utf8');
+      const falsification = protocol.split(/^## /mu).find((part) => part.startsWith('证伪任务')).match(/```text\n([\s\S]*?)\n```/u)[1];
+      assert.ok(bundle.reviewer_prompt.includes(falsification), '提示词必须内联协议真源的证伪任务原文');
+      for (const token of ['fail | no_defect_found | undecidable', 'contract_item_id / class / evidence / expected / actual', 'forensics 必须是非空字符串数组', 'safety finding', 'blocked_safety', '只读审查']) {
+        assert.ok(bundle.reviewer_prompt.includes(token), `${item.kind}: ${token}`);
+      }
+      assert.equal(bundle.reviewer_prompt.includes('投影合同'), item.kind === 'projected');
+
+      const outPath = join(fixture.sandbox, 'bundle.json');
+      const written = main(['review-bundle', '--run', initialized.run_dir, '--out', outPath]);
+      assert.equal(written.out, outPath);
+      assert.equal(written.contract_kind, item.kind);
+      assert.equal(canonicalJson(parseJsonStrict(readFileSync(outPath, 'utf8'))), canonicalJson(bundle));
+    } finally { fixture.cleanup(); }
+  }
+});
+
+test('readiness 只判环境前提：正例 ready，缺可执行/坏 workdir/state-root 不可写都是 precondition blocker', () => {
+  const fixture = makeFixture();
+  try {
+    const contractPath = join(fixture.sandbox, 'contract.json');
+    const profilePath = join(fixture.sandbox, 'profile.json');
+    const ready = main(['readiness', '--contract', contractPath, '--profile', profilePath, '--workdir', fixture.repo, '--state-root', fixture.stateRoot]);
+    assert.equal(ready.ready, true);
+    assert.deepEqual(ready.blockers, []);
+    assert.equal(ready.blocker_semantics, 'blocked_precondition_not_artifact_defect');
+    assert.ok(ready.checks.some((item) => item.check_id === 'workdir_git_root' && item.ok));
+    assert.ok(ready.checks.some((item) => item.check_id === 'executable:node' && item.ok));
+    // env_allowlist 是否必需无法机械判定：只记 note，不猜、不拦。
+    assert.ok(ready.notes.some((note) => note.includes('env_allowlist')));
+    assert.equal(ready.blockers.some((item) => item.check_id.startsWith('env')), false);
+
+    // 坏 workdir：非 Git 仓库。
+    const plain = join(fixture.sandbox, 'not-a-repo');
+    mkdirSync(plain);
+    const badWorkdir = main(['readiness', '--contract', contractPath, '--profile', profilePath, '--workdir', plain, '--state-root', fixture.stateRoot]);
+    assert.equal(badWorkdir.ready, false);
+    assert.equal(badWorkdir.blockers[0].kind, 'precondition');
+    assert.match(badWorkdir.blockers.map((item) => item.detail).join('\n'), /不是 Git 仓库|不是 Git worktree 根目录/u);
+
+    // state root 不可写。
+    const stateFile = join(fixture.sandbox, 'state-root-is-a-file');
+    writeFileSync(stateFile, 'not a directory\n');
+    const badState = main(['readiness', '--contract', contractPath, '--profile', profilePath, '--workdir', fixture.repo, '--state-root', stateFile]);
+    assert.equal(badState.ready, false);
+    assert.ok(badState.blockers.some((item) => item.check_id === 'state_root_writable' && item.kind === 'precondition'));
+    if (process.getuid?.() !== 0) {
+      const locked = join(fixture.sandbox, 'locked-state');
+      mkdirSync(locked, { mode: 0o500 });
+      try {
+        const denied = main(['readiness', '--contract', contractPath, '--profile', profilePath, '--workdir', fixture.repo, '--state-root', join(locked, 'runs-root')]);
+        assert.equal(denied.ready, false);
+        assert.ok(denied.blockers.some((item) => item.check_id === 'state_root_writable' && /不可写/u.test(item.detail)));
+      } finally { chmodSync(locked, 0o700); }
+    }
+
+    // 缺可执行 + 不存在的 L0 cwd + 不可读的 argv 文件参数。
+    const missingExecutable = join(fixture.sandbox, 'no-such-node');
+    fixture.profile.runtime.executable_paths.node = missingExecutable;
+    fixture.profile.l0_checks[0].cwd_rel = 'missing-subdir';
+    fixture.profile.verification_profile_digest = envelopeDigest(fixture.profile, 'verification_profile_digest');
+    const brokenPath = join(fixture.sandbox, 'broken-profile.json');
+    writeFileSync(brokenPath, JSON.stringify(fixture.profile));
+    const broken = main(['readiness', '--contract', contractPath, '--profile', brokenPath, '--workdir', fixture.repo, '--state-root', fixture.stateRoot]);
+    assert.equal(broken.ready, false);
+    assert.ok(broken.blockers.every((item) => item.kind === 'precondition'));
+    assert.ok(broken.blockers.some((item) => item.check_id === 'executable:node' && /不存在/u.test(item.detail)));
+    assert.ok(broken.blockers.some((item) => item.check_id === 'l0_cwd:unit' && /cwd 不存在/u.test(item.detail)));
+
+    // 无法读取的输入本身也是 precondition，不是 Artifact 缺陷。
+    const unreadable = main(['readiness', '--contract', join(fixture.sandbox, 'absent.json'), '--profile', profilePath, '--workdir', fixture.repo, '--state-root', fixture.stateRoot]);
+    assert.equal(unreadable.ready, false);
+    assert.equal(unreadable.blockers[0].check_id, 'contract_readable');
+
+    // CLI 以 exit 2 表达 not ready，与 preflight 同口径。
+    const cli = spawnSync(process.execPath, [join(SCRIPT_DIR, 'verification-runtime.mjs'), 'readiness', '--contract', contractPath, '--profile', brokenPath, '--workdir', fixture.repo, '--state-root', fixture.stateRoot], { encoding: 'utf8' });
+    assert.equal(cli.status, 2);
+    assert.equal(JSON.parse(cli.stdout).ready, false);
+  } finally { fixture.cleanup(); }
+});
+
+test('run-smoke 前置不满足时报 stale_precondition，而不是把 L0 跑挂当产物缺陷', () => {
+  const fixture = makeFixture();
+  try {
+    writeFileSync(join(fixture.repo, '.gitignore'), 'scratch/\n');
+    git(fixture.repo, ['add', '.gitignore']);
+    git(fixture.repo, ['commit', '-m', 'test: ignore scratch']);
+    fixture.artifact.artifact_sha = git(fixture.repo, ['rev-parse', 'HEAD']);
+    writeFileSync(join(fixture.sandbox, 'artifact.json'), JSON.stringify(fixture.artifact));
+    const scratch = join(fixture.repo, 'scratch');
+    mkdirSync(scratch);
+    fixture.profile.l0_checks[0].cwd_rel = 'scratch';
+    fixture.profile.verification_profile_digest = envelopeDigest(fixture.profile, 'verification_profile_digest');
+    writeFileSync(join(fixture.sandbox, 'profile.json'), JSON.stringify(fixture.profile));
+    const initialized = initialize(fixture);
+    rmSync(scratch, { recursive: true, force: true });
+    assert.throws(() => main(['run-smoke', '--run', initialized.run_dir]), (error) => {
+      assert.ok(error instanceof OperationalAbort);
+      assert.equal(error.code, 'stale_precondition');
+      assert.match(error.message, /readiness 前置检查未通过（环境问题，不是 Artifact 缺陷）[\s\S]*l0_cwd:unit/u);
+      return true;
+    });
+    const snapshot = main(['status', '--run', initialized.run_dir]);
+    assert.equal(snapshot.status, 'aborted');
+    assert.equal(snapshot.operational_abort.code, 'stale_precondition');
+    assert.equal(snapshot.terminal, null);
+    assert.equal(snapshot.stages.smoke_l0, undefined, '前置未过时不得留下 L0 结果');
+  } finally { fixture.cleanup(); }
+});
+
+test('prepare 只出骨架与 TODO，不猜测试命令；填最小 L0 后可过 preflight', () => {
+  const fixture = makeFixture();
+  try {
+    const outDir = join(fixture.sandbox, 'prepared');
+    const prepared = main(['prepare', '--workdir', fixture.repo, '--out-dir', outDir]);
+    assert.equal(prepared.contract_path, join(outDir, 'contract.json'));
+    assert.equal(prepared.profile_path, join(outDir, 'profile.json'));
+    assert.match(prepared.notice, /l0_checks 需 controller 按项目实际填写并确认/u);
+    assert.ok(prepared.todo.some((item) => item.includes('l0_checks 必须由 controller')));
+    assert.ok(prepared.next_steps.some((item) => item.includes('readiness')) && prepared.next_steps.some((item) => item.includes('preflight')));
+    const serialized = JSON.stringify(prepared);
+    for (const guessed of ['flutter', 'pytest', 'npm test', 'just ', 'cargo', 'gradle']) assert.equal(serialized.toLowerCase().includes(guessed), false, guessed);
+    assert.throws(() => main(['prepare', '--workdir', fixture.repo, '--out-dir', outDir]), /拒绝覆盖已存在的文件/u);
+
+    const contract = JSON.parse(readFileSync(prepared.contract_path, 'utf8'));
+    const profile = JSON.parse(readFileSync(prepared.profile_path, 'utf8'));
+    assert.equal(profile.l0_checks[0].check_id, 'replace-with-real-check');
+    // controller 自行填写并确认真实 L0，再重算摘要。
+    profile.l0_checks = [{ check_id: 'unit', argv: ['node', '-e', 'process.exit(0)'], cwd_rel: '.', stage: 'both', timeout_ms: 10_000, expected_exit_codes: [0] }];
+    delete profile.verification_profile_digest;
+    writeFileSync(prepared.profile_path, JSON.stringify(profile));
+    const digested = main(['digest', '--kind', 'profile', '--input', prepared.profile_path]);
+    writeFileSync(prepared.profile_path, JSON.stringify(digested));
+    const artifact = main(['scaffold', '--kind', 'artifact', '--workdir', fixture.repo, '--base-sha', fixture.artifact.base_sha]);
+    const artifactPath = join(outDir, 'artifact.json');
+    writeFileSync(artifactPath, JSON.stringify(artifact));
+    assert.equal(main(['readiness', '--contract', prepared.contract_path, '--profile', prepared.profile_path, '--workdir', fixture.repo, '--state-root', fixture.stateRoot]).ready, true);
+    const report = main(['preflight', '--contract', prepared.contract_path, '--profile', prepared.profile_path, '--artifact', artifactPath]);
+    assert.deepEqual(report.errors, []);
+    assert.equal(report.valid, true);
+    assert.equal(report.contract_digest, contract.contract_digest);
+
+    const inline = main(['prepare', '--workdir', fixture.repo]);
+    assert.equal(inline.contract.skill_set[0].content_digest, skillContentDigest());
+    assert.equal(inline.profile.verification_profile_digest, envelopeDigest(inline.profile, 'verification_profile_digest'));
+  } finally { fixture.cleanup(); }
 });
 
 test('state root 通过祖先 symlink 指回仓库时仍拒绝', () => {

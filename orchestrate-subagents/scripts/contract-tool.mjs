@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // @ts-check
 
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -62,6 +62,11 @@ export function validateContract(contract, { requireDigest = true } = {}) {
   if (contract.permissions.mode === 'read_only' && contract.permissions.writable_paths.length) throw new ContractError('read_only 合同不能声明 writable_paths');
   if (typeof contract.environment?.repository !== 'string' || !contract.environment.repository || !['shared_tree', 'worktree', 'caller_supplied'].includes(contract.environment?.isolation)) throw new ContractError('environment 无效');
   if (!Array.isArray(contract.stop_conditions) || !contract.extensions || typeof contract.extensions !== 'object' || Array.isArray(contract.extensions)) throw new ContractError('stop_conditions/extensions 无效');
+  const verification = contract.extensions.verification;
+  if (verification !== undefined && (
+    !verification || typeof verification !== 'object' || Array.isArray(verification)
+    || !['none', 'verify-agent-output', 'run-agent-verify-loop'].includes(verification.provider)
+  )) throw new ContractError('extensions.verification 无效');
   if (!Array.isArray(contract.skill_set)) throw new ContractError('skill_set 必须是数组');
   const skills = new Set();
   for (const skill of contract.skill_set) {
@@ -82,6 +87,30 @@ export function normalizeContract(contract) {
   return normalized;
 }
 
+export function acceptanceItemDigest(item) { return sha256(Buffer.from(canonicalJson(item), 'utf8')); }
+
+// 合同投影：从公共父合同切出节点级、产物专属的验证合同。acceptance 条目逐字节 verbatim 拷贝，
+// 其余公共字段原样继承，血缘写入 extensions.projection 供 ledger 校验。
+export function projectContract(parent, itemIds, { contractId = null } = {}) {
+  validateContract(parent);
+  if (!Array.isArray(itemIds) || !itemIds.length) throw new ContractError('projection items 不能为空');
+  if (itemIds.some((id) => typeof id !== 'string' || !id)) throw new ContractError('projection item id 无效');
+  if (new Set(itemIds).size !== itemIds.length) throw new ContractError('projection items 重复');
+  const byId = new Map(parent.acceptance.map((item) => [item.contract_item_id, item]));
+  const acceptance = itemIds.map((id) => { const item = byId.get(id); if (!item) throw new ContractError(`projection item 不在 parent acceptance 中: ${id}`); return structuredClone(item); });
+  if (contractId !== null && (typeof contractId !== 'string' || !contractId)) throw new ContractError('contract-id 无效');
+  // 以 parent 展开为基底：只有 contract_id / acceptance / extensions / contract_digest 允许改动，
+  // 其余顶层字段（含 parent 自带的扩展字段）原样继承，ledger 侧会逐字段核对全等。
+  const projected = {
+    ...structuredClone(parent),
+    contract_id: contractId ?? `${parent.contract_id}--proj-${randomBytes(4).toString('hex')}`,
+    acceptance,
+    extensions: { ...structuredClone(parent.extensions), projection: { parent_contract_digest: parent.contract_digest, projected_item_ids: [...itemIds] } },
+  };
+  projected.contract_digest = envelopeDigest(projected);
+  return validateContract(projected);
+}
+
 export function contractDiff(left, right) {
   const changed = [];
   for (const key of [...new Set([...Object.keys(left), ...Object.keys(right)])].sort()) if (canonicalJson(left[key]) !== canonicalJson(right[key])) changed.push(key);
@@ -98,8 +127,9 @@ export function main(argv = process.argv.slice(2)) {
   if (command === 'digest') return { contract_digest: envelopeDigest(read(options.input)) };
   if (command === 'review-view') { const value = validateContract(read(options.input)); return { schema_version: 1, contract_id: value.contract_id, objective: value.objective, scope: value.scope, acceptance: value.acceptance, contract_permissions: value.permissions, reviewer_permissions: { mode: 'read_only', writable_paths: [] }, environment: value.environment, contract_digest: value.contract_digest }; }
   if (command === 'diff') return contractDiff(read(options.left), read(options.right));
-  if (command === 'capabilities') return { tool: 'contract-tool', runtime_version: '1.0.0', task_contract_versions: [1], features: ['strict-json', 'canonical-digest', 'review-view', 'resign-diff'] };
-  throw new ContractError('命令必须是 normalize/validate/digest/review-view/diff/capabilities');
+  if (command === 'project') return projectContract(read(options.input), String(options.items ?? '').split(',').map((item) => item.trim()).filter(Boolean), { contractId: options['contract-id'] ?? null });
+  if (command === 'capabilities') return { tool: 'contract-tool', runtime_version: '1.1.0', task_contract_versions: [1], features: ['strict-json', 'canonical-digest', 'review-view', 'resign-diff', 'contract-projection'] };
+  throw new ContractError('命令必须是 normalize/validate/digest/review-view/diff/project/capabilities');
 }
 
 function isEntry() { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return pathToFileURL(resolve(process.argv[1] ?? '')).href === import.meta.url; } }

@@ -34,12 +34,25 @@ controller 必须先提供：
 
 ```text
 node <skill-dir>/scripts/verification-runtime.mjs capabilities
+node <skill-dir>/scripts/verification-runtime.mjs prepare \
+  --workdir <clean-pinned-workdir> --out-dir <inputs-dir>
+node <skill-dir>/scripts/verification-runtime.mjs scaffold \
+  --kind bundle --workdir <clean-pinned-workdir> --base-sha <full-base-sha>
+node <skill-dir>/scripts/verification-runtime.mjs digest \
+  --kind profile --input profile.json
+node <skill-dir>/scripts/verification-runtime.mjs readiness \
+  --contract contract.json --profile profile.json \
+  --workdir <clean-pinned-workdir> --state-root <repo-outside-state-root>
+node <skill-dir>/scripts/verification-runtime.mjs preflight \
+  --contract contract.json --profile profile.json --artifact artifact.json
 node <skill-dir>/scripts/verification-runtime.mjs init \
   --contract contract.json --profile profile.json --artifact artifact.json \
   --workdir <clean-pinned-workdir> --state-root <repo-outside-state-root> \
   --isolation-assurance host_reported
 node <skill-dir>/scripts/verification-runtime.mjs run-smoke --run <run-dir>
 node <skill-dir>/scripts/verification-runtime.mjs review-input --run <run-dir>
+node <skill-dir>/scripts/verification-runtime.mjs review-bundle \
+  --run <run-dir> --out review-bundle.json
 node <skill-dir>/scripts/verification-runtime.mjs record-review \
   --run <run-dir> --review review-result.json \
   --verifier-run-id <opaque-id> --isolation-assurance host_reported
@@ -50,6 +63,31 @@ node <skill-dir>/scripts/verification-runtime.mjs propose-improvement \
   --run <run-dir> --reflection <relative-ref> --input proposal-input.json
 node <skill-dir>/scripts/verification-runtime.mjs validate --run <run-dir>
 ```
+
+`prepare` 只做薄串联：生成 Contract 与 Profile 骨架、给出逐项 TODO 与后续命令，**不猜测任何测试
+命令、不内置任何项目专属 preset**；`l0_checks` 必须由 controller 按项目实际填写并确认，填完后由
+controller 自己跑 `digest`、`readiness` 与 `preflight`。
+
+`readiness` 只机械检查环境前提：workdir 是 Git worktree 根目录、`runtime.executable_paths` 每个
+可执行文件存在且可执行、已存在的 L0 argv 文件参数可读、L0 `cwd_rel` 存在、state root 可写。
+未通过一律输出 `{ready: false, blockers: [{kind: 'precondition', ...}]}`，**readiness 失败是环境
+前提未就绪，不是 Artifact 缺陷**，不进入任何 verdict。`env_allowlist` 中变量是否为 L0 必需无法机械
+判定，runtime 只记 note，不猜也不拦。`run-smoke` 会内联同一套检查（排除已由冻结身份门禁接管的
+executable 与 argv 文件），前置不满足时报 `stale_precondition`，不把 L0 跑挂当成产物问题。
+
+`review-bundle` 把一次派发所需的东西打成自包含 JSON：标准 reviewer 提示词（证伪任务原文取自
+verification-protocol.md）、`review-input` 全量、内联的 Review Result v1 JSON Schema、Artifact Ref、
+workdir 绝对路径、只读权限声明、三态后停止的停止条件和 `digest --kind review` 回填指引。
+`contract_kind` 按 `contract.extensions.projection` 是否存在标注 `public | projected`；投影场景下
+bundle 里的合同就是投影合同本身，reviewer 只对被投影的 acceptance 取证。controller 直接把这一个
+JSON 投给 reviewer 即可，不必再手写派发提示。
+
+`scaffold` 支持 `contract | profile | artifact | review | bundle`；骨架保证结构与摘要合法，但其中的
+`TODO` acceptance 和示例 L0 必须按真实任务替换。`artifact` / `bundle` 要求 `--workdir` 与
+`--base-sha`，默认冻结当前 HEAD。`review` 只从 `review-input` 原样取得 Contract/Profile digest、
+Artifact 和 challenge nonce。`digest` 支持 `contract | profile | review`，输出带重算摘要的新 JSON，
+不覆盖输入文件。`preflight` 与 `init` 一次返回全部可发现的 envelope、枚举、摘要、Skill 绑定和网络
+隔离 assurance 错误；`init` 仍在通过预检后执行 Git、路径和运行环境门禁。
 
 每次写状态的命令都可带 `--expected-revision <n>`；revision 不匹配时拒绝写入。runtime 输出 JSON，
 `init` 返回稳定的 `run_dir` 和 `run_id`。
@@ -77,7 +115,8 @@ initialized → smoke_passed → review_recorded → terminal
 给 reviewer 的输入只包含 Contract、Profile 生成的验证入口、Artifact 和去除实现者叙事的 reviewer
 view。不得传实现过程对话、“已经测试通过”等自述或期待通过的暗示。
 
-reviewer 主动寻找不满足合同的证据，输出 Review Result v1。controller 负责把 reviewer 的 JSON 写入
+`review-input` 顶层直接提供 `contract_digest` 与 `verification_profile_digest`，reviewer 不得从其他
+文件补抄绑定元数据；`review-bundle` 在此之上补齐提示词、schema、权限与停止条件，是推荐的派发形式。reviewer 主动寻找不满足合同的证据，输出 Review Result v1。controller 负责把 reviewer 的 JSON 写入
 临时文件并交给 `record-review`；runtime 机械拒绝未知 acceptance ID、无证据 finding、无 forensics
 的 `no_defect_found` 和 digest/binding 不匹配。
 

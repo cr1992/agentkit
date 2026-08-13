@@ -51,11 +51,40 @@ pipeline/制品链接，或稳定报告路径。只读审计可以状态包 + �
 
 台账同时是回收清单：会话结束前确认没有孤儿 worker、孤儿 worktree 或遗留运行时资源；端口、数据库等只在确实使用时作为环境备注。若用户明确要求表格汇报，即使没有派生 worker，也用“工作进展”表呈现 controller 工作。
 
-台账活在对话里，但每次更新时点须把任务图与三张表同步快照到仓库外的会话临时位置的 durable 状态文件；controller 失效后它是接手协议（见第 6 节）的台账输入，闭环审计通过后随本轮临时资源一并清理，不进项目仓。
+台账活在对话里，但每次更新时点须把任务图与三张表同步到仓库外的会话临时位置。完整档写入
+mechanical ledger；轻量档写单一 JSON 快照。controller 失效后它是接手协议（见第 6 节）的台账输入，
+闭环审计通过后随本轮临时资源一并清理，不进项目仓。
 
-### 机械台账工具
+### 显式轻量档
 
-先用 `contract-tool.mjs normalize / validate / digest / review-view / diff` 固定公共 Task Contract；
+同时满足以下条件时使用 `orchestration_mode: lightweight`，无需 capability cache、模型路由解析器或
+`orchestration-ledger.mjs`：
+
+- 总 worker 数不超过 3，全部只读且互相独立；
+- 单 stage，无 barrier、Loop、递归派生、批级熔断或自动重试；
+- 不创建 worktree，不拥有端口、数据库、凭证或其他待回收资源；
+- 不执行发布、部署、发消息、写外部系统等副作用；
+- controller 能在当前上下文内直接验收全部输出。
+
+轻量档仍保留每个节点的 `objective / scope / inputs（事实与假设分栏）/ output_contract /
+acceptance / evidence / stop_conditions`，并把以下单一快照写到仓库外：
+
+```json
+{
+  "schema_version": 1,
+  "mode": "lightweight",
+  "contract_digest": "sha256:...",
+  "nodes": [{"node_id":"s1","worker_id":"opaque","state":"running","model":"host-default","reasoning_effort":"unsupported","checkpoint":null}],
+  "updated_at": "RFC3339"
+}
+```
+
+快照只记录当前事实，不伪造 journal 或 hash chain。任一资格失效时，停止新增派发，将现有状态和产物
+收养进完整 ledger 后再继续；不得继续轻量档并登记“偏离”。
+
+### 完整档机械台账工具
+
+不满足轻量档时使用 `orchestration_mode: full`。先用 `contract-tool.mjs normalize / validate / digest / review-view / diff` 固定公共 Task Contract；
 再以仓库外 state root 初始化 `orchestration-ledger.mjs`。脚本不直接派发 Agent，controller 把宿主
 派发回执写入 `dispatch-record`：
 
@@ -68,9 +97,11 @@ record-reflection / propose-improvement
 status / inspect / rebuild / doctor
 ```
 
-所有修改命令支持 `--expected-revision`。节点必须绑定 Artifact、Evidence、Loop report 等稳定产物后
-才能进入 `passed`；依赖和 barrier 未通过时不能派发下游。批量任务由 orchestrator 为每个 work item
-建立独立 Loop，并在 batch ledger 按稳定 failure key 做连续同因熔断；Loop 本身不维护批队列。
+所有修改命令支持 `--expected-revision`。新节点必须显式选择 `worker_self_check`、
+`controller_recheck` 或 `independent_evidence` 验收档位；ledger 按档位机械检查稳定产物、
+Controller Recheck Record 或标准 Evidence，并把实际保证等级写入节点后才能进入 `passed`。依赖和
+barrier 未通过时不能派发下游。批量任务由 orchestrator 为每个 work item 建立独立 Loop，并在 batch
+ledger 按稳定 failure key 做连续同因熔断；Loop 本身不维护批队列。
 完整命令和边界见 [编排运行时](references/orchestration-runtime.md)。
 
 Reflection 只记录合同、路由、并行、资源或批级异常的证据化观察；Improvement Proposal 永远是
@@ -160,27 +191,31 @@ environment:
   branch: controller 已确认的分支；worker 禁止切换
   runtime: 按需填写共享资源，不用则省略
 dependencies: 前置节点与下游消费者
+verification:
+  requirement: worker_self_check | controller_recheck | independent_evidence
+  provider: none | verify-agent-output
+  artifact_scope: node_output | integration_candidate | not_applicable
 extensions:
   verification:
-    provider: none | run-agent-verify-loop
-    actor: none | implementer | verifier
+    provider: none | verify-agent-output | run-agent-verify-loop
   worktree:
     provider: none | manage-worktrees
 execution:
+  orchestration_mode: lightweight | full
   model: 宿主调用使用的精确模型 ID | inherited | host-default
   reasoning_effort: 宿主调用使用的精确值 | inherited | unsupported
   selection_reason: 该 model + effort 与节点决策杠杆、上下文和工具需求的匹配理由
   config_source: session | project:<path> | global:<path> | skill-default
   capability_source: live-schema | cache:<path>+live-validation
   capability_fingerprint: 当前宿主能力描述的 sha256
-  capability_cache_status: fresh | refreshed | absent-write-blocked | stale-write-blocked
+  capability_cache_status: fresh | refreshed | absent-write-blocked | stale-write-blocked | not-required-lightweight
   dispatch_provenance: explicit | inherited-controller | host-default
   token_budget: 明确预算；宿主未提供该能力时写 unsupported
   retry_limit: 最大重试次数
 stop_conditions: 阻塞、中止和预算退出条件
 ```
 
-不得省略 `objective / scope / output_contract / acceptance / evidence`；写任务还必须有 `permissions / writable_paths / environment`。修复 / 还原类节点的 `acceptance` 必须写裁决真源推导的预期值（设计稿几何、协议字段、计划口径），不得把上游 review 的处方或修复手段本身当验收标准——处方进契约前先过第 7 节的处方核验。`exclude` 禁止未申报行动，不禁止思考或带理由上报越界方案；外部可变状态在动作前重查现值。
+不得省略 `objective / scope / output_contract / acceptance / evidence / verification`；写任务还必须有 `permissions / writable_paths / environment`。`independent_evidence` 只能选择 `verify-agent-output`，且公共 Task Contract 的 `extensions.verification.provider` 和 `skill_set` 必须在 freeze 前同时声明它；普通 worker 不因“以后也许要 review”而一律升级，通常只把最终冻结的高风险集成候选设为该档。修复 / 还原类节点的 `acceptance` 必须写裁决真源推导的预期值（设计稿几何、协议字段、计划口径），不得把上游 review 的处方或修复手段本身当验收标准——处方进契约前先过第 7 节的处方核验。`exclude` 禁止未申报行动，不禁止思考或带理由上报越界方案；外部可变状态在动作前重查现值。
 
 `inputs` 分栏是硬边界：写进「已知事实」的每一条必须是 controller 亲自核实且能给出证据指路的；单一来源解析、模式匹配、凭记忆的值一律写进「允许假设」并标注「worker 使用前必须验证」。worker 发现契约事实与现场矛盾时按第 6 节升级路径回报，不得替 controller 圆场。
 
@@ -219,6 +254,20 @@ next_action: 建议后续动作
 
 回收后依次 `normalize → deduplicate → validate → synthesize`。研究要求直达来源，代码要求文件 / 符号证据，实现要求 diff 与约定测试；关键 claim 由 controller 用外部可观察证据重验，不采信 worker 自述。
 
+完整档不得把三种保证混写：`worker_self_check` 只证明 worker 交付了稳定输出；`controller_recheck`
+还必须附一份 `report_type: controller_recheck` 的记录，覆盖当时全部稳定输出 attachment digest；
+`independent_evidence` 必须先附唯一 Artifact Ref，再附与公共合同及该 Artifact 绑定的标准 Evidence
+Package。后两档执行 `update --state passed` 时必须用 `verification_ref` 指向被采信的 report / Evidence
+attachment digest；失败、`undecidable`、`blocked_safety`、仍需 human gate 或错绑的 Evidence 均不能通过。
+`status` 与最终汇总只能使用 ledger 返回的 `verification_assurance`，不得按叙述自行升级等级。
+Evidence 的合同绑定缺省按**全等**校验（验证合同就是公共合同本身）；多节点图里需要节点级、产物
+专属的验证合同时，用 `contract-tool.mjs project` 从公共合同切出条目子集，`attach --type contract`
+登记后 Evidence 可绑定该投影合同摘要。投影只能收窄验收面：除 `contract_id`、`acceptance` 子集与
+`extensions.projection` 外，其余字段必须与公共合同逐字段全等，改写任何一个（`objective`、`scope`、
+`permissions`、`environment`、`skill_set`、`stop_conditions`、其他 `extensions` 键）都会被 ledger
+指名拒收。用法与保证边界见
+[编排运行时](references/orchestration-runtime.md)「合同投影」段。
+
 聚合状态可能掩蔽条目失败，验收必须下钻到最小可观察单元。critic 必须主动寻找反例：多数判假可作为淘汰信号，多数判真仍不是接受证明。**处方核验**：finding 的事实核验不等于处方核验——采信任何「要求改变现状」的 finding 前，controller 先从裁决真源独立推导预期态，推不出或与处方矛盾时处方不进契约、升级人裁；finding 自己的证据已解释掉大部分偏差而结论未降级的，按证伪信号处理。验收比对对象永远是真源，不是修复目标、MR 描述或契约里转抄的处方。完成但缺少 acceptance 证据时，worker 状态保持 `partial`；停止重试后只有 controller 可判 `未通过`。
 
 必要节点全部验收通过、连续 K 轮无新增、剩余工作不会改变决策、需要新授权 / 外部状态变化，或预算耗尽且已披露覆盖缺口时停止；不要把预算耗尽伪装成全面完成。
@@ -242,7 +291,7 @@ next_action: 建议后续动作
 - **机械节点**：读文件、清单抽取、格式整理、同构修改 → 明确指定机械档。
 - **动态升级**：出现契约歧义、新依赖、高风险或反复失败时停止试错，带证据返回 controller。
 
-模型档只用于做选择，不作为派发或台账记录值。每次派发必须把最终选择落成同一个 `execution` 表单：精确 `model`、精确 `reasoning_effort`、`selection_reason`、`token_budget` 和 `retry_limit`；用户可见台账把前三项合并展示为“执行配置”。模型或 effort 由主会话继承时显式写 `inherited`；宿主不支持或不暴露时写 `unsupported` / `host-default（ID 未暴露）`，不得猜测或留空。
+模型档只用于做选择，不作为派发或台账记录值。每次派发必须把最终选择落成同一个 `execution` 表单：精确 `model`、精确 `reasoning_effort`、`selection_reason`、`token_budget` 和 `retry_limit`；用户可见台账把前三项合并展示为“执行配置”。模型或 effort 确实由可观察的主会话配置继承时才写 `inherited`；宿主派发接口没有 effort 参数、回执也不暴露实际值时写 `unsupported`，不得把“未暴露”记成 `inherited`。模型 ID 未暴露时写 `host-default（ID 未暴露）`，不得猜测或留空。
 
 子 agent 若未显式指定模型通常继承主会话，可能意外使用贵档；按宿主的单次模型参数分层，不设置会覆盖所有子 agent 的全局模型变量。具体可用模型名随宿主与版本映射，不在 skill 中预设，但一次运行选定后必须记录实际调用值。
 
@@ -268,7 +317,9 @@ next_action: 建议后续动作
 ## 9. 宿主自适配与配置加载
 
 本 skill 不内置任何宿主的静态能力声明。`agents/openai.yaml` 只是宿主 UI 元数据，不是适配文件，
-不得从中推导派发能力。每轮首次派发前按
+不得从中推导派发能力。轻量档只对当次实际使用的派发、wait/message 和生命周期参数检查实时工具
+schema，并记录 `capability_source: live-schema`、`capability_cache_status: not-required-lightweight`；
+未暴露参数写 `unsupported`，不为查询缓存先构造完整 observed descriptor。完整档每轮首次派发前按
 [宿主能力缓存协议](references/host-capability-cache.md) 执行：
 
 1. 先确定稳定 `host` key：使用编排工具提供方 / 接口族的规范化标识，不得只因 desktop / CLI /

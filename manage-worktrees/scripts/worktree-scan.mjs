@@ -399,8 +399,8 @@ function buildInFlightSet() {
 // ───────────────────────────────────────────────────────────────────────────
 // target 规范化 + 交集
 //   target 路径按仓库根为基准（与 worktree status / git log 同基准）。
-//   tasks.md 来源的路径多为 app 相对，匹配靠「后缀包含」兜底：若在飞路径 endsWith target 或反之，
-//   也算命中（避免 src/... vs apps/web/src/... 因基准不同而漏判）。
+//   只有 tasks.md adapter 来源可能是 app 相对路径，允许低置信度「后缀包含」兜底；Git 来源已经以
+//   仓库根为基准，只做精确或祖先/后代匹配，避免 example/lib/main.dart 与 lib/main.dart 误报。
 // ───────────────────────────────────────────────────────────────────────────
 /** @param {string} raw @returns {string[]} */
 function parseTargets(raw) {
@@ -411,15 +411,16 @@ function parseTargets(raw) {
 }
 
 /**
- * 判定 target 是否与某在飞路径重叠。
- * 命中条件（任一）：完全相等 / 一方是另一方的路径后缀（按 / 边界）。
+ * 判定 target 是否与某在飞路径重叠并返回匹配依据。
  * @param {string} target
  * @param {string} inflight
+ * @param {boolean} allowRelative
  */
-function pathsOverlap(target, inflight) {
-  if (target === inflight) return true;
+function pathMatch(target, inflight, allowRelative) {
+  if (target === inflight) return { kind: 'exact', confidence: 'high' };
   const prefixMatch = (parent, child) => child.startsWith(`${parent}/`);
-  if (prefixMatch(target, inflight) || prefixMatch(inflight, target)) return true;
+  if (prefixMatch(target, inflight) || prefixMatch(inflight, target)) return { kind: 'ancestor', confidence: 'high' };
+  if (!allowRelative) return null;
 
   // adapter 可能给 app 相对路径；尝试把短路径对齐到长路径的任一目录边界，再做祖先/后代判断。
   const relativeMatch = (long, short) => {
@@ -430,9 +431,8 @@ function pathsOverlap(target, inflight) {
     }
     return false;
   };
-  if (target.length > inflight.length) return relativeMatch(target, inflight);
-  if (inflight.length > target.length) return relativeMatch(inflight, target);
-  return false;
+  if ((target.length > inflight.length && relativeMatch(target, inflight)) || (inflight.length > target.length && relativeMatch(inflight, target))) return { kind: 'suffix-relative', confidence: 'low' };
+  return null;
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -461,15 +461,19 @@ if (targets.length === 0) {
   process.exit(1);
 }
 
-/** @type {{target:string, inflight:string, sources:string}[]} */
+/** @type {{target:string, inflight:string, sources:string, match_kind:string, confidence:string}[]} */
 const collisions = [];
 for (const t of targets) {
   for (const f of sortedFiles) {
-    if (pathsOverlap(t, f)) {
+    const sourceSet = inFlight.get(f);
+    const match = pathMatch(t, f, [...sourceSet].some((source) => source === 'task:[-]'));
+    if (match) {
       collisions.push({
         target: t,
         inflight: f,
-        sources: [...inFlight.get(f)].sort().join(', '),
+        sources: [...sourceSet].sort().join(', '),
+        match_kind: match.kind,
+        confidence: match.confidence,
       });
     }
   }
@@ -484,9 +488,9 @@ if (collisions.length === 0) {
 console.log(`${PREFIX} 重叠明细:`);
 for (const c of collisions) {
   if (c.target === c.inflight) {
-    console.log(`  ${c.target}  [${c.sources}]`);
+    console.log(`  ${c.target}  [${c.sources}; match=${c.match_kind}; confidence=${c.confidence}]`);
   } else {
-    console.log(`  ${c.target}  ~  ${c.inflight}  [${c.sources}]`);
+    console.log(`  ${c.target}  ~  ${c.inflight}  [${c.sources}; match=${c.match_kind}; confidence=${c.confidence}]`);
   }
 }
 console.log(

@@ -60,7 +60,8 @@
 
 约束：
 
-- `challenge_nonce` 必须来自当前 `review-input`，不得复用其他 run 的 Review Result；
+- `contract_digest`、`verification_profile_digest`、`artifact_ref` 和 `challenge_nonce` 必须从当前
+  `review-input` 原样复制，不得由 controller 在 reviewer 输出后补写，也不得复用其他 run 的 Review Result；
 
 - `fail` 的 findings 非空，每条字段完整且引用已冻结 acceptance ID；
 - `no_defect_found` 的 findings 为空、forensics 非空；它只表示在取证范围内未发现缺陷；

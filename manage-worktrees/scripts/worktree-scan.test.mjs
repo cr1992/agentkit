@@ -84,6 +84,28 @@ test('目录 target 与其下已修改文件视为碰撞', (t) => {
   const output = scan(fixture.repo, ['scan', '--target', 'src']);
   assert.match(output, /COLLIDE/);
   assert.match(output, /src\/a\.ts/);
+  assert.match(output, /match=ancestor; confidence=high/);
+});
+
+test('Git 仓库根路径不同但 basename 相同不误报，adapter 相对路径保留低置信度提示', (t) => {
+  const fixture = makeRepo();
+  t.after(fixture.cleanup);
+  const nested = join(fixture.repo, 'example', 'lib');
+  mkdirSync(nested, { recursive: true });
+  writeFileSync(join(nested, 'main.dart'), 'base\n');
+  git(fixture.repo, ['add', 'example/lib/main.dart']);
+  git(fixture.repo, ['commit', '-m', 'chore: add nested main']);
+  writeFileSync(join(nested, 'main.dart'), 'dirty\n');
+  assert.match(scan(fixture.repo, ['scan', '--target', 'lib/main.dart']), /CLEAR/);
+
+  const adapterFixture = makeRepo({ schema_version: 1, scan: { sources: [{ type: 'kiro_tasks', glob: '.kiro/specs/*/tasks.md' }] } });
+  t.after(adapterFixture.cleanup);
+  const spec = join(adapterFixture.repo, '.kiro', 'specs', 'fixture');
+  mkdirSync(spec, { recursive: true });
+  writeFileSync(join(spec, 'tasks.md'), '- [-] DART-1. fixture\n  - **影响文件或目录**: `lib/main.dart`\n');
+  const output = scan(adapterFixture.repo, ['scan', '--target', 'example/lib/main.dart']);
+  assert.match(output, /COLLIDE/);
+  assert.match(output, /match=suffix-relative; confidence=low/);
 });
 
 test('kiro_tasks adapter 使用 Profile 声明的 glob', (t) => {

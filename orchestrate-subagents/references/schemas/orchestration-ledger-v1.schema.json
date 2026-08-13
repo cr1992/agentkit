@@ -1,3 +1,46 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://agent-skills.local/schemas/orchestration-ledger-v1.schema.json", "title": "Orchestration Ledger v1", "type": "object", "required": ["schema_version", "runtime_version", "ledger_id", "revision", "contract_digest", "nodes", "edges", "attachments", "batches", "reflection_refs", "improvement_proposal_refs", "skill_provenance", "created_at", "updated_at"], "properties": { "schema_version": { "const": 1 }, "runtime_version": { "type": "string" }, "ledger_id": { "type": "string" }, "revision": { "type": "integer" }, "contract_digest": { "type": "string" }, "nodes": { "type": "object" }, "edges": { "type": "array" }, "attachments": { "type": "array" }, "batches": { "type": "object" }, "reflection_refs": { "type": "array" }, "improvement_proposal_refs": { "type": "array" }, "skill_provenance": { "type": "object" }, "created_at": { "type": "string" }, "updated_at": { "type": "string" } }, "additionalProperties": false
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://agent-skills.local/schemas/orchestration-ledger-v1.schema.json", "title": "Orchestration Ledger v1", "type": "object", "required": ["schema_version", "runtime_version", "ledger_id", "revision", "contract_digest", "nodes", "edges", "attachments", "batches", "reflection_refs", "improvement_proposal_refs", "skill_provenance", "created_at", "updated_at"], "properties": { "schema_version": { "const": 1 }, "runtime_version": { "type": "string" }, "ledger_id": { "type": "string" }, "revision": { "type": "integer" }, "contract_digest": { "type": "string" }, "nodes": { "type": "object", "additionalProperties": { "$ref": "#/$defs/node" } }, "edges": { "type": "array" }, "attachments": { "type": "array", "items": { "$ref": "#/$defs/attachment" } }, "batches": { "type": "object" }, "reflection_refs": { "type": "array" }, "improvement_proposal_refs": { "type": "array" }, "skill_provenance": { "type": "object" }, "created_at": { "type": "string" }, "updated_at": { "type": "string" } }, "additionalProperties": false,
+  "$defs": {
+    "attachment": {
+      "type": "object",
+      "required": ["attachment_id", "node_id", "type", "digest", "ref"],
+      "properties": {
+        "attachment_id": { "type": "string" },
+        "node_id": { "type": "string" },
+        "type": { "enum": ["worktree", "artifact", "evidence", "loop", "report", "contract"] },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "ref": { "type": "string" }
+      }
+    },
+    "node": {
+      "type": "object",
+      "required": ["node_id", "objective", "role", "required", "state", "permissions", "dependencies", "dispatch", "stable_outputs", "evidence", "created_at", "updated_at"],
+      "properties": {
+        "node_id": { "type": "string" },
+        "objective": { "type": "string" },
+        "role": { "enum": ["scout", "worker", "critic", "judge"] },
+        "required": { "type": "boolean" },
+        "state": { "enum": ["pending", "running", "blocked", "awaiting_verification", "passed", "failed", "cancelled"] },
+        "permissions": { "type": "object" },
+        "dependencies": { "type": "array" },
+        "dispatch": { "type": ["object", "null"] },
+        "stable_outputs": { "type": "array" },
+        "evidence": { "type": "array" },
+        "verification": {
+          "type": "object",
+          "required": ["requirement", "provider", "artifact_scope"],
+          "properties": {
+            "requirement": { "enum": ["worker_self_check", "controller_recheck", "independent_evidence"] },
+            "provider": { "enum": ["none", "verify-agent-output"] },
+            "artifact_scope": { "enum": ["node_output", "integration_candidate", "not_applicable"] }
+          },
+          "additionalProperties": false
+        },
+        "verification_assurance": { "enum": ["none", "worker_self_check", "controller_recheck", "independent_evidence"] },
+        "verification_ref": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      }
+    }
+  }
 }

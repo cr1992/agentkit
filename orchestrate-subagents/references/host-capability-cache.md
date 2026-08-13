@@ -3,6 +3,10 @@
 能力快照用于复用已经验证过的宿主语义与限制；它是缓存，不是能力或授权的事实源。实时工具契约
 始终优先。读取本文件后，使用 `scripts/host_capability_cache.py` 管理状态、刷新和观察事件。
 
+本协议只对 `orchestration_mode: full` 强制。满足 `SKILL.md` 轻量档全部条件时，只实时检查当次实际
+使用的参数并记录 `not-required-lightweight`；不要为了执行 cache `status` 先构造完整 descriptor。
+轻量档升级为完整档时，再按下文发现、检查和刷新。
+
 ## 目录
 
 - [存储与分层](#存储与分层)
