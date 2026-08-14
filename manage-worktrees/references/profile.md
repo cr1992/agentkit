@@ -37,9 +37,35 @@ Profile 可声明：
 - `task_naming`、`branch_template`、`path_template`：可见命名约定。
 - collision scan adapter：将仓库自己的任务认领信息并入 dirty/recent-commit 扫描。
 - change-request provider：当前 bundled adapter 支持 GitLab push-options；未配置时走仓库自己的 PR/MR 流程。
+- `post_integrate_steps`：声明"合成之后需要重新生成"的动作（见下）。
 - 无秘密的 prerequisite/doctor 提示。
 
 Profile 是数据，不是任意命令执行入口。不要放 shell command、token、cookie、私钥或个人凭证路径。
+
+## 合成后再生成步骤
+
+golden 基准、代码生成产物、依赖锁文件这类东西被多个分支各自重新生成时，合成必然冲突，且冲突
+无法靠挑一边解决——只有在合成态重新生成一次才是对的。这类动作高度依赖具体仓库，portable core
+不知道该跑什么，也**不允许**替仓库跑任何命令。
+
+因此 Profile 只**声明**清单，`batch-integrate` 合成完成后只回显它，由 controller 逐条执行，再用
+`batch-step` 登记结果：
+
+```json
+{
+  "schema_version": 1,
+  "post_integrate_steps": [
+    { "name": "regenerate-golden", "hint": "在候选树重跑 golden 生成命令后提交" },
+    { "name": "recompute-lock", "hint": "重算依赖锁文件并确认无版本漂移" }
+  ]
+}
+```
+
+- 每项只有 `name` 与 `hint` 两个键，**没有也不会有 `command` / `run` / `script`**；未知键一律
+  fail-closed，防止有人把 shell 塞进声明位，绕过"portable core 不执行 Profile 内容"这条边界。
+- `name` 是 kebab-case slug、同一 Profile 内唯一，它是 `batch-step` 登记结果的键。
+- `hint` 是给人看的单行说明（≤240 字符），不是可执行内容。
+- 最多 20 项。清单过长通常说明这些动作应当收进仓库自己的一条 wrapper 命令。
 
 显式 `--config <path>` 不执行 primary Profile 的 baseline fetch/drift gate，只读取本地 ref；它适合已经人工核对的离线恢复，不等于自动证明配置新鲜。
 

@@ -34,9 +34,16 @@ const ALLOWED_TOP_LEVEL_KEYS = new Set([
   'task_naming',
   'scan',
   'ephemeral_path_patterns',
+  'post_integrate_steps',
   'extensions',
 ]);
 const ALLOWED_SCAN_KEYS = new Set(['sources']);
+// 只声明、不执行：portable core 永远不把 Profile 内容当命令跑。这里刻意不提供
+// command/run/script 字段，未知键一律 fail-closed，避免有人把 shell 塞进声明位。
+const ALLOWED_POST_INTEGRATE_STEP_KEYS = new Set(['name', 'hint']);
+const POST_INTEGRATE_STEP_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const POST_INTEGRATE_STEPS_MAX = 20;
+const POST_INTEGRATE_HINT_MAX = 240;
 const ALLOWED_CHANGE_REQUEST_KEYS = new Set(['provider', 'remote', 'target_branch', 'remove_source_branch']);
 const ALLOWED_TASK_NAMING_KEYS = new Set(['mode', 'example']);
 const ALLOWED_TASK_SOURCE_KEYS = new Set(['type', 'glob']);
@@ -69,6 +76,7 @@ const DEFAULT_PROFILE = Object.freeze({
   },
   scan: { sources: ['git_worktrees', 'recent_commits'] },
   ephemeral_path_patterns: BUILTIN_EPHEMERAL_PATTERNS,
+  post_integrate_steps: [],
   extensions: {},
 });
 
@@ -304,6 +312,50 @@ export function validateProfile(raw) {
   for (const [index, pattern] of ephemeralPathPatterns.entries()) {
     requireNonEmptyString(pattern, `profile.ephemeral_path_patterns[${index}]`);
   }
+  const postIntegrateSteps = raw.post_integrate_steps ?? [];
+  if (!Array.isArray(postIntegrateSteps)) {
+    throw new WorktreeProfileError(
+      'PROFILE_INVALID_TYPE',
+      'profile.post_integrate_steps 必须是 array。',
+    );
+  }
+  if (postIntegrateSteps.length > POST_INTEGRATE_STEPS_MAX) {
+    throw new WorktreeProfileError(
+      'PROFILE_INVALID_TYPE',
+      `profile.post_integrate_steps 最多 ${POST_INTEGRATE_STEPS_MAX} 项，当前 ${postIntegrateSteps.length}。`,
+    );
+  }
+  const postIntegrateNames = new Set();
+  const normalizedPostIntegrateSteps = postIntegrateSteps.map((step, index) => {
+    const location = `profile.post_integrate_steps[${index}]`;
+    if (!isPlainObject(step)) {
+      throw new WorktreeProfileError('PROFILE_INVALID_TYPE', `${location} 必须是 object。`);
+    }
+    rejectUnknownKeys(step, ALLOWED_POST_INTEGRATE_STEP_KEYS, location);
+    const name = requireNonEmptyString(step.name, `${location}.name`);
+    if (!POST_INTEGRATE_STEP_NAME_PATTERN.test(name)) {
+      throw new WorktreeProfileError(
+        'PROFILE_INVALID_TYPE',
+        `${location}.name 必须是 kebab-case slug（如 regenerate-golden），当前: ${name}`,
+      );
+    }
+    if (postIntegrateNames.has(name)) {
+      throw new WorktreeProfileError(
+        'PROFILE_INVALID_TYPE',
+        `${location}.name 重复: ${name}；步骤名是登记执行结果的键，必须唯一。`,
+      );
+    }
+    postIntegrateNames.add(name);
+    const hint = requireNonEmptyString(step.hint, `${location}.hint`);
+    if (hint.length > POST_INTEGRATE_HINT_MAX || /[\u0000-\u001f\u007f\r\n]/u.test(hint)) {
+      throw new WorktreeProfileError(
+        'PROFILE_INVALID_TYPE',
+        `${location}.hint 必须是 1-${POST_INTEGRATE_HINT_MAX} 字符的单行文本。`,
+      );
+    }
+    return { name, hint };
+  });
+
   const extensions = raw.extensions ?? {};
   if (!isPlainObject(extensions)) {
     throw new WorktreeProfileError('PROFILE_INVALID_TYPE', 'profile.extensions 必须是 object。');
@@ -327,6 +379,7 @@ export function validateProfile(raw) {
     },
     scan: structuredClone(scan),
     ephemeral_path_patterns: [...new Set([...BUILTIN_EPHEMERAL_PATTERNS, ...ephemeralPathPatterns])],
+    post_integrate_steps: normalizedPostIntegrateSteps,
     extensions: structuredClone(extensions),
   };
 }

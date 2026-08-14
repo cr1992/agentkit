@@ -227,8 +227,9 @@ Agent 必须执行当前冻结协议，同时持续审计以下冲突：
 3. 用本 Skill 自带 ledger 工具持久化任务图和状态。
 4. 在共享树安全时直接使用共享树。
 5. 需要隔离但没有 `manage-worktrees` 时，使用 Skill 中的保守 Git 下限或要求用户提供环境。
-6. 需要独立验收但没有专项验证 Skill 时，使用宿主原生 reviewer，并明确记录
-   `verification_assurance: host_protocol`。
+6. 需要独立验收但没有专项验证 Skill 时，可以使用宿主原生 reviewer 辅助 Controller 判断，但在
+   ledger 中只能记录 `controller_recheck`；没有标准 Evidence Package 不得升级成
+   `independent_evidence`。
 
 独立模式的交付不是“子 Agent 都回复了”，而是 controller 对稳定产物和证据完成最终验收。
 
@@ -248,10 +249,23 @@ Agent 必须执行当前冻结协议，同时持续审计以下冲突：
 - 更新 owner 与状态；
 - 固定 feature / target SHA；
 - 生成批次集成计划；
+- 按冻结计划合成一次性集成候选；
 - 监听合入；
 - 审计并保守回收。
 
 独立输出包括稳定的 worktree record、event journal、owner epoch 和 artifact identity。
+
+是否聚合验收由数量默认与定性判据共同决定，且数量默认在前：同一仓库、同一目标分支的并行交付单元
+≥3 时默认走聚合验收，此时"输入之间互不触碰"的人工评估视为不可信、不得据它豁免（数量默认正是对
+这类定性误判的兜底）；=2 时按交叉面判据走，碰撞扫描 `COLLIDE`、同文件或同生成物即聚合。跨仓或
+目标分支不同的输入不计入同批。
+
+集成候选只承载"这组输入合成后兼容"的验收结论，不作为 change request 载体：合入仍按可独立评审、
+合入和回退的交付单元分别进行。合入监听绑定的是"内容进目标分支"这一事实，与内容经哪个载体合入
+无关，因此在进入 `ready_for_review` 时默认武装，而不是依附于某个 change request 的创建动作。
+若 HEAD 前进，状态更新与旧 watcher 失效必须在同一条 event 内原子完成，并以 watcher token/state
+做 CAS；随后才能尝试重冻结。这样旧 SHA 不会在状态更新与撤防之间抢先把任务推进到不可逆终态，
+陈旧 controller 也不能覆盖并发 rearm 或已进入 `merge_detected` 的 watcher。
 
 ### 5.3 verify-agent-output
 
@@ -479,7 +493,9 @@ skill_set:
     content_digest: "sha256:..."
     provider_mode: primary | optional
 stop_conditions: []
-extensions: {}
+extensions:
+  verification:
+    provider: none | verify-agent-output | run-agent-verify-loop
 contract_digest: "sha256:..."
 ~~~
 
@@ -494,7 +510,8 @@ contract_digest: "sha256:..."
   `[{path, size, sha256}]` manifest 使用 RFC 8785 + SHA-256；不包含绝对路径、缓存和运行状态；
 - 合同冻结后任何变化都创建新版本；
 - extension 不得覆盖公共字段；
-- 实现者不能修改 verification extension。
+- 实现者不能修改 verification extension；需要 `independent_evidence` 的节点只能在此处已声明
+  `verify-agent-output` 且 `skill_set` 已冻结同名 Skill 时创建。
 - freeze 后 provider 缺失或不兼容必须 abort / re-contract，不得修改原合同。
 
 ### 7.2 Worktree Binding
@@ -565,7 +582,7 @@ runtime:
   cache_policy: disabled | isolated | trusted_identity
   network_policy: denied | contract_authorized
   max_log_bytes: 1048576
-human_gate: none
+human_gate: none | release | destructive | external_side_effect
 verification_profile_digest: "sha256:..."
 ~~~
 
@@ -575,6 +592,9 @@ verification_profile_digest: "sha256:..."
 - `l1_review.contract_item_id` 必须引用冻结 Task Contract 的 acceptance item；
 - L0 只接受 argv 数组，不接受 shell command string；
 - `env_allowlist` 只记录变量名，不把值写入 Evidence；
+- `cache_policy` 只接受 `disabled | isolated | trusted_identity`；
+- `network_policy: denied` 要求宿主显式提供 network-isolated assurance；
+- `human_gate` 只接受 Profile 中声明的四值枚举；
 - protected / allowed path 共用 v1 exact-path / directory-prefix grammar；
 - `verification_profile_digest` 按第 7 节统一 canonical 规则计算；
 - Profile freeze 后任何字段变化都必须新建 verification run；Loop 已启动时还必须 re-contract。
@@ -634,7 +654,9 @@ review_result_digest: "sha256:..."
 三态 verdict 语义的唯一真源。Review Result schema 是跨 Skill 契约；unknown
 `contract_item_id`、无 evidence finding、`no_defect_found` 无 forensics、以及包含 safety finding
 却试图按普通 pass 处理都必须被脚本拒绝。`challenge_nonce` 由 runtime 在当前验收轮生成并放入
-reviewer input；Review Result 必须原样绑定它，以阻止跨 run/iteration 重放。
+reviewer input；reviewer input 还必须顶层携带 `contract_digest` 与
+`verification_profile_digest`。Review Result 必须原样绑定这三个字段和 Artifact，controller 不得
+在 reviewer 输出后补写绑定元数据，以阻止跨 run/iteration 重放。
 
 ### 7.7 Evidence Package
 
@@ -663,6 +685,35 @@ evidence_digest: "sha256:..."
 ~~~
 
 `terminal_outcome: pass` 永远只表示验证通过，不表示全局任务完成。
+
+#### 7.7.1 Orchestration Verification Obligation
+
+完整编排的每个新节点必须显式声明验收义务：
+
+~~~yaml
+verification:
+  requirement: worker_self_check | controller_recheck | independent_evidence
+  provider: none | verify-agent-output
+  artifact_scope: node_output | integration_candidate | not_applicable
+verification_assurance: none | worker_self_check | controller_recheck | independent_evidence
+verification_ref: "<被采信的 report / Evidence attachment digest，最低档为 null>"
+~~~
+
+三档不能互相冒充：稳定输出只满足 `worker_self_check`；`controller_recheck` 必须用一份覆盖当前全部
+稳定输出摘要的 Controller Recheck Record；`independent_evidence` 必须绑定唯一 Artifact Ref 和标准
+Evidence Package。后两档的 `passed` 事件绑定精确 `verification_ref`，防止同节点多份报告或 Evidence
+产生“任意一份 pass”歧义。orchestrator 只校验跨 Skill 公共字段、RFC 8785 摘要、合同 / Artifact
+绑定、`terminal_outcome: pass` 和 human gate；不复制 verifier 的 L0/L1 状态机，也不派生 reviewer。
+合同绑定自 v1.2 起是双路径：缺省全等（验证合同 = 公共合同本身），或绑定该节点唯一一份**投影合同**
+——由 `contract-tool.mjs project` 从公共合同切出的产物专属条目子集，携带 `parent_contract_digest`
+与逐条 acceptance 条目摘要。ledger 校验血缘 + 条目子集，并要求除 `contract_id` / `acceptance` 子集 /
+`extensions.projection` 外的字段与公共合同逐字段全等，因此投影只能收窄验收面，不能改写 `objective`、
+`scope`、`permissions` 等任何其他字段。规范表述在
+[编排运行时](../../orchestrate-subagents/references/orchestration-runtime.md)「合同投影」段。
+
+独立验收默认只放在最终冻结的高风险 integration candidate，而不是每个中间 worker commit；这是
+保证强度选择，不是由 worker 数量自动触发。`status` 和最终审计只能报告 ledger 实际记录的
+`verification_assurance`。
 
 ### 7.8 Embedded Verification Record
 
@@ -820,7 +871,7 @@ proposal_digest: "sha256:..."
 
 | Skill | 当前脚本化程度 | 判断 |
 | --- | --- | --- |
-| `orchestrate-subagents` | Phase 3 已增加 contract tool、任务图 ledger、稳定 attachment、batch fuse、reflection/proposal 与恢复测试 | 控制面核心台账已机械化；宿主派发仍由 controller 调用 |
+| `orchestrate-subagents` | Phase 3 已增加 contract tool、任务图 ledger、稳定 attachment、分档验收义务、Evidence 绑定门禁、batch fuse、reflection/proposal 与恢复测试 | 完整档控制面台账已机械化；≤3 个独立只读 worker 可走显式轻量档 |
 | `manage-worktrees` | Phase 2 已增加 Artifact / Binding / capabilities / incident runtime 与测试 | Git 隔离、生命周期和跨 Skill 稳定产物已脚本化 |
 | `verify-agent-output` | Phase 1a/1b 已新增 verification、Reflection 与 proposal runtime | 一次性 Git Artifact 验收和受控改进输入已实现 |
 | `run-agent-verify-loop` | Phase 1a/1b 已新增 loop、embedded、report、Reflection 与 proposal runtime | 单 Loop 状态、恢复、防重放、熔断和收敛报告已脚本化；批量责任已迁移到 orchestrator |
@@ -859,6 +910,11 @@ orchestrate-subagents/
     ├── contract-tool.mjs                 # 新增
     └── *.test.*
 ~~~
+
+编排先按规模选档：`≤3` 个独立只读 worker、单 stage、无副作用/资源/Loop/barrier 时使用
+`orchestration_mode: lightweight`，只写仓库外单一状态快照，并直接按当次实时 schema 校验实际使用
+的宿主参数；不运行 capability cache、模型路由解析器或 ledger。effort 参数未暴露时记录
+`unsupported`，不能写成 `inherited`。任一资格失效时把现有节点和产物收养到完整 ledger。
 
 `contract-tool.mjs`：
 
@@ -902,6 +958,10 @@ orchestrate-subagents/
 - `worktree-provider-gitlab.mjs`；
 - 对应测试。
 
+`worktree-scan.mjs` 对仓库根规范化的 Git 来源只做 exact / ancestor 高置信度匹配；只有显式任务
+adapter 的 app 相对路径允许 suffix-relative 低置信度兜底。低置信度仍保守返回 `COLLIDE`，同时在
+明细中输出 match kind 与 confidence，避免同 basename 不同仓库路径的硬误报。
+
 建议增强 `worktree-mgr.mjs`：
 
 | 命令 | 作用 |
@@ -912,8 +972,32 @@ orchestrate-subagents/
 | `incident <task-or-id> --input <json>` | 记录碰撞、漂移、交接或回收异常的结构化 reflection |
 | `propose-improvement --reflection <id>` | 输出 worktree Skill 改进候选，不自动改 Profile / 脚本 |
 | `capabilities --json` | 声明 schema 与 provider 能力 |
+| `batch-integrate --plan <json>` | 校验冻结计划新鲜度，建/复用一次性候选树并按冻结顺序合成精确 SHA |
+| `batch-step <candidate> --step --state` | 登记 Profile 声明的合成后再生成步骤的执行结果 |
 
 它继续只拥有 Git 隔离与生命周期，不读取 Verification verdict，不推进 Loop iteration。
+
+`batch-integrate` 把「合成」机械化，但**不扩大执行面**：它不跑任何门禁命令，也不执行 Profile 中的
+任何内容。Profile 的 `post_integrate_steps` 是纯声明（只有 `name` / `hint`，未知键 fail-closed），
+合成后只回显给 controller，执行结果经 `batch-step` 回写 event。这保持了 §8.2 的通用脚本约束：
+Profile 是数据，不是命令执行入口。
+
+合成期间的写动作限于候选树自身：按冻结顺序 merge、把候选重置回冻结 target 以重新合成、
+`git merge --abort`。候选树是一次性产物、内容可从计划完整复现，因此重置不损失唯一成果；但命令
+仍拒绝重置非干净候选树，避免冲掉尚未提交的人工冲突裁决。**已合成的候选默认不重置**：合成之后
+执行 `post_integrate_steps` 产生的提交属于唯一成果，同指纹重跑只做幂等回报。跨会话可读该结果但
+不得写候选；续合或重合成必须先 `handoff`。只有当前 owner 同时传入 `--recompose` 和候选当前完整
+`--recompose-head`，先落包含 discarded/authorized HEAD 的审计 event，并在 reset 前通过 HEAD CAS，
+才允许丢弃这些提交。
+
+新鲜度校验按计划留存的原始 selector 全集重算，并比对被折叠/已合入输入集合——只回算 `included`
+会让"被折叠的父分支后来前进"在指纹不变的假象下漏出合成边界。
+
+候选树默认启用 worktree 级 rerere（`rerere.enabled` 与 `rerere.autoUpdate` 必须同时生效，
+只开前者会让重放只更新工作区而不更新 index，冲突判定依旧成立），使多轮候选之间同一冲突自动
+重放；rerere 解法缓存位于共享 common dir，属于跨 worktree 共享状态。自动启用共享
+`extensions.worktreeConfig` 是唯一会写仓库级配置的动作，必须留下可区分"本轮写入"与"原本已启用"
+的独立审计事件，并如实保存覆盖前值；Git boolean 必须按 Git 自身语义归一化。
 
 ### 8.5 verify-agent-output 的脚本工具
 
@@ -936,9 +1020,15 @@ verify-agent-output/
 | 命令 | 作用 |
 | --- | --- |
 | `capabilities` | 输出支持的 schema / protocol |
+| `scaffold` | 生成 Contract/Profile/Artifact/Review 或 bundle 合法骨架并代算当前 Skill 摘要 |
+| `prepare` | 薄串联 Contract/Profile 骨架与 TODO 清单，不猜测试命令、不内置项目专属 preset |
+| `digest` | 为 Contract/Profile/Review 重算 RFC 8785 摘要，不覆盖输入 |
+| `readiness` | 只检查环境前提（Git 根、可执行、L0 cwd 与已存在的 argv 文件、state root 可写），失败归 blocked/precondition |
+| `preflight` | 一次汇总 envelope、枚举、摘要、Skill 绑定与隔离 assurance 错误 |
 | `init` | 冻结 Contract、Profile 与 Artifact |
 | `run-smoke` | 执行便宜 L0，失败时快速终止 |
-| `review-input` | 生成隔离 reviewer 输入 |
+| `review-input` | 生成携带 Contract/Profile digest、Artifact 与 nonce 的隔离 reviewer 输入 |
+| `review-bundle` | 把提示词、review-input、Review Result schema、权限与停止条件打成可直投 reviewer 的自包含 JSON，并标注 `contract_kind` |
 | `record-review` | 校验并登记 L1 输出 |
 | `run-final` | 在同一 Artifact 上执行完整 L0 |
 | `record-reflection` | 记录漏检、误报、不可判定、Profile 或 Skill 缺口 |
@@ -1132,6 +1222,16 @@ Loop 收到 verification abort 时：
 → audit
 → push / watch（需授权）
 → reclaim
+~~~
+
+需要证明多个 feature 合成后兼容时，在 `audit` 之后插入批量集成段：
+
+~~~text
+plan-batch（冻结 target 与有序输入）
+→ batch-integrate（建/复用一次性候选树并合成）
+→ controller 跑门禁 + batch-step 登记合成后再生成步骤
+→ 各输入按可独立评审的交付单元分别合入
+→ reclaim（候选树与各 feature 树）
 ~~~
 
 不需要多 Agent，也不产生验证 verdict。
@@ -1435,7 +1535,8 @@ Phase 4 统一执行。
 - 增加闭环 doctor。
 
 当前源码状态：contract tool、任务图/attachment ledger、batch ledger/fuse、journal rebuild、doctor、
-reflection/proposal 已实现。批级连续失败组合测试通过后，Loop 的旧批量条款已同批删除。
+reflection/proposal 已实现；≤3 个独立只读 worker 的显式轻量档、实时 schema-only 宿主适配和
+`unsupported` effort 语义已落地。批级连续失败组合测试通过后，Loop 的旧批量条款已同批删除。
 
 ### Phase 4：组合压力测试与发布
 

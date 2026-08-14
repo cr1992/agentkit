@@ -1,6 +1,6 @@
 ---
 name: manage-worktrees
-description: "管理 Git worktree 隔离、批量集成候选与生命周期：扫描写入碰撞，创建或接管可追踪 worktree，登记归属，为多个 feature 生成固定 SHA 的批次验收计划，并完成交接、审计、合入监听和安全回收。当用户明确要求 worktree、多 feature 联合验收或集成测试分支，已确认多个 Agent、线程或开发者会同时写入同一仓库且存在覆盖风险，或编排层因写入归属不明且路径相交、丢失代价高而裁决需要隔离时使用。只读并行、不需要跨分支合成的普通单写入者/顺序执行、仅因仓库 dirty 或理论上可能并发的场景不适用。"
+description: "管理 Git worktree 隔离、批量集成候选与生命周期：扫描写入碰撞，创建或接管可追踪 worktree，登记归属，为多个 feature 生成固定 SHA 的批次验收计划并按该计划合成一次性集成候选，并完成交接、审计、合入监听和安全回收。当用户明确要求 worktree、多 feature 联合验收或集成测试分支，已确认多个 Agent、线程或开发者会同时写入同一仓库且存在覆盖风险，或编排层因写入归属不明且路径相交、丢失代价高而裁决需要隔离时使用。只读并行、不需要跨分支合成的普通单写入者/顺序执行、仅因仓库 dirty 或理论上可能并发的场景不适用。"
 ---
 
 # manage-worktrees：Git Worktree 隔离与生命周期
@@ -219,6 +219,16 @@ node "$SKILL_DIR/scripts/worktree-mgr.mjs" touch <task-or-id> --status active
 node "$SKILL_DIR/scripts/worktree-mgr.mjs" touch <task-or-id> --status ready_for_review
 ```
 
+进入 `ready_for_review` 时**默认自动武装合入监听**，target 取 Profile `default_base` 指向的远端主干。已武装且 HEAD 变化时自动重冻结到新 HEAD，不会继续盯着旧 SHA。确实不需要监听时用 `--no-watch` 显式退出：
+
+```bash
+node "$SKILL_DIR/scripts/worktree-mgr.mjs" touch <task-or-id> --status ready_for_review --no-watch
+```
+
+自动武装是 fail-soft 的：worktree 不干净、HEAD 未推送、没有可刷新的远端主干时只回报未武装原因，不让 `touch` 失败。看到「watch 未武装」就要么补齐前提后重跑，要么明确接受人工回收。自动武装的 target 属于默认值，当轮显式 `watch --target` 可直接改指；人工显式武装过的 target 不被静默改写，换目标仍需先 `unwatch`。
+
+**已武装但 HEAD 已经前进时，`touch` 会在同一条 event 内原子更新状态并使旧 watcher 失效，然后才尝试重冻结。** 写入同时校验 watcher token/state，不能用陈旧快照覆盖并发 rearm 或已进入 `merge_detected` 的 watcher。若当前 HEAD 未推送或树不干净，自动回收保持关闭；推送后再 `touch` 即可重新武装。旧 SHA 合入不代表新 HEAD 已完成，绝不能让旧 watcher 继续推进不可逆终态。
+
 换 Agent 前必须先让工作树干净并 push，再执行：
 
 ```bash
@@ -260,9 +270,20 @@ node "$SKILL_DIR/scripts/worktree-mgr.mjs" watch <task-or-id> \
 
 `watch` 冻结精确 head SHA，只在该 SHA 成为目标 ref 的祖先后进入安全回收。电脑重启后由 `resume-all` 恢复 stale watcher。change request 关闭且不会合入时显式执行 `unwatch`。
 
-### 8. 规划批量集成验收
+### 8. 规划并合成批量集成验收
 
-只有需要证明多个 feature **合成后**的兼容性时才建集成候选树；仅批量跑各分支独立检查时，verifier 直接读固定 SHA，不建树。
+建集成候选树是为了证明多个 feature **合成后**仍然兼容。三条判据说明了它为什么必要：
+
+1. 输入之间存在实际交叉面：改到同一文件、同一接口，或共享同一份生成物。
+2. 合成后的兼容性无法由各输入自己的门禁证明。
+3. 合成一次的代价低于不兼容流入目标分支的代价。
+
+**是否聚合先看数量默认，再看判据。** 同批只统计**同一仓库、同一目标分支**的并行交付单元；跨仓或目标分支不同的输入不计入同批，各自单独判断：
+
+- **≥3 个并行输入：默认走聚合验收。** 此时判据 1 的人工评估视为不可信，不得据它豁免——赛前判定"互不触碰"的分支照样会在同一文件和同一生成物上冲突，数量默认就是对这种定性误判的兜底。
+- **=2 个并行输入：按判据走。** 交叉面成立（碰撞扫描 `COLLIDE`、同文件、或同生成物）即聚合；确实无交叉面时走分支矩阵——各分支固定 SHA 分别验收，verifier 直接读固定 SHA，不建树。
+
+以上是默认口径。调用者当轮给出的显式指引优先于这些默认值：偏离默认时说明理由并照做，不要用默认口径盖过当轮要求。
 
 先按项目规则刷新 target ref，再在**单一 Git 仓库根**执行只读规划：
 
@@ -270,7 +291,7 @@ node "$SKILL_DIR/scripts/worktree-mgr.mjs" watch <task-or-id> \
 node "$SKILL_DIR/scripts/worktree-mgr.mjs" plan-batch \
   feature-a feature-b feature-c \
   --target origin/main \
-  --json
+  --json > batch-plan.json
 ```
 
 `plan-batch` 不 fetch、不 merge、不创建树。它固定 target SHA 和有序 feature HEAD，并且：
@@ -279,11 +300,37 @@ node "$SKILL_DIR/scripts/worktree-mgr.mjs" plan-batch \
 - 排除已被 target 包含的 HEAD；子分支已包含父分支时折叠父分支，避免重复合成。
 - 只在没有 blocker 且仍有唯一输入时返回 `ready=true` 和稳定 `fingerprint`。
 
-`ready=true` 后，controller 使用语义化 task 调用 `spawn`，从计划中的 target ref 建立**一次性集成候选 worktree**，并把 fingerprint、target SHA、有序输入 SHA 写入验收台账。只允许该 controller 在候选树按冻结顺序合成精确 SHA；feature 树仍禁止 merge。冲突时停止验收并归因，可在候选树用 `git merge --abort` 回到干净 target，不在候选树修业务代码。
+`ready=true` 后由 `batch-integrate` 完成合成，不再手工建树、手工 merge、手工记指纹：
+
+```bash
+node "$SKILL_DIR/scripts/worktree-mgr.mjs" batch-integrate \
+  --plan batch-plan.json \
+  --agent codex --agent-id <real-thread-id> \
+  --json
+```
+
+它校验冻结计划仍然新鲜，自动 spawn 或按指纹复用一次性集成候选 worktree，按冻结顺序 merge 精确 SHA，并把 fingerprint、target SHA、有序输入和每步 merge commit 写入 trace。同指纹幂等重跑；输入变化产生新指纹时用 `--candidate-task <新 semantic slug>` 另起候选，工具自动冻结旧候选并双向登记替代关系。feature 树仍禁止 merge。
+
+新鲜度按**原始 selector 全集**重算，不只回算 `included`：被折叠的父分支、已在 target 的输入同样是这份计划的组成部分，它们后来前进或不再被覆盖都意味着合成边界已变，必须回到 `plan-batch` 重新冻结。target、任一输入 HEAD、折叠关系或重算出现 blocker，都会拒绝继续。
+
+已合成的候选**默认永不重置**。合成之后候选树通常还会前进（controller 执行下面的合成后再生成步骤并提交），此时同指纹重跑只做幂等回报，不会动候选树，也不会把已登记的步骤状态改回 `pending`。跨会话只能读取这份 `already_composed` 结果；继续冲突合成或重合成前必须先 `handoff`。确需按同一计划重新合成时，由当前 owner 同时传 `--recompose --recompose-head <候选当前完整 HEAD>`：工具会先落 `batch_candidate_recompose_authorized` 审计 event，再按该精确 HEAD 做 CAS，之后才允许丢弃提交。
+
+冲突时 fail-closed：停在冲突处，输出冲突文件、双方来源 SHA 和候选树路径，不自动解、不自动 abort，留给 controller 裁决；不在候选树修业务代码。候选树默认启用 rerere，因此人工裁决并提交一次之后重跑本命令，同一冲突会被自动重放，不必每轮候选重解一遍。要直接放弃这次合成用 `--abort-on-conflict` 回到干净 target。
+
+`batch-integrate` **不执行任何门禁命令**：合成完成后由 controller 自己跑目标仓库的测试、lint 和验收。仓库若声明了 `post_integrate_steps`（golden、codegen、lock 重算这类"合成后需要重新生成"的动作），工具只回显清单、绝不代跑，执行后由 controller 登记结果：
+
+```bash
+node "$SKILL_DIR/scripts/worktree-mgr.mjs" batch-step <candidate-selector> \
+  --step regenerate-golden --state done --note "<结果>"
+```
+
+**集成候选分支不作为 change request 载体**：它只用来证明"这批输入合成后仍然兼容"。验收通过后，各输入仍按可独立评审、合入和回退的交付单元分别提交和合入；把一批改动压成单一聚合载体会让评审失去独立性、回退失去粒度，也会让各输入失去自己的合入监听（见第 9 节）。
 
 target SHA、任一输入 SHA、顺序或验收契约变化后，旧结果立即 `stale`，重新规划。多仓目录必须按 repository identity 分批，再由上层台账汇总；Git worktree 无法合成跨仓提交。完整状态、报告契约和运行时隔离见 [references/batch-integration.md](references/batch-integration.md)。
 
 ### 9. 保守回收
+
+**监听绑定的是"内容进主干"这一事实，与内容经哪个载体（自建 change request、聚合 change request、他人代推）无关。** 载体会中途变化：原计划各自提交的几棵树可能改由别人代推或并入同一个载体，此时这些树没有自己的 change request，靠"建 change request 时顺手挂 watch"的做法就会漏挂，内容合入后无人回收。因此监听在进入 `ready_for_review` 时默认武装（第 6 节），不依赖载体是否存在；`submit` 只是顺带武装，不是唯一入口。合入路径改变时不必解除监听——冻结的 head SHA 一旦成为目标 ref 的祖先，回收照常触发。
 
 已合入或已推送成果的人工恢复出口：
 
@@ -336,7 +383,7 @@ worktree 位于当前宿主或沙箱写权限之外时，先取得该目录的�
 
 - 当前树并发时只改明确归属文件，提交必须带 pathspec：`git commit -m "type(scope): message" -- <owned-files...>`。
 - 小步 commit、频繁 push；worktree 只隔离 working directory/index，仍共享 refs、objects 和 stash。
-- 禁止 feature owner/agent 自行执行 `stash`、`reset --hard`、`clean -fd`、`checkout -- .`、`restore`、`merge`、`pull`、`rebase`。唯一例外是已登记的批次 integrator 在专用候选树按 `plan-batch` 冻结顺序 merge 精确 SHA，或用 `git merge --abort` 退出失败合成。
+- 禁止 feature owner/agent 自行执行 `stash`、`reset --hard`、`clean -fd`、`checkout -- .`、`restore`、`merge`、`pull`、`rebase`。唯一例外是**当前登记 owner** 在专用批次候选树上的合成动作：按冻结顺序 merge 精确 SHA、用精确 `--recompose-head` 授权把候选重置回冻结 target、用 `git merge --abort` 退出失败合成。这些动作由 `batch-integrate` 执行并落 event；跨会话必须先 handoff，命令也拒绝重置非干净候选树，避免冲掉尚未提交的人工裁决。
 - manager 只拥有它创建或接管的 worktree、branch 和 trace metadata，不拥有项目凭证、SDK license、个人 token 或共享运行态。
 - 秘密放在仓库外的 credential store；不得复制、软链或写入 trace。
 - event 是真源，record 是可重建缓存；`doctor` 永远只报告，不自动修复或删除。
@@ -349,9 +396,11 @@ worktree 位于当前宿主或沙箱写权限之外时，先取得该目录的�
 | `list [--all] [--json]` | 展示 tracked、untracked、missing、branch pending 和历史记录 |
 | `doctor [--json]` | 只读检查 Profile、命名、事件链、watcher、目录和 branch cleanup |
 | `plan-batch <selector...> [--target] [--json]` | 固定批次 target/输入 SHA，折叠依赖并输出可复现指纹 |
+| `batch-integrate --plan <json> \| <selector...>` | 校验计划新鲜度，建/复用一次性候选树并按冻结顺序合成；重合成需 owner + 精确 HEAD 授权；不跑门禁 |
+| `batch-step <candidate> --step --state` | 登记 Profile 声明的合成后再生成步骤的执行结果 |
 | `spawn` / `adopt` | 创建或接管可追踪 worktree |
 | `supersede <old> --by <new> --reason` | 为已存在的替代树补登记双向交付关系 |
-| `touch` / `handoff` | 更新状态或按干净 SHA 边界交接 |
+| `touch` / `handoff` | 更新状态（`ready_for_review` 默认武装 watch，`--no-watch` 退出）或按干净 SHA 边界交接 |
 | `audit` / `rebuild` | 审计或从 event 真源重建 record cache |
 | `submit` / `watch` / `resume-all` / `unwatch` | 管理 change request 与合入监听 |
 | `reclaim --pushed` / `--superseded-by` | 按已推送证据，或归档被替代旧 HEAD 后保守回收 |

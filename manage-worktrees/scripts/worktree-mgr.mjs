@@ -404,7 +404,7 @@ function die(message, code = 1) {
 function parseArgs(argv) {
   const flags = new Map();
   const positionals = [];
-  const booleanFlags = new Set(['json', 'all', 'recover-lock']);
+  const booleanFlags = new Set(['json', 'all', 'recover-lock', 'no-watch', 'abort-on-conflict', 'no-rerere', 'recompose']);
   for (let index = 0; index < argv.length; index++) {
     const value = argv[index];
     if (!value.startsWith('--')) {
@@ -1270,7 +1270,7 @@ function cmdList(args) {
 }
 
 function cmdTouch(args) {
-  rejectUnknownFlags(args.flags, ['status', 'note', 'id', 'config']);
+  rejectUnknownFlags(args.flags, ['status', 'note', 'id', 'config', 'no-watch', 'target', 'interval-ms', 'change-ref', 'notify']);
   const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
   const record = selectRecord(loadRecords(loaded.context.common_dir), args.positionals[0] ?? null, flag(args.flags, 'id'));
   if (record.worktree_state === 'reclaimed') {
@@ -1280,14 +1280,151 @@ function cmdTouch(args) {
   if (!TASK_TRANSITIONS[record.task_status]?.has(requested)) die(`非法状态流转: ${record.task_status} -> ${requested}`);
   const note = flag(args.flags, 'note') ? oneLine(flag(args.flags, 'note'), 'note', 240) : null;
   const snapshot = liveGitSnapshot(record);
-  const updated = updateRecord(record, 'status_updated', (next) => {
+  const activeWatch = record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
+    ? record.auto_reclaim
+    : null;
+  // HEAD 已前进时，旧冻结证据必须在 touch 的第一条 event 内原子失效。若先写 status_updated、
+  // 再另写 disarm，后台 watcher 就能在两条 event 之间用旧 SHA 抢先推进 merge_detected/done。
+  const staleWatch = requested === 'ready_for_review'
+    && activeWatch
+    && activeWatch.state !== 'merge_detected'
+    && Boolean(snapshot.head)
+    && activeWatch.head_sha !== snapshot.head
+    ? activeWatch
+    : null;
+  const updated = updateRecord(record, staleWatch ? 'auto_reclaim_disarmed' : 'status_updated', (next) => {
+    if (next.task_status !== record.task_status) {
+      throw new WorktreeTraceError(
+        'TOUCH_STATE_CHANGED',
+        `touch 期间 task_status 已由 ${record.task_status} 变为 ${next.task_status}；请重新读取状态后重试。`,
+      );
+    }
+    if (staleWatch) {
+      const currentWatch = next.auto_reclaim;
+      if (
+        currentWatch?.token !== staleWatch.token
+        || ['merge_detected', 'disarmed', 'reclaimed'].includes(currentWatch?.state)
+      ) {
+        throw new WorktreeTraceError(
+          'WATCHER_CHANGED',
+          '旧 watcher 已被并发 rearm、解除或推进到 merge_detected；拒绝用陈旧快照覆盖当前状态。',
+        );
+      }
+      currentWatch.state = 'disarmed';
+      currentWatch.disarmed_at = new Date().toISOString();
+      currentWatch.disarm_reason = 'stale_frozen_head';
+    }
     next.task_status = requested;
     if (next.worktree_state === 'present' && !snapshot.present) next.worktree_state = 'missing';
     else if (next.worktree_state === 'missing' && snapshot.present) next.worktree_state = 'present';
     next.last_seen_at = new Date().toISOString();
     next.last_head = snapshot.head;
-  }, { note, git: snapshot }, loaded.context.common_dir);
+  }, {
+    note,
+    git: snapshot,
+    ...(staleWatch ? {
+      source: 'auto_touch_head_drift',
+      reason: 'live HEAD 已偏离冻结 SHA；在检查新 HEAD 是否可武装前先原子失效旧 watcher。',
+      stale_head_sha: staleWatch.head_sha,
+      live_head: snapshot.head,
+      target_ref: staleWatch.target_ref,
+      token: staleWatch.token,
+    } : {}),
+  }, loaded.context.common_dir);
   log(`已更新 ${updated.worktree_id.slice(0, 8)} ${record.task_status} -> ${updated.task_status}`);
+  if (staleWatch) {
+    removeWatcherHeartbeat(loaded.context.common_dir, record.worktree_id, staleWatch.token);
+    log(`watch 已解除（原冻结 head=${staleWatch.head_sha.slice(0, 12)} 已过期，当前 HEAD=${snapshot.head.slice(0, 12)}）。`);
+  }
+  if (requested === 'ready_for_review') autoArmReviewWatch(loaded, updated, args, snapshot);
+}
+
+/**
+ * 进入 ready_for_review 时默认武装合入监听。
+ *
+ * 纪律来源：监听绑定的是「内容进主干」这一事实，与内容经哪个载体（自建 change request、
+ * 聚合 change request、他人代推）无关。靠人在建 change request 时手工挂 watch，一旦中途改成
+ * 由别的载体合入，监听就会漏挂、合入后无人回收——默认武装把这个洞堵死。
+ *
+ * 失败一律 fail-soft：touch 的主职是状态流转，不因为没有 remote / 未推送而失败，
+ * 但必须把未武装的原因说清楚，避免「以为挂上了」。
+ * @param {ReturnType<typeof loadRepositoryProfile>} loaded
+ * @param {Record<string,any>} record
+ * @param {{flags:Map<string,unknown>}} args
+ * @param {{present:boolean,head:string|null,dirty:boolean|null,upstream:string|null}} snapshot
+ */
+function autoArmReviewWatch(loaded, record, args, snapshot) {
+  if (args.flags.get('no-watch')) {
+    log('watch 未武装：--no-watch 显式退出；合入后需要人工回收。');
+    return;
+  }
+  const existing = record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
+    ? record.auto_reclaim
+    : null;
+  // 原子失效旧 watcher 后仍沿用它的 target/interval/change-ref 默认值，避免自动重冻结
+  // 把人工显式选择的 target 静默改回 Profile default_base。
+  const previous = record.auto_reclaim ?? null;
+  if (existing?.state === 'merge_detected') {
+    log('watch 保持原冻结 SHA：目标分支已确认包含该 head，自动回收已进入提交阶段。');
+    return;
+  }
+  const skip = (reason) => log(`watch 未武装：${reason}；自动回收保持关闭，可补齐前提后重新 touch。`);
+  const targetRef = flag(args.flags, 'target') ?? previous?.target_ref ?? loaded.profile.default_base ?? record.base_ref;
+  if (!targetRef || !targetRef.includes('/')) {
+    skip(`无法确定远端主干 target（Profile default_base=${loaded.profile.default_base ?? 'null'}）`);
+    return;
+  }
+  if (!snapshot.present) { skip('worktree 不存在'); return; }
+  if (snapshot.dirty !== false) { skip('工作树非干净'); return; }
+  if (!snapshot.head) { skip('无法读取 HEAD'); return; }
+  const upstream = gitTry(['rev-parse', '@{upstream}^{commit}'], record.path);
+  if (!upstream.ok || upstream.out !== snapshot.head) {
+    skip('当前 HEAD 尚未完整 push 到 upstream');
+    return;
+  }
+  if (!refreshTargetRef(targetRef, loaded.context.current_worktree).ok) { skip(`目标 ref 不存在或无法刷新: ${targetRef}`); return; }
+  // auto_touch 是可重算的默认动作，可在当轮直接改 target；人工显式 watch（以及没有来源字段的
+  // legacy watcher）是用户指令，touch 不能静默改写。即使它刚因 HEAD 漂移被原子撤防，也保留
+  // 这条 provenance 边界；此时改目标应显式执行 watch --target 重新建立指令。
+  if (previous && previous.target_ref !== targetRef && previous.armed_by !== 'auto_touch') {
+    skip(
+      `人工武装 target=${previous.target_ref} 与请求的 ${targetRef} 不同；` +
+      `${previous.state === 'disarmed' ? '请显式执行 watch --target 建立新监听' : '换目标请先 unwatch'}`,
+    );
+    return;
+  }
+
+  const heartbeat = readWatcherHeartbeat(loaded.context.common_dir, record.worktree_id);
+  const health = watcherHealth(record, heartbeat);
+  // 已武装且 HEAD 未变、watcher 健康：保持原样，不重复起进程。
+  if (existing && health.healthy && existing.head_sha === snapshot.head && existing.target_ref === targetRef) {
+    log(`watch 已在运行 pid=${heartbeat.state.pid} target=${targetRef} head=${snapshot.head.slice(0, 12)}`);
+    return;
+  }
+  try {
+    const started = startWatcher(loaded, record, {
+      targetRef,
+      headSha: snapshot.head,
+      intervalMs: parseWatchInterval(flag(args.flags, 'interval-ms') ?? previous?.interval_ms),
+      changeRef: flag(args.flags, 'change-ref')
+        ? oneLine(flag(args.flags, 'change-ref'), 'change-ref', 240)
+        : previous?.change_ref ?? null,
+      notifyMode: parseNotifyMode(flag(args.flags, 'notify') ?? previous?.notify),
+      explicitConfig: flag(args.flags, 'config') ? loaded.profile_path : null,
+      previousHealth: health.reason,
+      armedBy: 'auto_touch',
+    });
+    const rearming = Boolean(existing) || (
+      previous?.state === 'disarmed' && previous.disarm_reason === 'stale_frozen_head'
+    );
+    const refroze = rearming && previous?.head_sha !== snapshot.head;
+    log(
+      `watch 已${rearming ? '重新' : ''}武装 pid=${started.pid} target=${targetRef} head=${snapshot.head.slice(0, 12)}` +
+      `${refroze ? `（HEAD 变化，已从 ${previous.head_sha.slice(0, 12)} 重冻结）` : ''}`,
+    );
+  } catch (error) {
+    skip(`watcher 启动失败: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function cmdHandoff(args) {
@@ -1401,23 +1538,25 @@ function blockBatchItem(item, code, detail) {
 /**
  * 为同一 repository identity 内的多个 feature 生成只读、可复现的集成候选计划。
  * 不 fetch、不 merge、不创建 worktree；调用者必须把 target SHA 和有序输入 SHA 当作冻结契约。
- * @param {{positionals:string[],flags:Map<string,unknown>}} args
+ *
+ * 与 cmdPlanBatch 分离是为了让 batch-integrate 能用同一套规则重算计划做新鲜度校验，
+ * 避免「规划口径」和「合成口径」各写一份而悄悄漂移。
+ * @param {ReturnType<typeof loadRepositoryProfile>} loaded
+ * @param {string[]} selectors
+ * @param {string|null} targetOverride
  */
-function cmdPlanBatch(args) {
-  rejectUnknownFlags(args.flags, ['json', 'target', 'config']);
-  if (args.positionals.length < 2) die('plan-batch 至少需要两个 feature selector。', 2);
-  const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
+function computeBatchPlan(loaded, selectors, targetOverride) {
   const records = loadRecords(loaded.context.common_dir);
   const target = resolveBaseRef(
     loaded.context.current_worktree,
     loaded.profile.default_base,
-    flag(args.flags, 'target'),
+    targetOverride,
   );
   const targetCommit = gitTry(['rev-parse', '--verify', `${target.ref}^{commit}`], loaded.context.current_worktree);
   if (!targetCommit.ok || !targetCommit.out) die(`无法解析批次 target commit: ${target.ref}`, 2);
 
   const seenRecords = new Set();
-  const requested = args.positionals.map((selector) => {
+  const requested = selectors.map((selector) => {
     const record = selectRecord(records, selector, null);
     if (seenRecords.has(record.worktree_id)) die(`重复 selector 指向同一 record: ${selector}`, 2);
     seenRecords.add(record.worktree_id);
@@ -1507,10 +1646,13 @@ function cmdPlanBatch(args) {
   if (included.length === 0) blockers.push({ task: null, worktree_id: null, code: 'NO_UNIQUE_INPUT', detail: '没有需要合成的唯一 feature HEAD。' });
   const repositoryId = readRepositoryIdentity(loaded.context)?.repository_id ?? null;
   const ready = blockers.length === 0;
-  const result = {
+  return {
     schema_version: 1,
     generated_at: new Date().toISOString(),
     repository_id: repositoryId,
+    // 原始 selector 全集（含随后被折叠或已在 target 的输入）。重验新鲜度必须按这一份重算：
+    // 只回算 included 会把「被折叠的父分支后来前进了」这类漂移整个漏掉。
+    requested_selectors: [...selectors],
     target: { ref: target.ref, sha: targetCommit.out, source: target.source },
     ready,
     fingerprint: ready ? batchFingerprint(targetCommit.out, included.map((item) => item.head)) : null,
@@ -1518,6 +1660,16 @@ function cmdPlanBatch(args) {
     excluded: requested.filter((item) => item.state !== 'candidate' && item.state !== 'blocked'),
     blockers,
   };
+}
+
+/** @param {{positionals:string[],flags:Map<string,unknown>}} args */
+function cmdPlanBatch(args) {
+  rejectUnknownFlags(args.flags, ['json', 'target', 'config']);
+  if (args.positionals.length < 2) die('plan-batch 至少需要两个 feature selector。', 2);
+  const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
+  const result = computeBatchPlan(loaded, args.positionals, flag(args.flags, 'target'));
+  const included = result.included;
+  const blockers = result.blockers;
   if (args.flags.get('json')) console.log(JSON.stringify(result, null, 2));
   else {
     log(`batch target=${result.target.ref}@${result.target.sha.slice(0, 12)} ready=${result.ready} inputs=${included.length}`);
@@ -1526,7 +1678,655 @@ function cmdPlanBatch(args) {
     for (const blocker of blockers) console.log(`  [BLOCK] ${blocker.task ?? '-'} ${blocker.code}: ${blocker.detail}`);
     if (result.fingerprint) console.log(`  fingerprint=${result.fingerprint}`);
   }
-  if (!ready) process.exitCode = 1;
+  if (!result.ready) process.exitCode = 1;
+}
+
+/**
+ * 在一次性集成候选树上开启 rerere，让多轮候选之间同一冲突自动重放已录解法。
+ *
+ * 作用域是 worktree 级（`git config --worktree`），不写全局、也不改其他 worktree 的行为；
+ * 但 Git 的 rerere **解法缓存位于共享 common dir 的 `rr-cache/`**，因此同一仓库任何
+ * worktree 录下的解法都会被这里复用——这正是「上一轮候选解过的冲突，下一轮不再手解」
+ * 的机制，同时也意味着一个错误解法会跨候选扩散，需要时用 `git rerere forget <path>` 清除。
+ *
+ * `--worktree` 依赖仓库 `extensions.worktreeConfig`。未启用时按 Git 的要求先确认
+ * `core.bare` / `core.worktree` 仍是默认值再启用；否则 fail-open 成「不启用 rerere」
+ * 并回报原因，绝不擅自搬动这两个键。
+ * @param {ReturnType<typeof loadRepositoryProfile>} loaded
+ * @param {string} candidatePath
+ */
+function enableCandidateRerere(loaded, candidatePath) {
+  const read = (key, cwd) => {
+    const got = gitTry(['config', '--get', key], cwd);
+    return got.ok ? got.out : null;
+  };
+  const readBool = (key, cwd) => {
+    const got = gitTry(['config', '--bool', '--get', key], cwd);
+    if (!got.ok) return null;
+    return got.out === 'true';
+  };
+  const inherited = {
+    enabled: readBool('rerere.enabled', candidatePath) === true,
+    autoUpdate: readBool('rerere.autoUpdate', candidatePath) === true,
+  };
+  // 必须两项都已生效才算「继承即可」。只有 rerere.enabled 而没有 autoUpdate 时，rerere 会把
+  // 已录解法写回工作区却**不更新 index**，冲突路径依然是 unmerged，合成循环会把它当成真冲突，
+  // 重放形同失效。因此这里不能因为 enabled 已是 true 就提前返回。
+  if (inherited.enabled && inherited.autoUpdate) {
+    return {
+      enabled: true,
+      auto_update: true,
+      scope: 'inherited',
+      worktree_config_extension: 'not_needed',
+      worktree_config_previous: read('extensions.worktreeConfig', loaded.context.primary_worktree),
+      reason: null,
+    };
+  }
+  const partialScope = inherited.enabled ? 'inherited-partial' : 'none';
+  const primary = loaded.context.primary_worktree;
+  const extensionPrevious = read('extensions.worktreeConfig', primary);
+  let extensionProvenance = 'already_enabled';
+  if (readBool('extensions.worktreeConfig', primary) !== true) {
+    const bare = readBool('core.bare', primary);
+    const coreWorktree = read('core.worktree', primary);
+    if (bare === true || (coreWorktree !== null && coreWorktree !== '')) {
+      return {
+        enabled: inherited.enabled,
+        auto_update: inherited.autoUpdate,
+        scope: partialScope,
+        worktree_config_extension: 'refused',
+        worktree_config_previous: extensionPrevious,
+        reason: 'core.bare/core.worktree 非默认值；按 Git 要求需人工先迁移这两个键，拒绝自动启用 extensions.worktreeConfig。',
+      };
+    }
+    const enabled = gitTry(['config', 'extensions.worktreeConfig', 'true'], primary);
+    if (!enabled.ok) {
+      return {
+        enabled: inherited.enabled,
+        auto_update: inherited.autoUpdate,
+        scope: partialScope,
+        worktree_config_extension: 'failed',
+        worktree_config_previous: extensionPrevious,
+        reason: commandFailureReason(enabled, '无法启用 extensions.worktreeConfig'),
+      };
+    }
+    extensionProvenance = 'enabled_by_this_command';
+  }
+  for (const [key, value] of [['rerere.enabled', 'true'], ['rerere.autoUpdate', 'true']]) {
+    const set = gitTry(['config', '--worktree', key, value], candidatePath);
+    if (!set.ok) {
+      return {
+        enabled: false,
+        auto_update: false,
+        scope: 'none',
+        worktree_config_extension: extensionProvenance,
+        worktree_config_previous: extensionPrevious,
+        reason: commandFailureReason(set, `无法设置 ${key}`),
+      };
+    }
+  }
+  return {
+    enabled: true,
+    auto_update: true,
+    scope: 'worktree',
+    worktree_config_extension: extensionProvenance,
+    worktree_config_previous: extensionPrevious,
+    reason: null,
+  };
+}
+
+/** @param {string} cwd */
+function unmergedPaths(cwd) {
+  const unmerged = gitTry(['diff', '--name-only', '--diff-filter=U'], cwd);
+  return unmerged.ok && unmerged.out ? unmerged.out.split('\n').filter(Boolean) : [];
+}
+
+/** @param {string} path */
+function readBatchPlanFile(path) {
+  if (!existsSync(path)) die(`--plan 文件不存在: ${path}`, 2);
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    die(`--plan 文件不是合法 JSON: ${error instanceof Error ? error.message : String(error)}`, 2);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) die('--plan 文件根节点必须是 object。', 2);
+  if (parsed.schema_version !== 1) die(`--plan schema_version 必须是 1，当前 ${parsed.schema_version}。`, 2);
+  if (parsed.ready !== true) die('--plan 是未就绪计划（ready=false）；请先让 plan-batch 返回 ready=true。', 2);
+  if (!parsed.fingerprint || !parsed.target?.sha || !parsed.target?.ref) die('--plan 缺少 fingerprint 或 target。', 2);
+  if (!Array.isArray(parsed.included) || parsed.included.length === 0) die('--plan 缺少 included 输入。', 2);
+  for (const item of parsed.included) {
+    if (!item?.worktree_id || !item?.head) die('--plan included 每项都需要 worktree_id 与 head。', 2);
+  }
+  if (parsed.excluded !== undefined && !Array.isArray(parsed.excluded)) die('--plan excluded 必须是 array。', 2);
+  for (const item of parsed.excluded ?? []) {
+    if (!item?.worktree_id) die('--plan excluded 每项都需要 worktree_id。', 2);
+  }
+  if (parsed.requested_selectors !== undefined) {
+    if (!Array.isArray(parsed.requested_selectors) || parsed.requested_selectors.some((item) => typeof item !== 'string' || !item)) {
+      die('--plan requested_selectors 必须是非空字符串数组。', 2);
+    }
+  }
+  return parsed;
+}
+
+/**
+ * 冻结计划只有在 target 与全部输入 HEAD 都没漂移时才可继续合成。
+ * 任何一处变化都必须回到 plan-batch 重新冻结，而不是就地放行。
+ * @param {Record<string,any>} frozen
+ * @param {ReturnType<typeof computeBatchPlan>} fresh
+ */
+function assertBatchPlanFresh(frozen, fresh) {
+  const drifts = [];
+  if (frozen.repository_id && fresh.repository_id && frozen.repository_id !== fresh.repository_id) {
+    drifts.push(`repository_id: plan=${frozen.repository_id} live=${fresh.repository_id}`);
+  }
+  if (frozen.target.ref !== fresh.target.ref) drifts.push(`target ref: plan=${frozen.target.ref} live=${fresh.target.ref}`);
+  if (frozen.target.sha !== fresh.target.sha) drifts.push(`target SHA: plan=${frozen.target.sha} live=${fresh.target.sha}`);
+  const frozenInputs = frozen.included.map((item) => `${item.worktree_id}@${item.head}`);
+  const freshInputs = fresh.included.map((item) => `${item.worktree_id}@${item.head}`);
+  if (frozenInputs.join(',') !== freshInputs.join(',')) {
+    drifts.push(`有序输入: plan=[${frozenInputs.join(' ')}] live=[${freshInputs.join(' ')}]`);
+  }
+  // 被折叠（COVERED_BY_DESCENDANT / DUPLICATE_HEAD）或已在 target 的输入同样是批次决策的一部分：
+  // 它们后来前进、或不再被覆盖，都意味着这份计划描述的合成边界已经变了。不比对这一段，
+  // 「父分支被折叠后又推了新提交」会在指纹不变的假象下被静默漏出合成结果。
+  const summarizeExcluded = (plan) => (plan.excluded ?? [])
+    .map((item) => `${item.worktree_id}@${item.state}@${item.head ?? 'null'}`)
+    .sort()
+    .join(',');
+  const frozenExcluded = summarizeExcluded(frozen);
+  const freshExcluded = summarizeExcluded(fresh);
+  if (frozenExcluded !== freshExcluded) {
+    drifts.push(`折叠/已合入输入: plan=[${frozenExcluded}] live=[${freshExcluded}]`);
+  }
+  if (fresh.blockers.length > 0) {
+    drifts.push(`重算出现 blocker: ${fresh.blockers.map((item) => `${item.task ?? '-'}:${item.code}`).join(' ')}`);
+  }
+  if (frozen.fingerprint !== fresh.fingerprint) {
+    drifts.push(`fingerprint: plan=${frozen.fingerprint} live=${fresh.fingerprint}`);
+  }
+  if (drifts.length > 0) {
+    die(
+      `BATCH_PLAN_STALE: 冻结计划与当前仓库状态不一致，拒绝按旧计划合成。\n  - ${drifts.join('\n  - ')}\n` +
+      '请重新执行 plan-batch 冻结新计划（新指纹会自动走替代登记），不要在旧计划上继续。',
+    );
+  }
+}
+
+/**
+ * 在候选树上按冻结顺序 merge 精确 SHA。冲突时 fail-closed：停在冲突处、不自动解、不自动 abort。
+ * @param {Record<string,any>} record
+ * @param {ReturnType<typeof computeBatchPlan>} plan
+ * @param {{abortOnConflict:boolean,recomposeExpectedHead:string|null}} options
+ */
+function composeBatchCandidate(record, plan, options) {
+  const path = record.path;
+  const liveHead = gitTry(['rev-parse', 'HEAD'], path);
+  if (!liveHead.ok) die(`无法读取候选树 HEAD: ${path}`);
+  if (options.recomposeExpectedHead && liveHead.out !== options.recomposeExpectedHead) {
+    die(
+      `RECOMPOSE_HEAD_STALE: 候选 HEAD 已从授权值 ${options.recomposeExpectedHead} 变化为 ${liveHead.out}，拒绝重置。\n` +
+      '请重新核对候选树并用当前完整 HEAD 重新授权。',
+    );
+  }
+  if (liveHead.out !== plan.target.sha) {
+    const reset = gitTry(['reset', '--hard', plan.target.sha], path);
+    if (!reset.ok) die(`无法把候选树重置到批次 target: ${commandFailureReason(reset, 'reset 失败')}`);
+  }
+
+  const steps = [];
+  for (const item of plan.included) {
+    const message = `integrate(batch): ${item.task} ${item.head.slice(0, 12)}`;
+    const merged = runFileCapture(
+      'git',
+      ['merge', '--no-ff', '--no-edit', '-m', message, item.head],
+      { cwd: path, timeoutMs: SUBMIT_PUSH_TIMEOUT_MS },
+    );
+    if (!merged.ok) {
+      const unresolved = unmergedPaths(path);
+      // rerere 重放了全部解法时只差落 commit：这正是多轮候选免于重复手解的收口。
+      if (unresolved.length === 0 && gitOperationState(path) === 'merge_head') {
+        const committed = gitTry(['commit', '--no-edit'], path);
+        if (committed.ok) {
+          steps.push({
+            task: item.task,
+            worktree_id: item.worktree_id,
+            input_sha: item.head,
+            merge_commit: gitTry(['rev-parse', 'HEAD'], path).out || null,
+            rerere_replayed: true,
+          });
+          continue;
+        }
+      }
+      const conflict = {
+        task: item.task,
+        worktree_id: item.worktree_id,
+        input_sha: item.head,
+        onto_sha: liveHead.out === plan.target.sha && steps.length === 0
+          ? plan.target.sha
+          : (steps.at(-1)?.merge_commit ?? plan.target.sha),
+        files: unresolved,
+        candidate_path: path,
+        detail: (merged.out || '').slice(0, 1000),
+        aborted: false,
+      };
+      if (options.abortOnConflict) {
+        gitTry(['merge', '--abort'], path);
+        const reset = gitTry(['reset', '--hard', plan.target.sha], path);
+        conflict.aborted = reset.ok;
+      }
+      return { state: 'conflict', steps, conflict, composed_sha: null };
+    }
+    steps.push({
+      task: item.task,
+      worktree_id: item.worktree_id,
+      input_sha: item.head,
+      merge_commit: gitTry(['rev-parse', 'HEAD'], path).out || null,
+      rerere_replayed: false,
+    });
+  }
+  return { state: 'composed', steps, conflict: null, composed_sha: gitTry(['rev-parse', 'HEAD'], path).out || null };
+}
+
+/**
+ * 把 plan-batch 之后的手工仪式（建候选树、按序 merge、指纹落账）收进一条可重跑命令。
+ *
+ * 边界：**不执行任何门禁命令**。合成完成后只回显 Profile 声明的 post_integrate_steps
+ * 清单，由 controller 逐条执行并用 `batch-step` 登记结果；portable core 永不跑 Profile 内容。
+ * @param {{positionals:string[],flags:Map<string,unknown>}} args
+ */
+function cmdBatchIntegrate(args) {
+  rejectUnknownFlags(args.flags, [
+    'plan', 'target', 'candidate-task', 'agent', 'agent-id', 'purpose', 'owner',
+    'abort-on-conflict', 'no-rerere', 'recompose', 'recompose-head', 'json', 'config', 'root', 'codegraph',
+  ]);
+  const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
+  const identity = resolveIdentity(args.flags);
+  const asJson = Boolean(args.flags.get('json'));
+  // --json 的 stdout 必须只有 JSON；诊断类回显在 JSON 模式下一律走 stderr。
+  const notice = (message) => (asJson ? console.error(`${PREFIX} ${message}`) : log(message));
+
+  const planPath = flag(args.flags, 'plan');
+  let frozenPlan = null;
+  let selectors = args.positionals;
+  let targetOverride = flag(args.flags, 'target');
+  if (planPath) {
+    if (args.positionals.length > 0) die('--plan 与 selector 位置参数互斥；冻结计划已经带有输入清单。', 2);
+    frozenPlan = readBatchPlanFile(planPath);
+    // 必须用原始 selector 全集重算，而不是只用 included：被折叠或已在 target 的输入
+    // 若随后前进，只回算 included 会让旧计划继续判定「新鲜」，把那部分改动静默漏出合成。
+    selectors = Array.isArray(frozenPlan.requested_selectors) && frozenPlan.requested_selectors.length > 0
+      ? frozenPlan.requested_selectors
+      : [...frozenPlan.included, ...(frozenPlan.excluded ?? [])].map((item) => item.worktree_id);
+    targetOverride = targetOverride ?? frozenPlan.target.ref;
+  } else if (selectors.length < 2) {
+    die('batch-integrate 需要 --plan <plan.json>，或至少两个 feature selector（即时规划）。', 2);
+  }
+
+  const plan = computeBatchPlan(loaded, selectors, targetOverride);
+  if (!plan.ready) {
+    for (const blocker of plan.blockers) console.error(`  [BLOCK] ${blocker.task ?? '-'} ${blocker.code}: ${blocker.detail}`);
+    die('批次输入未就绪，拒绝合成；请先修复上述 blocker 再重新规划。');
+  }
+  if (frozenPlan) assertBatchPlanFresh(frozenPlan, plan);
+
+  const candidateTask = flag(args.flags, 'candidate-task') ?? 'batch-integration-candidate';
+  validateTaskSlug(candidateTask);
+  validateTaskNaming(candidateTask, loaded.profile.task_naming);
+
+  const records = loadRecords(loaded.context.common_dir);
+  const liveCandidates = records.filter((record) => record.batch_integration && isActiveRecord(record));
+  const reusable = liveCandidates.find((record) => record.batch_integration.fingerprint === plan.fingerprint);
+  const superseded = liveCandidates.filter((record) => record.batch_integration.fingerprint !== plan.fingerprint);
+
+  const recompose = Boolean(args.flags.get('recompose'));
+  const recomposeHead = flag(args.flags, 'recompose-head');
+  if (recomposeHead && !recompose) die('--recompose-head 只能与 --recompose 一起使用。', 2);
+  if (recompose && !recomposeHead) {
+    die('--recompose 是破坏性操作，必须同时提供 --recompose-head <候选当前完整 HEAD> 进行精确授权。', 2);
+  }
+  let candidate = reusable ?? null;
+  let recomposeContext = null;
+  if (candidate) {
+    const snapshot = liveGitSnapshot(candidate);
+    if (!snapshot.present) die(`同指纹候选 record 存在但 worktree missing: ${candidate.path}；请先 doctor/reclaim。`);
+    const batch = candidate.batch_integration;
+    const composedBefore = batch.state === 'composed' && Boolean(batch.composed_sha);
+    const ownedByController = candidate.agent?.host === identity.actor.host && candidate.agent?.id === identity.actor.id;
+    // 跨会话可只读查询一棵已完成候选，但任何会移动 HEAD、续合冲突或改写台账的路径都必须
+    // 先显式 handoff。否则另一个 controller 仅凭同一 fingerprint 就能重置原 owner 的提交。
+    if (!ownedByController && (!composedBefore || recompose)) {
+      die(
+        `候选属于 ${candidate.agent?.host ?? 'unknown'}/${candidate.agent?.id ?? 'unknown'}，` +
+        `当前会话是 ${identity.actor.host}/${identity.actor.id}；跨会话只允许读取 already_composed。\n` +
+        '需要继续合成或重合成时，请先执行 handoff 转移所有权。',
+      );
+    }
+    // 已合成的候选**默认永不重置**。合成之后候选树通常还会前进：controller 执行 Profile 声明的
+    // 合成后再生成步骤（golden / codegen / lock）并提交，HEAD 就不再等于 composed_sha。
+    // 旧实现只认「HEAD == composed_sha」为幂等，于是同指纹重跑会落进重新合成路径，
+    // reset --hard 把这些生成提交连同已登记的步骤状态一起抹掉。
+    if (composedBefore && !recompose) {
+      const advanced = snapshot.head !== batch.composed_sha
+        && Boolean(snapshot.head)
+        && isAncestor(candidate.path, batch.composed_sha, snapshot.head);
+      if (snapshot.head !== batch.composed_sha && !advanced) {
+        die(
+          `候选 HEAD=${snapshot.head?.slice(0, 12) ?? 'unreadable'} 既不等于已落账 composed_sha=` +
+          `${batch.composed_sha.slice(0, 12)}，也不是它的后继提交，无法判定候选树处于何种状态。\n` +
+          '请人工核对候选树历史；确需按同一计划重新合成，加 --recompose（会丢弃合成之后的提交）。',
+        );
+      }
+      const result = {
+        schema_version: 1,
+        outcome: 'already_composed',
+        fingerprint: plan.fingerprint,
+        candidate: { worktree_id: candidate.worktree_id, task: candidate.task, path: candidate.path, branch: candidate.branch },
+        target: plan.target,
+        composed_sha: batch.composed_sha,
+        head_sha: snapshot.head,
+        advanced_beyond_composition: advanced,
+        dirty: snapshot.dirty,
+        steps: batch.steps,
+        rerere: batch.rerere ?? null,
+        post_integrate_steps: batch.post_integrate_steps ?? [],
+      };
+      if (asJson) console.log(JSON.stringify(result, null, 2));
+      else {
+        log(`同指纹候选已合成，幂等返回 fingerprint=${plan.fingerprint.slice(7, 19)} composed=${result.composed_sha.slice(0, 12)}`);
+        if (advanced) {
+          console.log(`  候选已在合成之上前进到 ${snapshot.head.slice(0, 12)}（通常是合成后再生成步骤的提交）；未重置、未改动步骤状态。`);
+          console.log('  确需按同一计划重新合成请加 --recompose，它会丢弃这些提交。');
+        }
+        if (snapshot.dirty) console.log('  注意：候选树当前非干净，验收前请先处理未提交改动。');
+        printPostIntegrateSteps(result.post_integrate_steps, candidate.task);
+      }
+      return;
+    }
+    if (snapshot.dirty !== false) {
+      die(
+        `候选树非干净，拒绝重置重合成: ${candidate.path}\n` +
+        '若上一轮冲突已手工解出，请先提交该 merge（rerere 会录下解法），再重跑本命令；' +
+        '若要放弃，请在候选树执行 git merge --abort。',
+      );
+    }
+    if (composedBefore && recompose) {
+      if (recomposeHead !== snapshot.head) {
+        die(
+          `RECOMPOSE_HEAD_STALE: --recompose-head=${recomposeHead} 与候选当前完整 HEAD=${snapshot.head ?? 'unreadable'} 不一致，拒绝重置。\n` +
+          '请重新核对候选树，并用当前完整 HEAD 明示授权。',
+        );
+      }
+      recomposeContext = {
+        authorized_head_sha: recomposeHead,
+        discarded_head_sha: snapshot.head,
+        previous_composed_sha: batch.composed_sha,
+      };
+      candidate = updateRecord(candidate, 'batch_candidate_recompose_authorized', (next) => {
+        if (next.agent?.host !== identity.actor.host || next.agent?.id !== identity.actor.id) {
+          throw new WorktreeTraceError('RECOMPOSE_OWNER_CHANGED', '候选所有权已变化，拒绝重置。');
+        }
+        if (
+          next.batch_integration?.fingerprint !== plan.fingerprint
+          || next.batch_integration?.state !== 'composed'
+          || next.batch_integration?.composed_sha !== batch.composed_sha
+        ) {
+          throw new WorktreeTraceError('RECOMPOSE_RECORD_CHANGED', '候选合成台账已变化，拒绝按陈旧快照授权重置。');
+        }
+        next.last_seen_at = new Date().toISOString();
+      }, {
+        fingerprint: plan.fingerprint,
+        target_sha: plan.target.sha,
+        ...recomposeContext,
+        requested_by: identity.actor,
+      }, loaded.context.common_dir);
+      notice(`--recompose：已按精确 HEAD ${recomposeHead.slice(0, 12)} 授权，将丢弃候选后续提交并重新合成。`);
+    } else if (recompose) {
+      die('--recompose 只适用于已落账为 composed 的同指纹候选。');
+    }
+  } else {
+    if (recompose) die('--recompose 未找到已落账为 composed 的同指纹候选，拒绝新建候选。');
+    if (superseded.length > 1) {
+      die(
+        `存在 ${superseded.length} 棵旧指纹集成候选，自动替代登记只处理一棵，拒绝猜测：\n  - ` +
+        superseded.map((record) => `${record.task}(${record.batch_integration.fingerprint.slice(7, 19)})=${record.path}`).join('\n  - ') +
+        '\n请先回收多余候选，只保留一棵待替代的。',
+      );
+    }
+    const previous = superseded[0] ?? null;
+    if (previous && previous.task === candidateTask) {
+      die(
+        `候选 task ${candidateTask} 已绑定旧指纹 ${previous.batch_integration.fingerprint.slice(7, 19)}，` +
+        `新指纹为 ${plan.fingerprint.slice(7, 19)}。\n` +
+        '一次性候选不复用身份：请用 --candidate-task <新的 semantic slug> 建立替代候选（工具会自动登记替代关系），' +
+        '或先回收旧候选再重跑。',
+      );
+    }
+    if (previous) {
+      const previousSnapshot = liveGitSnapshot(previous);
+      if (!previousSnapshot.present) die(`旧候选 worktree missing: ${previous.path}；请先 doctor/reclaim。`);
+      if (previousSnapshot.dirty !== false) die(`旧候选必须干净才能登记替代: ${previous.path}`);
+      if (previous.agent?.host !== identity.actor.host || previous.agent?.id !== identity.actor.id) {
+        die(
+          `旧候选属于 ${previous.agent?.host}/${previous.agent?.id}，与当前会话不同；` +
+          '跨会话不自动登记替代关系，请先人工回收旧候选。',
+        );
+      }
+      if (previous.task_status !== 'abandoned') {
+        updateRecord(previous, 'status_updated', (next) => {
+          next.task_status = 'abandoned';
+          next.last_seen_at = new Date().toISOString();
+        }, { note: `批次输入变化，指纹 ${previous.batch_integration.fingerprint.slice(7, 19)} 已失效` }, loaded.context.common_dir);
+      }
+    }
+
+    const spawnFlags = new Map();
+    for (const key of ['agent', 'agent-id', 'owner', 'config', 'root', 'codegraph']) {
+      const value = flag(args.flags, key);
+      if (value) spawnFlags.set(key, value);
+    }
+    spawnFlags.set('purpose', flag(args.flags, 'purpose') ?? `一次性批次集成候选 fingerprint=${plan.fingerprint.slice(7, 19)}`);
+    spawnFlags.set('base', plan.target.ref);
+    spawnFlags.set('base-reason', `集成候选必须从批次冻结 target ${plan.target.ref} 起步`);
+    if (previous) {
+      spawnFlags.set('supersedes', previous.worktree_id);
+      spawnFlags.set('replacement-reason', `批次输入变化：${previous.batch_integration.fingerprint.slice(7, 19)} -> ${plan.fingerprint.slice(7, 19)}`);
+    } else if (coexistingSessionRecords(records, identity.actor, candidateTask).length > 0) {
+      spawnFlags.set('parallel-reason', '一次性批次集成候选，与各 feature 交付可独立评审、合入和回退');
+    }
+    // spawn 的身份/路径回显对人有用，但 --json 的 stdout 必须只有 JSON；
+    // 转存到 stderr，既不污染机器可读输出，也不丢诊断信息。
+    const spawnChatter = [];
+    const originalLog = console.log;
+    if (asJson) console.log = (...parts) => spawnChatter.push(parts.join(' '));
+    try {
+      cmdSpawn({ positionals: [candidateTask], flags: spawnFlags });
+    } finally {
+      console.log = originalLog;
+    }
+    if (spawnChatter.length > 0) console.error(spawnChatter.join('\n'));
+
+    candidate = loadRecords(loaded.context.common_dir).find((record) =>
+      record.task === candidateTask &&
+      record.agent?.host === identity.actor.host &&
+      record.agent?.id === identity.actor.id &&
+      isActiveRecord(record));
+    if (!candidate) die('集成候选 spawn 后未能定位到对应 record；请运行 doctor 复查。');
+    const candidateHead = gitTry(['rev-parse', 'HEAD'], candidate.path);
+    if (!candidateHead.ok || candidateHead.out !== plan.target.sha) {
+      die(
+        `候选树 HEAD=${candidateHead.out || 'unreadable'} 与冻结 target SHA=${plan.target.sha} 不一致；` +
+        'target ref 可能在建树期间移动，请重新 plan-batch。',
+      );
+    }
+  }
+
+  const rerere = args.flags.get('no-rerere')
+    ? { enabled: false, auto_update: false, scope: 'none', worktree_config_extension: 'not_needed', worktree_config_previous: null, reason: '--no-rerere 显式关闭' }
+    : enableCandidateRerere(loaded, candidate.path);
+  // 自动写共享 config（extensions.worktreeConfig）是本命令唯一会碰仓库级配置的动作，
+  // 必须留下独立、可区分「本轮写入」与「原本已启用」的审计事件。
+  if (rerere.worktree_config_extension === 'enabled_by_this_command') {
+    updateRecord(candidate, 'repository_config_extension_enabled', (next) => {
+      next.last_seen_at = new Date().toISOString();
+    }, {
+      key: 'extensions.worktreeConfig',
+      value: 'true',
+      previous: rerere.worktree_config_previous ?? 'unset',
+      scope: 'shared_repository_config',
+      written_by: 'batch-integrate',
+      purpose: '为集成候选启用 worktree 级 rerere（rerere.enabled + rerere.autoUpdate）',
+    }, loaded.context.common_dir);
+    notice('已在共享仓库 config 启用 extensions.worktreeConfig（本轮写入，已记审计事件）。');
+  }
+
+  const composed = composeBatchCandidate(candidate, plan, {
+    abortOnConflict: Boolean(args.flags.get('abort-on-conflict')),
+    recomposeExpectedHead: recomposeContext?.authorized_head_sha ?? null,
+  });
+
+  const orderedInputs = plan.included.map((item) => ({
+    task: item.task,
+    worktree_id: item.worktree_id,
+    branch: item.branch,
+    head: item.head,
+    upstream_ref: item.upstream_ref,
+  }));
+  const declaredSteps = (loaded.profile.post_integrate_steps ?? []).map((step) => ({
+    name: step.name,
+    hint: step.hint,
+    state: 'pending',
+    note: null,
+    recorded_at: null,
+  }));
+  const now = new Date().toISOString();
+  const batchState = {
+    fingerprint: plan.fingerprint,
+    target_ref: plan.target.ref,
+    target_sha: plan.target.sha,
+    plan_generated_at: frozenPlan?.generated_at ?? plan.generated_at,
+    plan_source: frozenPlan ? 'frozen_plan_file' : 'inline_plan',
+    ordered_inputs: orderedInputs,
+    state: composed.state,
+    steps: composed.steps,
+    composed_sha: composed.composed_sha,
+    composed_at: composed.state === 'composed' ? now : null,
+    conflict: composed.conflict,
+    rerere,
+    recompose: recomposeContext,
+    post_integrate_steps: composed.state === 'composed' ? declaredSteps : [],
+  };
+
+  candidate = updateRecord(
+    candidate,
+    composed.state === 'composed' ? 'batch_candidate_composed' : 'batch_candidate_conflict',
+    (next) => {
+      next.batch_integration = batchState;
+      next.task_status = composed.state === 'composed' ? 'integrating' : next.task_status;
+      next.last_seen_at = now;
+      next.last_head = composed.composed_sha ?? next.last_head;
+    },
+    {
+      fingerprint: plan.fingerprint,
+      target_sha: plan.target.sha,
+      ordered_input_shas: orderedInputs.map((item) => item.head),
+      merge_commits: composed.steps.map((step) => step.merge_commit),
+      rerere,
+      recompose: recomposeContext,
+      conflict: composed.conflict,
+    },
+    loaded.context.common_dir,
+  );
+
+  const result = {
+    schema_version: 1,
+    outcome: composed.state,
+    fingerprint: plan.fingerprint,
+    candidate: { worktree_id: candidate.worktree_id, task: candidate.task, path: candidate.path, branch: candidate.branch },
+    target: plan.target,
+    ordered_inputs: orderedInputs,
+    steps: composed.steps,
+    composed_sha: composed.composed_sha,
+    rerere,
+    recompose: recomposeContext,
+    conflict: composed.conflict,
+    post_integrate_steps: batchState.post_integrate_steps,
+  };
+  if (asJson) console.log(JSON.stringify(result, null, 2));
+  else if (composed.state === 'composed') {
+    log(`批次合成完成 candidate=${candidate.task} sha=${composed.composed_sha.slice(0, 12)} fingerprint=${plan.fingerprint.slice(7, 19)}`);
+    for (const step of composed.steps) {
+      console.log(`  [MERGED] ${step.task} ${step.input_sha.slice(0, 12)} -> ${step.merge_commit?.slice(0, 12)}${step.rerere_replayed ? ' (rerere 重放)' : ''}`);
+    }
+    console.log(`  rerere=${rerere.enabled ? rerere.scope : `off(${rerere.reason})`}`);
+    console.log(`  候选树: ${candidate.path}`);
+    printPostIntegrateSteps(batchState.post_integrate_steps, candidate.task);
+    console.log('  下一步由 controller 执行门禁；本命令不跑任何验收命令。');
+  } else {
+    log(`批次合成冲突，停在 ${composed.conflict.task} ${composed.conflict.input_sha.slice(0, 12)}`);
+    console.log(`  候选树: ${composed.conflict.candidate_path}`);
+    console.log(`  合入侧(ours): ${composed.conflict.onto_sha.slice(0, 12)}  待并侧(theirs): ${composed.conflict.input_sha.slice(0, 12)}`);
+    for (const file of composed.conflict.files) console.log(`  [CONFLICT] ${file}`);
+    console.log(composed.conflict.aborted
+      ? '  已按 --abort-on-conflict 回滚到干净 target。'
+      : '  已停在冲突处（未自动解、未自动 abort）：请裁决后手工解并提交该 merge，再重跑本命令由 rerere 重放。');
+  }
+  if (composed.state !== 'composed') process.exitCode = 1;
+}
+
+/** @param {Record<string,any>[]} steps @param {string} task */
+function printPostIntegrateSteps(steps, task) {
+  if (!steps || steps.length === 0) return;
+  console.log('  Profile 声明的合成后再生成步骤（只回显、不代跑）：');
+  for (const step of steps) {
+    console.log(`  [${step.state.toUpperCase()}] ${step.name}: ${step.hint}`);
+  }
+  console.log(`  执行后登记：batch-step ${task} --step <name> --state done|skipped|failed`);
+}
+
+/**
+ * 登记 Profile 声明的合成后步骤的执行结果。工具只记录 controller 的回报，从不代跑。
+ * @param {{positionals:string[],flags:Map<string,unknown>}} args
+ */
+function cmdBatchStep(args) {
+  rejectUnknownFlags(args.flags, ['step', 'state', 'note', 'id', 'json', 'config']);
+  const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
+  const record = selectRecord(loadRecords(loaded.context.common_dir), args.positionals[0] ?? null, flag(args.flags, 'id'));
+  const stepName = flag(args.flags, 'step');
+  const state = flag(args.flags, 'state');
+  if (!stepName) die('batch-step 需要 --step <name>。', 2);
+  if (!['done', 'skipped', 'failed'].includes(state ?? '')) die('--state 只接受 done / skipped / failed。', 2);
+  const batch = record.batch_integration;
+  if (!batch || batch.state !== 'composed') die(`${record.task} 不是已合成的集成候选，无法登记合成后步骤。`);
+  const steps = batch.post_integrate_steps ?? [];
+  const target = steps.find((step) => step.name === stepName);
+  if (!target) {
+    die(
+      `未声明的步骤名: ${stepName}；当前候选只登记 Profile 声明过的步骤` +
+      `${steps.length ? `：${steps.map((step) => step.name).join(', ')}` : '（该 Profile 未声明任何步骤）'}。`,
+      2,
+    );
+  }
+  const note = flag(args.flags, 'note') ? oneLine(flag(args.flags, 'note'), 'note', 240) : null;
+  const now = new Date().toISOString();
+  const updated = updateRecord(record, 'batch_post_step_recorded', (next) => {
+    const step = next.batch_integration.post_integrate_steps.find((item) => item.name === stepName);
+    step.state = state;
+    step.note = note;
+    step.recorded_at = now;
+    next.last_seen_at = now;
+  }, { step: stepName, state, note, fingerprint: batch.fingerprint }, loaded.context.common_dir);
+  const recorded = updated.batch_integration.post_integrate_steps;
+  if (args.flags.get('json')) {
+    console.log(JSON.stringify({ schema_version: 1, worktree_id: updated.worktree_id, post_integrate_steps: recorded }, null, 2));
+    return;
+  }
+  log(`已登记 ${stepName} -> ${state}`);
+  const pending = recorded.filter((step) => step.state === 'pending');
+  console.log(pending.length === 0
+    ? '  合成后步骤已全部登记。'
+    : `  仍待登记: ${pending.map((step) => step.name).join(', ')}`);
 }
 
 /** @param {ReturnType<typeof loadRepositoryProfile>} loaded */
@@ -2347,13 +3147,16 @@ function appendAutoStatus(commonDir, record, token, eventType, targetSha) {
 /**
  * @param {ReturnType<typeof loadRepositoryProfile>} loaded
  * @param {Record<string,any>} initialRecord
- * @param {{targetRef:string,headSha:string,intervalMs:number,changeRef:string|null,notifyMode:string,explicitConfig:string|null,previousHealth:string|null}} options
+ * @param {{targetRef:string,headSha:string,intervalMs:number,changeRef:string|null,notifyMode:string,explicitConfig:string|null,previousHealth:string|null,armedBy?:string}} options
  */
 function startWatcher(loaded, initialRecord, options) {
   let record = initialRecord;
-  const existing = record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
-    ? record.auto_reclaim
-    : null;
+  const reviveStaleAutoTouch = options.armedBy === 'auto_touch'
+    && record.auto_reclaim?.state === 'disarmed'
+    && record.auto_reclaim?.disarm_reason === 'stale_frozen_head';
+  const existing = record.auto_reclaim && (
+    !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state) || reviveStaleAutoTouch
+  ) ? record.auto_reclaim : null;
   const token = randomUUID();
   const now = new Date().toISOString();
   const eventType = existing ? 'auto_reclaim_rearmed' : 'auto_reclaim_armed';
@@ -2373,7 +3176,14 @@ function startWatcher(loaded, initialRecord, options) {
     },
     mutate(current) {
       if (existing) {
-        if (current.auto_reclaim?.token !== existing.token || ['disarmed', 'reclaimed'].includes(current.auto_reclaim?.state)) {
+        const revivableCurrent = reviveStaleAutoTouch
+          && current.auto_reclaim?.state === 'disarmed'
+          && current.auto_reclaim?.disarm_reason === 'stale_frozen_head';
+        if (
+          current.auto_reclaim?.token !== existing.token
+          || current.auto_reclaim?.state === 'reclaimed'
+          || (current.auto_reclaim?.state === 'disarmed' && !revivableCurrent)
+        ) {
           throw new WorktreeTraceError('WATCHER_CANCELLED', `watch token 已被并发更新或解除: ${record.worktree_id}`);
         }
       } else if (current.auto_reclaim && !['disarmed', 'reclaimed'].includes(current.auto_reclaim.state)) {
@@ -2383,6 +3193,8 @@ function startWatcher(loaded, initialRecord, options) {
       next.auto_reclaim = {
         ...existing,
         state: resumeAfterMerge ? 'merge_detected' : 'armed',
+        // 记录武装来源：自动武装是默认动作，人工显式武装是当轮指引，二者的改目标权限不同。
+        armed_by: options.armedBy ?? existing?.armed_by ?? 'explicit',
         target_ref: options.targetRef,
         head_sha: options.headSha,
         interval_ms: options.intervalMs,
@@ -2391,6 +3203,8 @@ function startWatcher(loaded, initialRecord, options) {
         token,
         armed_at: existing?.armed_at ?? now,
         rearmed_at: existing ? now : null,
+        disarmed_at: null,
+        disarm_reason: null,
         pid: null,
       };
       next.updated_at = now;
@@ -2571,6 +3385,7 @@ function cmdSubmit(args) {
       notifyMode,
       explicitConfig: flag(args.flags, 'config') ? loaded.profile_path : null,
       previousHealth: null,
+      armedBy: 'explicit',
     });
     log(`GitLab MR 已提交: ${changeRef}`);
     log(`auto-reclaim watcher 已启动 pid=${started.pid} id=${record.worktree_id.slice(0, 8)} head=${snapshot.head.slice(0, 12)} target=${targetRef}`);
@@ -2611,7 +3426,12 @@ function cmdWatch(args) {
 
   const targetRef = oneLine(flag(args.flags, 'target') ?? existing?.target_ref ?? record.base_ref, 'target', 240);
   if (existing && flag(args.flags, 'target') && targetRef !== existing.target_ref) {
-    die(`已 arm 的 target=${existing.target_ref}；先 unwatch 再更换目标。`);
+    // 人工显式武装过的目标不被静默改写；但 touch 的自动武装只是默认动作，
+    // 调用者当轮显式给出的 target 优先，直接改指而不是要求先 unwatch。
+    if (existing.armed_by !== 'auto_touch') {
+      die(`已 arm 的 target=${existing.target_ref}；先 unwatch 再更换目标。`);
+    }
+    log(`自动武装的 target=${existing.target_ref} 按当轮显式指引改为 ${targetRef}。`);
   }
   const intervalMs = parseWatchInterval(flag(args.flags, 'interval-ms') ?? existing?.interval_ms);
   const changeRef = flag(args.flags, 'change-ref')
@@ -2636,6 +3456,7 @@ function cmdWatch(args) {
       notifyMode,
       explicitConfig: flag(args.flags, 'config') ? loaded.profile_path : null,
       previousHealth: health.reason,
+      armedBy: 'explicit',
     });
     record = started.record;
     log(`auto-reclaim watcher 已启动 pid=${started.pid} id=${record.worktree_id.slice(0, 8)} head=${headSha.slice(0, 12)} target=${targetRef}`);
@@ -2685,6 +3506,7 @@ function cmdResumeAll(args) {
         notifyMode: auto.notify ?? 'auto',
         explicitConfig: flag(args.flags, 'config') ? loaded.profile_path : null,
         previousHealth: health.reason,
+        armedBy: auto.armed_by ?? 'explicit',
       });
       result.resumed.push({ worktree_id: record.worktree_id, task: record.task, pid: started.pid, previous_health: health.reason, dirty: snapshot.dirty });
     } catch (error) {
@@ -2998,7 +3820,7 @@ function cmdProposeImprovement(args) {
 
 function cmdCapabilities(args) {
   rejectUnknownFlags(args.flags, ['json']);
-  console.log(JSON.stringify({ skill: 'manage-worktrees', runtime_version: '1.0.0', contracts: { worktree_binding: [1], artifact_ref: [1], reflection_record: [1], improvement_proposal: [1] }, features: ['git-common-dir-ledger', 'ownership-epochs', 'artifact-verification', 'incident-reflection', 'proposed-only-improvement'], content_digest: worktreeSkillDigest() }, null, 2));
+  console.log(JSON.stringify({ skill: 'manage-worktrees', runtime_version: '1.0.0', contracts: { worktree_binding: [1], artifact_ref: [1], reflection_record: [1], improvement_proposal: [1] }, features: ['git-common-dir-ledger', 'ownership-epochs', 'artifact-verification', 'incident-reflection', 'proposed-only-improvement', 'batch-integrate', 'declared-post-integrate-steps', 'auto-armed-review-watch'], content_digest: worktreeSkillDigest() }, null, 2));
 }
 
 function usage() {
@@ -3009,7 +3831,13 @@ spawn <task> --agent <host> --agent-id <id> --purpose <text> [--owner <name>] [-
 adopt <path> --agent <host> --agent-id <id> --purpose <text> [--task <slug>] [--base <ref> --base-reason <text>]
 list [--json] [--all]
 plan-batch <selector> <selector> [...] [--target <ref>] [--json]
+batch-integrate --plan <plan.json> | <selector> <selector> [...] --agent <host> --agent-id <id>
+  [--candidate-task <slug>] [--target <ref>] [--abort-on-conflict] [--no-rerere]
+  [--recompose --recompose-head <exact-current-head>] [--json]
+  按冻结顺序合成精确 SHA；冲突 fail-closed 停在冲突处；不执行任何门禁命令
+batch-step <candidate-selector> --step <name> --state done|skipped|failed [--note <text>] [--json]
 touch <selector> [--status <status>] [--note <text>] [--id <uuid>]
+  --status ready_for_review 默认自动武装 watch；退出用 --no-watch
 supersede <old-selector> --by <replacement-selector> --reason <text> [--id <uuid>] [--by-id <uuid>]
 handoff <selector> --to-agent <host> --to-agent-id <id> --note <text> [--id <uuid>]
 audit <selector> [--json] [--id <uuid>]
@@ -3041,6 +3869,8 @@ function main() {
     adopt: cmdAdopt,
     list: cmdList,
     'plan-batch': cmdPlanBatch,
+    'batch-integrate': cmdBatchIntegrate,
+    'batch-step': cmdBatchStep,
     touch: cmdTouch,
     supersede: cmdSupersede,
     handoff: cmdHandoff,

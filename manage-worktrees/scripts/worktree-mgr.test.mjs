@@ -252,7 +252,9 @@ function prepareReviewTask(fixture, task) {
   git(worktree, ['add', 'feature.txt']);
   git(worktree, ['commit', '-m', `feat: ${task}`]);
   git(worktree, ['push', '-u', 'origin', 'HEAD']);
-  manager(fixture.repo, ['touch', task, '--status', 'ready_for_review', '--note', 'fixture MR created']);
+  // 这些 fixture 要么随后显式 watch，要么根本不关心监听；用 --no-watch 退出默认自动武装，
+  // 保持各用例原本的武装语义，并避免留下与用例无关的 watcher 进程。
+  manager(fixture.repo, ['touch', task, '--status', 'ready_for_review', '--note', 'fixture MR created', '--no-watch']);
   return { worktree };
 }
 
@@ -1761,4 +1763,687 @@ test('CLI 入口判定按 realpath 归一：软链安装的 skill 也能跑 main
   assert.equal(isCliEntry(undefined, pathToFileURL(self).href), false);
 
   rmSync(root, { recursive: true, force: true });
+});
+
+/** 只判成败、不抛异常的 git 调用，用于 ancestor / config 探测。 */
+function gitOk(cwd, args) {
+  try {
+    execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 期望命令失败，返回其 stderr。 */
+function managerStderr(cwd, args) {
+  try {
+    manager(cwd, args);
+    assert.fail('command should exit non-zero');
+  } catch (error) {
+    if (error?.code === 'ERR_ASSERTION') throw error;
+    return String(error.stderr ?? '').trim();
+  }
+}
+
+/** 建立一个已 push、处于 ready_for_review 的批次输入 feature 树。 */
+function prepareBatchInput(fixture, task, file, content) {
+  manager(fixture.repo, [
+    'spawn', task, '--base', 'origin/main',
+    '--agent', 'codex', '--agent-id', `batch-${task}`, '--purpose', `批次输入 ${task}`,
+  ]);
+  const worktree = worktreeFor(fixture, task);
+  writeFileSync(join(worktree, file), content);
+  git(worktree, ['add', file]);
+  git(worktree, ['commit', '-m', `feat: ${task}`]);
+  git(worktree, ['push', '-u', 'origin', 'HEAD']);
+  manager(fixture.repo, ['touch', task, '--status', 'ready_for_review', '--no-watch']);
+  return worktree;
+}
+
+function freezePlan(fixture, tasks) {
+  const plan = JSON.parse(manager(fixture.repo, ['plan-batch', ...tasks, '--target', 'origin/main', '--json']));
+  const planPath = join(fixture.sandbox, `plan-${tasks.join('-')}.json`);
+  writeFileSync(planPath, JSON.stringify(plan));
+  return { plan, planPath };
+}
+
+test('batch-integrate 按冻结顺序合成多分支，指纹与每步 merge commit 落账', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+  prepareBatchInput(fixture, 'compose-alpha', 'alpha.txt', 'alpha\n');
+  prepareBatchInput(fixture, 'compose-beta', 'beta.txt', 'beta\n');
+  const { plan, planPath } = freezePlan(fixture, ['compose-alpha', 'compose-beta']);
+
+  const result = JSON.parse(manager(fixture.repo, [
+    'batch-integrate', '--plan', planPath,
+    '--agent', 'codex', '--agent-id', 'compose-integrator', '--json',
+  ]));
+  assert.equal(result.outcome, 'composed');
+  assert.equal(result.fingerprint, plan.fingerprint);
+  assert.equal(result.steps.length, 2);
+  assert.deepEqual(result.steps.map((step) => step.input_sha), plan.included.map((item) => item.head));
+
+  // 候选树确实带上了两个 feature 的内容，且 HEAD 等于落账的 composed_sha。
+  const candidatePath = result.candidate.path;
+  assert.equal(existsSync(join(candidatePath, 'alpha.txt')), true);
+  assert.equal(existsSync(join(candidatePath, 'beta.txt')), true);
+  assert.equal(git(candidatePath, ['rev-parse', 'HEAD']), result.composed_sha);
+  for (const item of plan.included) {
+    assert.equal(gitOk(candidatePath, ['merge-base', '--is-ancestor', item.head, 'HEAD']), true);
+  }
+
+  const record = recordFor(fixture, result.candidate.task);
+  assert.equal(record.task_status, 'integrating');
+  assert.equal(record.batch_integration.fingerprint, plan.fingerprint);
+  assert.equal(record.batch_integration.target_sha, plan.target.sha);
+  assert.equal(record.batch_integration.state, 'composed');
+  assert.deepEqual(
+    record.batch_integration.ordered_inputs.map((item) => item.head),
+    plan.included.map((item) => item.head),
+  );
+  const audit = JSON.parse(manager(fixture.repo, ['audit', result.candidate.task, '--json']));
+  assert.equal(audit.events.some((event) => event.event_type === 'batch_candidate_composed'), true);
+
+  // 幂等：同指纹重跑不再合成，直接返回既有候选。
+  const again = JSON.parse(manager(fixture.repo, [
+    'batch-integrate', '--plan', planPath,
+    '--agent', 'codex', '--agent-id', 'compose-integrator', '--json',
+  ]));
+  assert.equal(again.outcome, 'already_composed');
+  assert.equal(again.composed_sha, result.composed_sha);
+  assert.equal(again.candidate.worktree_id, result.candidate.worktree_id);
+});
+
+test('batch-integrate 拒绝已漂移的冻结计划，并要求重新 plan-batch', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+  prepareBatchInput(fixture, 'drift-alpha', 'alpha.txt', 'alpha\n');
+  prepareBatchInput(fixture, 'drift-beta', 'beta.txt', 'beta\n');
+  const { planPath } = freezePlan(fixture, ['drift-alpha', 'drift-beta']);
+
+  // target 前进 → 冻结计划失效。
+  writeFileSync(join(fixture.repo, 'target.txt'), 'moved\n');
+  git(fixture.repo, ['add', 'target.txt']);
+  git(fixture.repo, ['commit', '-m', 'chore: move target']);
+  git(fixture.repo, ['push', 'origin', 'HEAD:main']);
+  git(fixture.repo, ['fetch', 'origin', 'main']);
+
+  const stderr = managerStderr(fixture.repo, [
+    'batch-integrate', '--plan', planPath,
+    '--agent', 'codex', '--agent-id', 'drift-integrator',
+  ]);
+  assert.match(stderr, /BATCH_PLAN_STALE/);
+  assert.match(stderr, /target SHA/);
+  assert.match(stderr, /重新执行 plan-batch/);
+  // fail-closed：不得留下任何已合成候选。
+  const listing = JSON.parse(manager(fixture.repo, ['list', '--all', '--json']));
+  const allRecords = [...listing.worktrees.map((row) => row.record).filter(Boolean), ...listing.records];
+  assert.equal(allRecords.some((record) => record.batch_integration), false);
+});
+
+test('batch-integrate 冲突时 fail-closed：停在冲突处、输出结构化报告、不自动解也不自动 abort', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+  // 两个 feature 改同一文件同一行 → 合成必冲突。
+  prepareBatchInput(fixture, 'conflict-alpha', 'shared.txt', 'alpha side\n');
+  prepareBatchInput(fixture, 'conflict-beta', 'shared.txt', 'beta side\n');
+  const { plan, planPath } = freezePlan(fixture, ['conflict-alpha', 'conflict-beta']);
+
+  const stdout = managerKeep(fixture.repo, [
+    'batch-integrate', '--plan', planPath,
+    '--agent', 'codex', '--agent-id', 'conflict-integrator', '--json',
+  ]);
+  const result = JSON.parse(stdout);
+  assert.equal(result.outcome, 'conflict');
+  assert.equal(result.conflict.files.includes('shared.txt'), true);
+  assert.equal(result.conflict.input_sha, plan.included[1].head);
+  assert.equal(result.conflict.aborted, false);
+  assert.equal(typeof result.conflict.candidate_path, 'string');
+  assert.equal(result.composed_sha, null);
+
+  // 不自动 abort：候选树仍停在冲突态，留给 controller 裁决。
+  assert.equal(existsSync(join(result.conflict.candidate_path, '.git')), true);
+  const status = git(result.conflict.candidate_path, ['status', '--porcelain']);
+  assert.match(status, /^(UU|AA) /m);
+  const record = recordFor(fixture, result.candidate.task);
+  assert.equal(record.batch_integration.state, 'conflict');
+  assert.notEqual(record.task_status, 'integrating');
+  const audit = JSON.parse(manager(fixture.repo, ['audit', result.candidate.task, '--json']));
+  assert.equal(audit.events.some((event) => event.event_type === 'batch_candidate_conflict'), true);
+});
+
+test('batch-integrate --abort-on-conflict 一键回滚到干净 target', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+  prepareBatchInput(fixture, 'abort-alpha', 'shared.txt', 'alpha side\n');
+  prepareBatchInput(fixture, 'abort-beta', 'shared.txt', 'beta side\n');
+  const { plan, planPath } = freezePlan(fixture, ['abort-alpha', 'abort-beta']);
+
+  const result = JSON.parse(managerKeep(fixture.repo, [
+    'batch-integrate', '--plan', planPath, '--abort-on-conflict',
+    '--agent', 'codex', '--agent-id', 'abort-integrator', '--json',
+  ]));
+  assert.equal(result.outcome, 'conflict');
+  assert.equal(result.conflict.aborted, true);
+  const candidatePath = result.conflict.candidate_path;
+  assert.equal(git(candidatePath, ['rev-parse', 'HEAD']), plan.target.sha);
+  assert.equal(git(candidatePath, ['status', '--porcelain']), '');
+});
+
+test('rerere 让第二轮候选自动重放上一轮已录的冲突解法', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+  prepareBatchInput(fixture, 'rerere-alpha', 'shared.txt', 'alpha side\n');
+  prepareBatchInput(fixture, 'rerere-beta', 'shared.txt', 'beta side\n');
+  const { plan, planPath } = freezePlan(fixture, ['rerere-alpha', 'rerere-beta']);
+
+  const first = JSON.parse(managerKeep(fixture.repo, [
+    'batch-integrate', '--plan', planPath,
+    '--agent', 'codex', '--agent-id', 'rerere-integrator', '--json',
+  ]));
+  assert.equal(first.outcome, 'conflict');
+  assert.equal(first.rerere.enabled, true, 'rerere 必须在候选树启用，否则解法无法被录下');
+  const candidatePath = first.conflict.candidate_path;
+
+  // controller 手工裁决并提交这次 merge —— rerere 在此录下解法。
+  writeFileSync(join(candidatePath, 'shared.txt'), 'alpha side\nbeta side\n');
+  git(candidatePath, ['add', 'shared.txt']);
+  git(candidatePath, ['commit', '--no-edit']);
+
+  // 第二轮：重置到 target 重新合成，同一冲突应被 rerere 自动重放，无需再次手解。
+  const second = JSON.parse(manager(fixture.repo, [
+    'batch-integrate', '--plan', planPath,
+    '--agent', 'codex', '--agent-id', 'rerere-integrator', '--json',
+  ]));
+  assert.equal(second.outcome, 'composed', '第二轮应由 rerere 自动解出，不再冲突');
+  assert.equal(second.steps.some((step) => step.rerere_replayed), true);
+  assert.equal(
+    readFileSync(join(second.candidate.path, 'shared.txt'), 'utf8'),
+    'alpha side\nbeta side\n',
+    '重放出来的必须是上一轮录下的那个解法',
+  );
+  // rerere 缓存位于共享 common dir，因此跨候选树可复用。
+  assert.equal(existsSync(join(fixture.repo, '.git', 'rr-cache')), true);
+  assert.equal(gitOk(fixture.repo, ['config', '--get', 'rerere.enabled']), false, 'rerere 不得泄漏到主工作树');
+  assert.equal(plan.included.length, 2);
+});
+
+test('批次输入变化时新指纹另起候选，并双向登记替代关系', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+  prepareBatchInput(fixture, 'supersede-alpha', 'alpha.txt', 'alpha\n');
+  const betaTree = prepareBatchInput(fixture, 'supersede-beta', 'beta.txt', 'beta\n');
+  const first = freezePlan(fixture, ['supersede-alpha', 'supersede-beta']);
+  const round1 = JSON.parse(manager(fixture.repo, [
+    'batch-integrate', '--plan', first.planPath,
+    '--agent', 'codex', '--agent-id', 'supersede-integrator', '--json',
+  ]));
+  assert.equal(round1.outcome, 'composed');
+
+  // 输入前进 → 新指纹。
+  writeFileSync(join(betaTree, 'beta.txt'), 'beta v2\n');
+  git(betaTree, ['add', 'beta.txt']);
+  git(betaTree, ['commit', '-m', 'feat: beta v2']);
+  git(betaTree, ['push', 'origin', 'HEAD']);
+  // 推进输入后必须刷新 trace last_head，否则 plan-batch 会按 HEAD_DRIFT 拒绝——这正是它该做的。
+  manager(fixture.repo, ['touch', 'supersede-beta', '--status', 'ready_for_review', '--no-watch']);
+  const second = freezePlan(fixture, ['supersede-alpha', 'supersede-beta']);
+  assert.notEqual(second.plan.fingerprint, first.plan.fingerprint);
+
+  // 沿用同一 candidate task 会被拒绝：一次性候选不复用交付身份。
+  const refused = managerStderr(fixture.repo, [
+    'batch-integrate', '--plan', second.planPath,
+    '--agent', 'codex', '--agent-id', 'supersede-integrator',
+  ]);
+  assert.match(refused, /--candidate-task/);
+
+  const round2 = JSON.parse(manager(fixture.repo, [
+    'batch-integrate', '--plan', second.planPath,
+    '--candidate-task', 'batch-integration-second-candidate',
+    '--agent', 'codex', '--agent-id', 'supersede-integrator', '--json',
+  ]));
+  assert.equal(round2.outcome, 'composed');
+  assert.notEqual(round2.candidate.worktree_id, round1.candidate.worktree_id);
+
+  const oldRecord = recordFor(fixture, round1.candidate.task, true);
+  const newRecord = recordFor(fixture, round2.candidate.task);
+  assert.equal(oldRecord.task_status, 'abandoned');
+  assert.equal(oldRecord.superseded_by.worktree_id, newRecord.worktree_id);
+  assert.equal(newRecord.delivery_relation.kind, 'supersedes');
+  assert.equal(newRecord.delivery_relation.superseded_worktree_id, oldRecord.worktree_id);
+});
+
+test('Profile 声明的合成后步骤只回显并可登记结果，portable core 不代跑', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+  writeFileSync(join(fixture.repo, '.worktree-trace.json'), `${JSON.stringify({
+    schema_version: 1,
+    default_base: 'origin/main',
+    post_integrate_steps: [
+      { name: 'regenerate-golden', hint: '在候选树重跑 golden 生成命令后提交' },
+      { name: 'recompute-lock', hint: '重算依赖锁文件' },
+    ],
+  }, null, 2)}\n`);
+  publishProfile(fixture);
+  prepareBatchInput(fixture, 'declared-alpha', 'alpha.txt', 'alpha\n');
+  prepareBatchInput(fixture, 'declared-beta', 'beta.txt', 'beta\n');
+  const { planPath } = freezePlan(fixture, ['declared-alpha', 'declared-beta']);
+
+  const result = JSON.parse(manager(fixture.repo, [
+    'batch-integrate', '--plan', planPath,
+    '--agent', 'codex', '--agent-id', 'declared-integrator', '--json',
+  ]));
+  assert.equal(result.outcome, 'composed');
+  assert.deepEqual(result.post_integrate_steps.map((step) => step.name), ['regenerate-golden', 'recompute-lock']);
+  assert.equal(result.post_integrate_steps.every((step) => step.state === 'pending'), true);
+  // 只声明不执行：候选树里不会凭空出现声明步骤的产物。
+  assert.equal(existsSync(join(result.candidate.path, 'golden')), false);
+
+  const recorded = JSON.parse(manager(fixture.repo, [
+    'batch-step', result.candidate.task, '--step', 'regenerate-golden',
+    '--state', 'done', '--note', '已在候选树重烤并提交', '--json',
+  ]));
+  const done = recorded.post_integrate_steps.find((step) => step.name === 'regenerate-golden');
+  assert.equal(done.state, 'done');
+  assert.equal(done.note, '已在候选树重烤并提交');
+  assert.equal(typeof done.recorded_at, 'string');
+
+  const rejected = managerStderr(fixture.repo, [
+    'batch-step', result.candidate.task, '--step', 'not-declared', '--state', 'done',
+  ]);
+  assert.match(rejected, /未声明的步骤名/);
+});
+
+test('touch ready_for_review 默认武装 watch，--no-watch 退出，HEAD 变化时重冻结', (t) => {
+  const fixture = makeRemoteRepo();
+  const task = 'auto-armed-review';
+  t.after(() => {
+    try { manager(fixture.repo, ['unwatch', task]); } catch {}
+    try { manager(fixture.repo, ['unwatch', 'opted-out-review']); } catch {}
+    fixture.cleanup();
+  });
+  writeFileSync(join(fixture.repo, '.worktree-trace.json'), `${JSON.stringify({
+    schema_version: 1,
+    default_base: 'origin/main',
+  }, null, 2)}\n`);
+  publishProfile(fixture);
+  git(fixture.repo, ['branch', 'review-target']);
+  git(fixture.repo, ['push', 'origin', 'review-target']);
+
+  // --no-watch：显式退出默认武装。
+  manager(fixture.repo, [
+    'spawn', 'opted-out-review', '--base', 'origin/main',
+    '--agent', 'codex', '--agent-id', 'opted-out-thread', '--purpose', '退出自动武装',
+  ]);
+  const optedOutTree = worktreeFor(fixture, 'opted-out-review');
+  writeFileSync(join(optedOutTree, 'f.txt'), 'x\n');
+  git(optedOutTree, ['add', 'f.txt']);
+  git(optedOutTree, ['commit', '-m', 'feat: opted out']);
+  git(optedOutTree, ['push', '-u', 'origin', 'HEAD']);
+  const optedOut = manager(fixture.repo, ['touch', 'opted-out-review', '--status', 'ready_for_review', '--no-watch']);
+  assert.match(optedOut, /--no-watch/);
+  assert.equal(recordFor(fixture, 'opted-out-review').auto_reclaim ?? null, null);
+
+  // 人工 watch 的 target 属于显式指令，touch 不得静默改指。
+  manager(fixture.repo, ['watch', 'opted-out-review', '--target', 'origin/main']);
+  assert.equal(recordFor(fixture, 'opted-out-review').auto_reclaim.armed_by, 'explicit');
+  const protectedTarget = manager(fixture.repo, [
+    'touch', 'opted-out-review', '--status', 'ready_for_review', '--target', 'origin/review-target',
+  ]);
+  assert.match(protectedTarget, /换目标请先 unwatch/);
+  assert.equal(recordFor(fixture, 'opted-out-review').auto_reclaim.target_ref, 'origin/main');
+
+  // 默认：进入 ready_for_review 即自动武装，target 取 Profile default_base。
+  manager(fixture.repo, [
+    'spawn', task, '--base', 'origin/main',
+    '--agent', 'codex', '--agent-id', 'auto-armed-thread', '--purpose', '默认自动武装',
+  ]);
+  const worktree = worktreeFor(fixture, task);
+  writeFileSync(join(worktree, 'feature.txt'), 'first\n');
+  git(worktree, ['add', 'feature.txt']);
+  git(worktree, ['commit', '-m', 'feat: first']);
+  git(worktree, ['push', '-u', 'origin', 'HEAD']);
+  const firstHead = git(worktree, ['rev-parse', 'HEAD']);
+  const armed = manager(fixture.repo, ['touch', task, '--status', 'ready_for_review']);
+  assert.match(armed, /watch 已武装/);
+  const armedRecord = recordFor(fixture, task);
+  assert.equal(armedRecord.auto_reclaim.target_ref, 'origin/main');
+  assert.equal(armedRecord.auto_reclaim.head_sha, firstHead);
+  assert.equal(armedRecord.auto_reclaim.armed_by, 'auto_touch');
+
+  // auto_touch 只是默认动作，当轮可直接改指并留下 rearm。
+  const redirected = manager(fixture.repo, [
+    'touch', task, '--status', 'ready_for_review', '--target', 'origin/review-target',
+  ]);
+  assert.match(redirected, /重新武装/);
+  assert.equal(recordFor(fixture, task).auto_reclaim.target_ref, 'origin/review-target');
+
+  // HEAD 前进后再 touch：重冻结到新 HEAD，而不是继续盯旧 SHA。
+  writeFileSync(join(worktree, 'feature.txt'), 'second\n');
+  git(worktree, ['add', 'feature.txt']);
+  git(worktree, ['commit', '-m', 'feat: second']);
+  git(worktree, ['push', 'origin', 'HEAD']);
+  const secondHead = git(worktree, ['rev-parse', 'HEAD']);
+  const rearmed = manager(fixture.repo, ['touch', task, '--status', 'ready_for_review']);
+  assert.match(rearmed, /重新武装/);
+  assert.match(rearmed, /重冻结/);
+  const rearmedRecord = recordFor(fixture, task);
+  assert.equal(rearmedRecord.auto_reclaim.head_sha, secondHead);
+  assert.equal(rearmedRecord.auto_reclaim.target_ref, 'origin/review-target');
+  const audit = JSON.parse(manager(fixture.repo, ['audit', task, '--json']));
+  assert.equal(audit.events.some((event) => event.event_type === 'auto_reclaim_rearmed'), true);
+});
+
+test('未推送或无远端主干时自动武装 fail-soft，touch 本身仍然成功', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+  manager(fixture.repo, [
+    'spawn', 'unpushed-review', '--base', 'origin/main',
+    '--agent', 'codex', '--agent-id', 'unpushed-thread', '--purpose', '未推送即进入验收',
+  ]);
+  const worktree = worktreeFor(fixture, 'unpushed-review');
+  writeFileSync(join(worktree, 'feature.txt'), 'not pushed\n');
+  git(worktree, ['add', 'feature.txt']);
+  git(worktree, ['commit', '-m', 'feat: not pushed']);
+
+  const output = manager(fixture.repo, ['touch', 'unpushed-review', '--status', 'ready_for_review']);
+  assert.match(output, /已更新/);
+  assert.match(output, /watch 未武装/);
+  assert.match(output, /尚未完整 push/);
+  assert.equal(recordFor(fixture, 'unpushed-review').task_status, 'ready_for_review');
+  assert.equal(recordFor(fixture, 'unpushed-review').auto_reclaim ?? null, null);
+});
+
+test('[P1-1] 被折叠的输入随后前进时，冻结计划必须判定为 stale 而不是静默漏合成', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+  // 父 → 子链：plan-batch 会折叠父分支，included 只留子分支。
+  manager(fixture.repo, [
+    'spawn', 'fold-parent', '--base', 'origin/main',
+    '--agent', 'codex', '--agent-id', 'fold-parent-thread', '--purpose', '父输入',
+  ]);
+  const parent = worktreeFor(fixture, 'fold-parent');
+  writeFileSync(join(parent, 'parent.txt'), 'p1\n');
+  git(parent, ['add', 'parent.txt']);
+  git(parent, ['commit', '-m', 'feat: parent v1']);
+  git(parent, ['push', '-u', 'origin', 'HEAD']);
+  manager(fixture.repo, ['touch', 'fold-parent', '--status', 'ready_for_review', '--no-watch']);
+
+  manager(fixture.repo, [
+    'spawn', 'fold-child', '--base', 'origin/codex/fold-parent',
+    '--base-reason', '依赖父输入', '--agent', 'codex', '--agent-id', 'fold-child-thread', '--purpose', '子输入',
+  ]);
+  const child = worktreeFor(fixture, 'fold-child');
+  writeFileSync(join(child, 'child.txt'), 'c1\n');
+  git(child, ['add', 'child.txt']);
+  git(child, ['commit', '-m', 'feat: child v1']);
+  git(child, ['push', '-u', 'origin', 'HEAD']);
+  manager(fixture.repo, ['touch', 'fold-child', '--status', 'ready_for_review', '--no-watch']);
+
+  const { plan, planPath } = freezePlan(fixture, ['fold-parent', 'fold-child']);
+  assert.equal(plan.included.length, 1, '父分支应被折叠');
+  assert.equal(plan.included[0].task, 'fold-child');
+  assert.deepEqual(plan.requested_selectors, ['fold-parent', 'fold-child'], '计划必须留存原始 selector 全集');
+  assert.equal(plan.excluded[0].task, 'fold-parent');
+
+  // 父分支随后前进：它不再被子分支包含，合成边界已经变了。
+  writeFileSync(join(parent, 'parent.txt'), 'p2\n');
+  git(parent, ['add', 'parent.txt']);
+  git(parent, ['commit', '-m', 'feat: parent v2']);
+  git(parent, ['push', 'origin', 'HEAD']);
+  manager(fixture.repo, ['touch', 'fold-parent', '--status', 'ready_for_review', '--no-watch']);
+
+  const stderr = managerStderr(fixture.repo, [
+    'batch-integrate', '--plan', planPath,
+    '--agent', 'codex', '--agent-id', 'fold-integrator',
+  ]);
+  assert.match(stderr, /BATCH_PLAN_STALE/);
+  assert.match(stderr, /重新执行 plan-batch/);
+  // 关键：不得留下任何按旧计划合成出来的候选。
+  const listing = JSON.parse(manager(fixture.repo, ['list', '--all', '--json']));
+  const allRecords = [...listing.worktrees.map((row) => row.record).filter(Boolean), ...listing.records];
+  assert.equal(allRecords.some((record) => record.batch_integration), false);
+});
+
+test('[P1-2] 冻结 head 过期且无法重冻结时解除旧 watcher，不让它用过期证据推进终态', async (t) => {
+  const fixture = makeRemoteRepo();
+  const task = 'stale-freeze-review';
+  t.after(() => {
+    try { manager(fixture.repo, ['unwatch', task]); } catch {}
+    fixture.cleanup();
+  });
+  writeFileSync(join(fixture.repo, '.worktree-trace.json'), `${JSON.stringify({
+    schema_version: 1,
+    default_base: 'origin/main',
+  }, null, 2)}\n`);
+  publishProfile(fixture);
+
+  manager(fixture.repo, [
+    'spawn', task, '--base', 'origin/main',
+    '--agent', 'codex', '--agent-id', 'stale-freeze-thread', '--purpose', '过期冻结',
+  ]);
+  const worktree = worktreeFor(fixture, task);
+  writeFileSync(join(worktree, 'f.txt'), 'v1\n');
+  git(worktree, ['add', 'f.txt']);
+  git(worktree, ['commit', '-m', 'feat: v1']);
+  git(worktree, ['push', '-u', 'origin', 'HEAD']);
+  const firstHead = git(worktree, ['rev-parse', 'HEAD']);
+  assert.match(manager(fixture.repo, ['touch', task, '--status', 'ready_for_review']), /watch 已武装/);
+  assert.equal(recordFor(fixture, task).auto_reclaim.head_sha, firstHead);
+
+  // HEAD 前进但**未推送** → 无法重冻结。旧 watcher 仍盯 firstHead，若放任不管，
+  // firstHead 合入会把任务推进到不可逆 done，而新 HEAD 未合入导致 reclaim 永久阻塞。
+  writeFileSync(join(worktree, 'f.txt'), 'v2\n');
+  git(worktree, ['add', 'f.txt']);
+  git(worktree, ['commit', '-m', 'feat: v2 not pushed']);
+  const secondHead = git(worktree, ['rev-parse', 'HEAD']);
+  assert.notEqual(secondHead, firstHead);
+
+  const auditBefore = JSON.parse(manager(fixture.repo, ['audit', task, '--json']));
+  const output = manager(fixture.repo, ['touch', task, '--status', 'ready_for_review']);
+  assert.match(output, /watch 已解除/);
+  assert.match(output, /自动回收保持关闭/);
+  const record = recordFor(fixture, task);
+  assert.equal(record.auto_reclaim.state, 'disarmed');
+  assert.equal(record.auto_reclaim.disarm_reason, 'stale_frozen_head');
+  const audit = JSON.parse(manager(fixture.repo, ['audit', task, '--json']));
+  assert.equal(audit.events.length, auditBefore.events.length + 1, '状态更新与 watcher 失效必须由同一条原子 event 完成');
+  const disarm = audit.events.filter((event) => event.event_type === 'auto_reclaim_disarmed').at(-1);
+  assert.equal(disarm.details.source, 'auto_touch_head_drift');
+  assert.equal(disarm.details.stale_head_sha, firstHead);
+  assert.equal(disarm.details.live_head, secondHead);
+
+  // 推送后重新 touch：恢复武装并冻结到新 HEAD。
+  git(worktree, ['push', 'origin', 'HEAD']);
+  assert.match(manager(fixture.repo, ['touch', task, '--status', 'ready_for_review']), /watch 已重新武装/);
+  assert.equal(recordFor(fixture, task).auto_reclaim.head_sha, secondHead);
+});
+
+test('[P1-3] 合成后再生成步骤的提交不得被同指纹重跑抹掉；--recompose 才允许丢弃', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+  writeFileSync(join(fixture.repo, '.worktree-trace.json'), `${JSON.stringify({
+    schema_version: 1,
+    default_base: 'origin/main',
+    post_integrate_steps: [{ name: 'regenerate-golden', hint: '重烤 golden 后提交' }],
+  }, null, 2)}\n`);
+  publishProfile(fixture);
+  prepareBatchInput(fixture, 'postgen-alpha', 'alpha.txt', 'alpha\n');
+  prepareBatchInput(fixture, 'postgen-beta', 'beta.txt', 'beta\n');
+  const { planPath } = freezePlan(fixture, ['postgen-alpha', 'postgen-beta']);
+
+  const first = JSON.parse(manager(fixture.repo, [
+    'batch-integrate', '--plan', planPath,
+    '--agent', 'codex', '--agent-id', 'postgen-integrator', '--json',
+  ]));
+  assert.equal(first.outcome, 'composed');
+  const candidatePath = first.candidate.path;
+
+  // controller 执行声明的合成后步骤并提交 —— 候选 HEAD 从此不等于 composed_sha。
+  writeFileSync(join(candidatePath, 'golden.txt'), 'regenerated\n');
+  git(candidatePath, ['add', 'golden.txt']);
+  git(candidatePath, ['commit', '-m', 'chore: regenerate golden']);
+  const afterGolden = git(candidatePath, ['rev-parse', 'HEAD']);
+  manager(fixture.repo, ['batch-step', first.candidate.task, '--step', 'regenerate-golden', '--state', 'done']);
+
+  const second = JSON.parse(manager(fixture.repo, [
+    'batch-integrate', '--plan', planPath,
+    '--agent', 'codex', '--agent-id', 'postgen-integrator', '--json',
+  ]));
+  assert.equal(second.outcome, 'already_composed');
+  assert.equal(second.advanced_beyond_composition, true);
+  assert.equal(second.composed_sha, first.composed_sha);
+  assert.equal(second.head_sha, afterGolden);
+  assert.equal(git(candidatePath, ['rev-parse', 'HEAD']), afterGolden, '生成提交不得被重置抹掉');
+  assert.equal(existsSync(join(candidatePath, 'golden.txt')), true);
+  assert.equal(
+    second.post_integrate_steps.find((step) => step.name === 'regenerate-golden').state,
+    'done',
+    '已登记的步骤状态不得被重置回 pending',
+  );
+
+  // --recompose 还必须绑定候选当前完整 HEAD；缺失或陈旧授权都不得动树。
+  assert.match(managerStderr(fixture.repo, [
+    'batch-integrate', '--plan', planPath, '--recompose',
+    '--agent', 'codex', '--agent-id', 'postgen-integrator', '--json',
+  ]), /必须同时提供 --recompose-head/);
+  assert.match(managerStderr(fixture.repo, [
+    'batch-integrate', '--plan', planPath, '--recompose', '--recompose-head', first.composed_sha,
+    '--agent', 'codex', '--agent-id', 'postgen-integrator', '--json',
+  ]), /RECOMPOSE_HEAD_STALE/);
+  assert.equal(git(candidatePath, ['rev-parse', 'HEAD']), afterGolden);
+  assert.equal(existsSync(join(candidatePath, 'golden.txt')), true);
+
+  // 完整 HEAD 明示授权后，才回到冻结 target 重新合成。
+  const recomposed = JSON.parse(manager(fixture.repo, [
+    'batch-integrate', '--plan', planPath, '--recompose', '--recompose-head', afterGolden,
+    '--agent', 'codex', '--agent-id', 'postgen-integrator', '--json',
+  ]));
+  assert.equal(recomposed.outcome, 'composed');
+  assert.equal(recomposed.recompose.authorized_head_sha, afterGolden);
+  assert.equal(recomposed.recompose.discarded_head_sha, afterGolden);
+  assert.equal(recomposed.recompose.previous_composed_sha, first.composed_sha);
+  assert.equal(existsSync(join(candidatePath, 'golden.txt')), false, '--recompose 明示丢弃合成后的提交');
+  assert.equal(
+    recomposed.post_integrate_steps.find((step) => step.name === 'regenerate-golden').state,
+    'pending',
+  );
+  const audit = JSON.parse(manager(fixture.repo, ['audit', first.candidate.task, '--json']));
+  const authorized = audit.events.filter((event) => event.event_type === 'batch_candidate_recompose_authorized');
+  assert.equal(authorized.length, 1);
+  assert.equal(authorized[0].details.authorized_head_sha, afterGolden);
+  assert.equal(authorized[0].details.discarded_head_sha, afterGolden);
+  assert.deepEqual(authorized[0].details.requested_by, { host: 'codex', id: 'postgen-integrator' });
+});
+
+test('[P1-4] 同指纹候选跨会话只读可复用，任何续合或重合成必须先 handoff', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+  prepareBatchInput(fixture, 'owner-alpha', 'alpha.txt', 'alpha\n');
+  prepareBatchInput(fixture, 'owner-beta', 'beta.txt', 'beta\n');
+  const { planPath } = freezePlan(fixture, ['owner-alpha', 'owner-beta']);
+
+  const first = JSON.parse(manager(fixture.repo, [
+    'batch-integrate', '--plan', planPath,
+    '--agent', 'codex', '--agent-id', 'owner-a', '--json',
+  ]));
+  const candidatePath = first.candidate.path;
+  writeFileSync(join(candidatePath, 'owner-a-result.txt'), 'must survive\n');
+  git(candidatePath, ['add', 'owner-a-result.txt']);
+  git(candidatePath, ['commit', '-m', 'chore: owner A post-step']);
+  const ownerAHead = git(candidatePath, ['rev-parse', 'HEAD']);
+
+  const readOnly = JSON.parse(manager(fixture.repo, [
+    'batch-integrate', '--plan', planPath,
+    '--agent', 'codex', '--agent-id', 'owner-b', '--json',
+  ]));
+  assert.equal(readOnly.outcome, 'already_composed');
+  assert.equal(readOnly.head_sha, ownerAHead);
+
+  const denied = managerStderr(fixture.repo, [
+    'batch-integrate', '--plan', planPath, '--recompose', '--recompose-head', ownerAHead,
+    '--agent', 'codex', '--agent-id', 'owner-b', '--json',
+  ]);
+  assert.match(denied, /跨会话只允许读取 already_composed/);
+  assert.match(denied, /handoff/);
+  assert.equal(git(candidatePath, ['rev-parse', 'HEAD']), ownerAHead);
+  assert.equal(existsSync(join(candidatePath, 'owner-a-result.txt')), true);
+  assert.deepEqual(recordFor(fixture, first.candidate.task).agent, { host: 'codex', id: 'owner-a' });
+});
+
+test('[P2-1] 仓库已继承 rerere.enabled 时仍必须补齐 autoUpdate，否则重放不更新 index', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+  // 只开 enabled、不开 autoUpdate：这正是重放"看起来生效、实际仍判冲突"的反例配置。
+  git(fixture.repo, ['config', 'rerere.enabled', 'true']);
+  prepareBatchInput(fixture, 'inherit-alpha', 'shared.txt', 'alpha side\n');
+  prepareBatchInput(fixture, 'inherit-beta', 'shared.txt', 'beta side\n');
+  const { planPath } = freezePlan(fixture, ['inherit-alpha', 'inherit-beta']);
+
+  const first = JSON.parse(managerKeep(fixture.repo, [
+    'batch-integrate', '--plan', planPath,
+    '--agent', 'codex', '--agent-id', 'inherit-integrator', '--json',
+  ]));
+  assert.equal(first.outcome, 'conflict');
+  assert.equal(first.rerere.enabled, true);
+  assert.equal(first.rerere.auto_update, true, '继承 enabled 也必须补齐 autoUpdate');
+  const candidatePath = first.conflict.candidate_path;
+  assert.equal(git(candidatePath, ['config', '--get', 'rerere.autoUpdate']), 'true');
+
+  writeFileSync(join(candidatePath, 'shared.txt'), 'alpha side\nbeta side\n');
+  git(candidatePath, ['add', 'shared.txt']);
+  git(candidatePath, ['commit', '--no-edit']);
+
+  const second = JSON.parse(manager(fixture.repo, [
+    'batch-integrate', '--plan', planPath,
+    '--agent', 'codex', '--agent-id', 'inherit-integrator', '--json',
+  ]));
+  assert.equal(second.outcome, 'composed', '补齐 autoUpdate 后第二轮应自动重放解法');
+  assert.equal(second.steps.some((step) => step.rerere_replayed), true);
+});
+
+test('[P2-2] 自动写共享 extensions.worktreeConfig 留独立审计事件，并如实记录覆盖前值', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+  git(fixture.repo, ['config', 'extensions.worktreeConfig', 'false']);
+  assert.equal(git(fixture.repo, ['config', '--get', 'extensions.worktreeConfig']), 'false', '前置：扩展显式关闭');
+  prepareBatchInput(fixture, 'audit-alpha', 'alpha.txt', 'alpha\n');
+  prepareBatchInput(fixture, 'audit-beta', 'beta.txt', 'beta\n');
+  const first = freezePlan(fixture, ['audit-alpha', 'audit-beta']);
+
+  const round1 = JSON.parse(manager(fixture.repo, [
+    'batch-integrate', '--plan', first.planPath,
+    '--agent', 'codex', '--agent-id', 'audit-integrator', '--json',
+  ]));
+  assert.equal(round1.rerere.worktree_config_extension, 'enabled_by_this_command');
+  assert.equal(git(fixture.repo, ['config', '--get', 'extensions.worktreeConfig']), 'true');
+  const audit1 = JSON.parse(manager(fixture.repo, ['audit', round1.candidate.task, '--json']));
+  const written = audit1.events.filter((event) => event.event_type === 'repository_config_extension_enabled');
+  assert.equal(written.length, 1, '本轮写入共享 config 必须留且只留一条审计事件');
+  assert.equal(written[0].details.key, 'extensions.worktreeConfig');
+  assert.equal(written[0].details.previous, 'false');
+  assert.equal(written[0].details.scope, 'shared_repository_config');
+  assert.equal(written[0].details.written_by, 'batch-integrate');
+
+  // 第二轮：扩展已启用 → 不应再记「本轮写入」事件。
+  const betaTree = worktreeFor(fixture, 'audit-beta');
+  writeFileSync(join(betaTree, 'beta.txt'), 'beta v2\n');
+  git(betaTree, ['add', 'beta.txt']);
+  git(betaTree, ['commit', '-m', 'feat: beta v2']);
+  git(betaTree, ['push', 'origin', 'HEAD']);
+  manager(fixture.repo, ['touch', 'audit-beta', '--status', 'ready_for_review', '--no-watch']);
+  const second = freezePlan(fixture, ['audit-alpha', 'audit-beta']);
+  const round2 = JSON.parse(manager(fixture.repo, [
+    'batch-integrate', '--plan', second.planPath,
+    '--candidate-task', 'batch-integration-audit-second',
+    '--agent', 'codex', '--agent-id', 'audit-integrator', '--json',
+  ]));
+  assert.notEqual(round2.rerere.worktree_config_extension, 'enabled_by_this_command');
+  const audit2 = JSON.parse(manager(fixture.repo, ['audit', round2.candidate.task, '--json']));
+  assert.equal(
+    audit2.events.some((event) => event.event_type === 'repository_config_extension_enabled'),
+    false,
+    '扩展原本已启用时不得伪造写入事件',
+  );
 });
