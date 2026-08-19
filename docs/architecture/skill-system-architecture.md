@@ -878,8 +878,7 @@ proposal_digest: "sha256:..."
 
 ### 8.2 通用脚本约束
 
-- Node.js 脚本优先使用 Node 18+ 标准库；
-- 现有 Python 工具保留，避免为统一语言做无收益重写；
+- 统一使用 Node 18+ 原生 ESM 模块（`.mjs`），不引入第三方或 Python 运行时依赖；
 - 所有机器消费命令支持 `--json`；
 - 所有状态修改命令使用 revision / lock；
 - init 冻结相关 Skill manifest；provider 派发、Evidence 接收和 Loop `next` 前重算摘要；
@@ -904,11 +903,11 @@ orchestrate-subagents/
 ├── agents/openai.yaml
 ├── references/
 └── scripts/
-    ├── host_capability_cache.py          # 已有
-    ├── resolve_model_policy.py           # 已有
-    ├── orchestration-ledger.mjs          # 新增
-    ├── contract-tool.mjs                 # 新增
-    └── *.test.*
+    ├── host_capability_cache.mjs
+    ├── resolve_model_policy.mjs
+    ├── orchestration-ledger.mjs
+    ├── contract-tool.mjs
+    └── *.test.mjs
 ~~~
 
 编排先按规模选档：`≤3` 个独立只读 worker、单 stage、无副作用/资源/Loop/barrier 时使用
