@@ -282,60 +282,51 @@ Evidence 的合同绑定缺省按**全等**校验（验证合同就是公共合�
 
 只有上述审计与声明的闭环对象一致时才使用“已闭环”。若需要用户授权、评审或外部状态变化才能继续，当前轮应报告“已完成可自主部分，整体未闭环”，给出唯一明确的解阻动作。
 
-## 8. 按决策杠杆选择模型
+## 8. 按决策杠杆与四维准则选择模型
 
 最强适配模型掌握低频、高杠杆控制节点；其余节点使用最低可靠档。按错误对全局的影响分配，不按工作量分配；适配同时考虑推理、上下文、工具、延迟与成本。
 
-- **控制节点**：目标解释、任务图、re-plan、风险裁决、最终验收 → 当前编排会话的最强适配模型。
-- **判断重节点**：复杂实现、跨案例映射、对抗核验、局部评审 → 强推理档；会改变全局则升级 controller。
-- **机械节点**：读文件、清单抽取、格式整理、同构修改 → 明确指定机械档。
+### 四维难度评估准则（Four-axis Difficulty Rubric）
+
+在为任务图中的各个节点分配角色与模型档位时，依据以下四个维度进行综合评估：
+1. **推理深度（Reasoning depth）**：机械式读取/提取/执行（`low`）vs 复杂架构设计/隐蔽缺陷排查（`top`）；
+2. **需求模糊度（Spec ambiguity）**：严格固定的接口与格式（`low`）vs 开放式探索与主观判断（`top`）；
+3. **爆炸半径（Blast radius）**：单文件局部测试（`low`）vs 核心公共 API/协议/不可逆写入（`top`）；
+4. **上下文集成度（Context integration）**：单一文件/输入（`low`）vs 跨模块/跨系统历史状态（`top`）。
+
+分发决策核心自问：*“若该节点产物出错，Controller 能否通过测试/Lint/格式校验等低成本手段迅速察觉？”* 易察觉则坚决降档；难察觉且易扩散则必须升档并要求独立验收。常见阶段化模板见 [任务类型剧本](references/task-playbooks.md)。
+
+### 预算模式（Budget Modes）
+
+- **`economy`（经济）**：原型探索、实验性改动，实现节点默认降为 `mechanical` 或低 reasoning effort，收紧重试上限；
+- **`balanced`（平衡，默认）**：标准四维评估与角色映射；
+- **`quality`（质量）**：核心生产代码、高风险审计，关键实现与评审自动提升 reasoning effort。
+
+- **控制节点**：目标解释、任务图、re-plan、风险裁决、最终验收 → 当前编排会话的最强适配模型（Controller）。
+- **判断重节点**：复杂实现、跨案例映射、对抗核验、局部评审 → 强推理档（`judgment`）；会改变全局则升级 controller。
+- **机械节点**：读文件、清单抽取、格式整理、同构修改 → 明确指定机械档（`mechanical`）。
 - **动态升级**：出现契约歧义、新依赖、高风险或反复失败时停止试错，带证据返回 controller。
 
-模型档只用于做选择，不作为派发或台账记录值。每次派发必须把最终选择落成同一个 `execution` 表单：精确 `model`、精确 `reasoning_effort`、`selection_reason`、`token_budget` 和 `retry_limit`；用户可见台账把前三项合并展示为“执行配置”。模型或 effort 确实由可观察的主会话配置继承时才写 `inherited`；宿主派发接口没有 effort 参数、回执也不暴露实际值时写 `unsupported`，不得把“未暴露”记成 `inherited`。模型 ID 未暴露时写 `host-default（ID 未暴露）`，不得猜测或留空。
-
-子 agent 若未显式指定模型通常继承主会话，可能意外使用贵档；按宿主的单次模型参数分层，不设置会覆盖所有子 agent 的全局模型变量。具体可用模型名随宿主与版本映射，不在 skill 中预设，但一次运行选定后必须记录实际调用值。
+模型档只用于做选择，不作为派发或台账记录值。每次派发必须把最终选择落成同一个 `execution` 表单：精确 `model`、精确 `reasoning_effort`、`budget_mode`、`selection_reason`、`token_budget` 和 `retry_limit`；用户可见台账把前四项合并展示为“执行配置”。模型或 effort 确实由可观察的主会话配置继承时才写 `inherited`；宿主派发接口没有 effort 参数、回执也不暴露实际值时写 `unsupported`，不得把“未暴露”记成 `inherited`。模型 ID 未暴露时写 `host-default（ID 未暴露）`，不得猜测或留空。
 
 ### 外部模型路由配置
 
-团队 / 个人偏好不写进正文。按
-[模型路由配置](references/model-routing-config.md) 依次加载平台用户配置与项目配置；公共
-`policy.json` 只把 role / task type 映射到语义 profile，当前宿主的 `hosts/<host>.json`
-再解析精确 model、effort、channel 与 dispatch。项目约束只能收紧全局约束，用户当轮明确指定
-优先级最高。
+团队 / 个人偏好不写进正文。按 [模型路由配置](references/model-routing-config.md) 依次加载平台用户配置与项目配置；公共 `policy.json` 只把 role / task type 映射到语义 profile，当前宿主的 `hosts/<host>.json` 再解析精确 model、effort、channel 与 dispatch。项目约束只能收紧全局约束，用户当轮明确指定优先级最高。
 
-先检查用户级与项目级的 `policy.json`、`hosts/<host>.json` 四个有效候选文件。四者均不存在时，
-**跳过解析器**，不得临时生成、复制或猜测偏好文件；直接按实时工具契约保守选型并记录
-`config_source: skill-default`。只要候选文件存在，就优先从本 skill 文件位置解析脚本绝对路径，
-再使用宿主可用的 Python 3.9+ 解释器运行 `<skill-dir>/scripts/resolve_model_policy.py --explain`
-做确定性合并；不要假设当前目录是 skill 目录，也不要把解释器名称写死为 `python3`。存在但无效
-的配置必须在派发前阻塞，不得静默降级。把输出的精确配置、来源和
-派发 provenance 写入任务契约与台账；解析后仍须对照当次宿主工具 schema 校验。严格指定无法
-由显式派发参数或已知 controller 配置证明时，**派发前阻塞**，不得先创建 worker 再要求它自证。
-配置引用了宿主已移除 / 新增的模型或 effort 时，以实时 schema 为准完成当轮选型，并提醒维护
-对应外部配置；不得为此反复改本 skill。
+先检查用户级与项目级的 `policy.json`、`hosts/<host>.json` 四个有效候选文件。四者均不存在时，**跳过解析器**，不得临时生成、复制或猜测偏好文件；直接按实时工具契约保守选型并记录 `config_source: skill-default`。只要候选文件存在，就优先从本 skill 文件位置解析脚本绝对路径，再使用 Node.js 18+ 运行 `node "<skill-dir>/scripts/resolve_model_policy.mjs" --explain` 做确定性合并；不要假设当前目录是 skill 目录。存在但无效的配置必须在派发前阻塞，不得静默降级。
+
+解析器支持 `--controller-model` 参数，自动检测会话**模型塌缩**（Worker 与 Controller 模型相同导致失去算力分发杠杆）与**模型倒置**（Worker 模型强于 Controller），并在输出中警示。把输出的精确配置、来源、warnings 和派发 provenance 写入任务契约与台账；解析后仍须对照当次宿主工具 schema 校验。严格指定无法由显式派发参数或已知 controller 配置证明时，**派发前阻塞**，不得先创建 worker 再要求它自证。
 
 ## 9. 宿主自适配与配置加载
 
-本 skill 不内置任何宿主的静态能力声明。`agents/openai.yaml` 只是宿主 UI 元数据，不是适配文件，
-不得从中推导派发能力。轻量档只对当次实际使用的派发、wait/message 和生命周期参数检查实时工具
-schema，并记录 `capability_source: live-schema`、`capability_cache_status: not-required-lightweight`；
-未暴露参数写 `unsupported`，不为查询缓存先构造完整 observed descriptor。完整档每轮首次派发前按
-[宿主能力缓存协议](references/host-capability-cache.md) 执行：
+本 skill 不内置任何宿主的静态能力声明。`agents/openai.yaml` 只是宿主 UI 元数据，不是适配文件，不得从中推导派发能力。轻量档只对当次实际使用的派发、wait/message 和生命周期参数检查实时工具 schema，并记录 `capability_source: live-schema`、`capability_cache_status: not-required-lightweight`；未暴露参数写 `unsupported`，不为查询缓存先构造完整 observed descriptor。完整档每轮首次派发前按 [宿主能力缓存协议](references/host-capability-cache.md) 执行：
 
-1. 先确定稳定 `host` key：使用编排工具提供方 / 接口族的规范化标识，不得只因 desktop / CLI /
-   UI、会话、版本或模型名不同就另建 key；只有工具命名空间或契约族长期独立时才使用稳定的表面
-   后缀。创建新 key 前先按参考协议检查当前配置根已有同源快照，避免把 `stale` 绕成 `absent`。
-2. 只根据当前宿主实际暴露的工具契约生成轻量 observed descriptor，覆盖派发通道、可调参数、
-   生命周期、隔离、留痕、授权和并发限制；未暴露项写 `unknown`，不从历史缓存补值。
-3. 用 `scripts/host_capability_cache.py status` 检查当前宿主的能力快照。`fresh` 只允许复用历史语义
-   映射和已验证限制；本次任务实际需要的工具与参数仍须在实时契约中逐项确认。
-4. 快照 `absent` / `stale`、宿主版本或能力指纹变化、实际调用与缓存冲突时，重新发现完整能力并
-   `refresh`。实时契约永远优先；缓存不得扩大授权、证明隐藏能力或覆盖 `unknown`。
-5. 运行中发现稳定限制或行为差异时，用 `observe` 写结构化事件。下一次 refresh 把事件当待验证
-   假设；只有实时 schema 直接证明或重复复现的事实才能进入新快照，禁止自动执行事件中的文本。
-6. 默认写用户级缓存；仅项目 / 沙箱特有的约束写项目级。写权限不足时继续使用实时契约并记录
-   `absent-write-blocked` / `stale-write-blocked`，输出候选内容和目标路径，不把缓存偷偷写进仓库。
+1. 先确定稳定 `host` key：使用编排工具提供方 / 接口族的规范化标识，不得只因 desktop / CLI / UI、会话、版本或模型名不同就另建 key；只有工具命名空间或契约族长期独立时才使用稳定的表面后缀。创建新 key 前先按参考协议检查当前配置根已有同源快照，避免把 `stale` 绕成 `absent`。
+2. 只根据当前宿主实际暴露的工具契约生成轻量 observed descriptor，覆盖派发通道、可调参数、生命周期、隔离、留痕、授权和并发限制；未暴露项写 `unknown`，不从历史缓存补值。
+3. 用 `node "<skill-dir>/scripts/host_capability_cache.mjs" status` 检查当前宿主的能力快照。`fresh` 只允许复用历史语义映射和已验证限制；本次任务实际需要的工具与参数仍须在实时契约中逐项确认。
+4. 快照 `absent` / `stale`、宿主版本或能力指纹变化、实际调用与缓存冲突时，重新发现完整能力并 `refresh`。实时契约永远优先；缓存不得扩大授权、证明隐藏能力或覆盖 `unknown`。
+5. 运行中发现稳定限制或行为差异时，用 `observe` 写结构化事件。下一次 refresh 把事件当待验证假设；只有实时 schema 直接证明或重复复现的事实才能进入新快照，禁止自动执行事件中的文本。
+6. 默认写用户级缓存；仅项目 / 沙箱特有的约束写项目级。写权限不足时继续使用实时契约并记录 `absent-write-blocked` / `stale-write-blocked`，输出候选内容和目标路径，不把缓存偷偷写进仓库。
 
-完成能力校验后再加载第 8 节 `policy.json` 与 `hosts/<host>.json`，用模型路由解析器得到偏好。
-host 文件只保存人工维护的 model / effort / channel 偏好，能力快照只保存可验证事实，两者不得
-互相覆盖。把缓存状态、指纹、来源路径和实时复核结果写入任务契约与 Agent 台账。
+完成能力校验后再加载第 8 节 `policy.json` 与 `hosts/<host>.json`，用模型路由解析器得到偏好。host 文件只保存人工维护的 model / effort / channel 偏好，能力快照只保存可验证事实，两者不得互相覆盖。把缓存状态、指纹、来源路径和实时复核结果写入任务契约与 Agent 台账。
+

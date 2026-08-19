@@ -375,3 +375,26 @@ test('parent 的额外顶层字段被投影继承，并原样走完独立验收�
     assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
   } finally { f.cleanup(); }
 });
+
+test("Token accounting tracks per-node usage and status aggregates summary", () => {
+  const f = makeFixture();
+  try {
+    main(["add-node", "--ledger", f.ledger_dir, "--input", f.input("n1.json", node({ node_id: "n1", role: "scout", objective: "探索目录" }))]);
+    main(["add-node", "--ledger", f.ledger_dir, "--input", f.input("n2.json", node({ node_id: "n2", role: "worker", objective: "实现功能" }))]);
+    main(["dispatch-record", "--ledger", f.ledger_dir, "--node", "n1", "--input", f.input("d1.json", { worker_id: "w1", model: "inherited", reasoning_effort: "inherited" })]);
+    main(["dispatch-record", "--ledger", f.ledger_dir, "--node", "n2", "--input", f.input("d2.json", { worker_id: "w2", model: "inherited", reasoning_effort: "inherited" })]);
+    main(["attach", "--ledger", f.ledger_dir, "--node", "n1", "--type", "artifact", "--input", f.input("a1.json", artifactRef())]);
+    main(["attach", "--ledger", f.ledger_dir, "--node", "n2", "--type", "artifact", "--input", f.input("a2.json", artifactRef())]);
+
+    main(["update", "--ledger", f.ledger_dir, "--node", "n1", "--input", f.input("u1.json", { state: "passed", tokens: { total_tokens: 1500 }, duration_ms: 1200 })]);
+    main(["update", "--ledger", f.ledger_dir, "--node", "n2", "--input", f.input("u2.json", { state: "passed", tokens: 4200, duration_ms: 3500 })]);
+
+    const status = main(["status", "--ledger", f.ledger_dir]);
+    assert.equal(status.summary.token_accounting.total_tokens, 5700);
+    assert.equal(status.summary.token_accounting.by_role.scout, 1500);
+    assert.equal(status.summary.token_accounting.by_role.worker, 4200);
+    assert.equal(status.nodes.n1.tokens.total_tokens, 1500);
+    assert.equal(status.nodes.n1.duration_ms, 1200);
+    assert.equal(status.nodes.n2.tokens, 4200);
+  } finally { f.cleanup(); }
+});

@@ -60,18 +60,17 @@ Skill 会根据当前宿主可用的 Agent、终端、Git 和任务控制能力�
 
 - Git。
 - Node.js 18 或更高版本（四个 Skill 的确定性 runtime 与辅助脚本）。
-- Python 3.9 或更高版本（`orchestrate-subagents` 的模型策略与配置辅助脚本，仅使用标准库）。
 - 若要实际派生和隔离多个 Agent，上层宿主需要提供相应的任务或子 Agent 能力。
 
 ## 本地验证
 
 ```bash
-python3 -m unittest discover -s orchestrate-subagents/scripts -p 'test_*.py'
 node --test \
   manage-worktrees/scripts/*.test.mjs \
   orchestrate-subagents/scripts/*.test.mjs \
   verify-agent-output/scripts/*.test.mjs \
-  run-agent-verify-loop/scripts/*.test.mjs
+  run-agent-verify-loop/scripts/*.test.mjs \
+  scripts/*.test.mjs
 ```
 
 ## 仓库范围

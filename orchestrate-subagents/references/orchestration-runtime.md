@@ -59,6 +59,8 @@ status / inspect / rebuild / doctor / capabilities
 Evidence 必须为 `terminal_outcome: pass` 且不再要求 human gate。节点终态后不再接受 attachment。
 `status.summary.verification_assurance` 分别计数三档和 `none`，`doctor` 重新执行同一门禁。
 
+**Token 消耗与成本核算（v1.2）**：`update` 支持记录节点消耗的 `tokens`（可为数字或 `{ input_tokens, output_tokens, total_tokens }`）及 `duration_ms`。`status` 命令在 `summary.token_accounting` 中自动汇总总 Token 与按角色分级的消耗分布，支持计算多 Agent 分发相比全量顶配模型的 Token 节省率。
+
 **合同投影（v1.2）**：Evidence 的合同绑定有两条合法路径，缺省仍是全等——verify-agent-output
 那次验证直接使用本 ledger 的公共合同（同一份 JSON、同一个摘要）。多节点图下若多个节点各自
 独立验收，公共合同的 acceptance 条目往往覆盖全图，reviewer 会拿其他节点的条目审出假 fail；
