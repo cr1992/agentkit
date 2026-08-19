@@ -386,7 +386,7 @@ test("Token accounting tracks per-node usage and status aggregates summary", () 
     main(["attach", "--ledger", f.ledger_dir, "--node", "n1", "--type", "artifact", "--input", f.input("a1.json", artifactRef())]);
     main(["attach", "--ledger", f.ledger_dir, "--node", "n2", "--type", "artifact", "--input", f.input("a2.json", artifactRef())]);
 
-    main(["update", "--ledger", f.ledger_dir, "--node", "n1", "--input", f.input("u1.json", { state: "passed", tokens: { total_tokens: 1500 }, duration_ms: 1200 })]);
+    main(["update", "--ledger", f.ledger_dir, "--node", "n1", "--input", f.input("u1.json", { state: "passed", tokens: { input_tokens: 500, output_tokens: 1000, total_tokens: 1500 }, duration_ms: 1200 })]);
     main(["update", "--ledger", f.ledger_dir, "--node", "n2", "--input", f.input("u2.json", { state: "passed", tokens: 4200, duration_ms: 3500 })]);
 
     const status = main(["status", "--ledger", f.ledger_dir]);
@@ -396,5 +396,31 @@ test("Token accounting tracks per-node usage and status aggregates summary", () 
     assert.equal(status.nodes.n1.tokens.total_tokens, 1500);
     assert.equal(status.nodes.n1.duration_ms, 1200);
     assert.equal(status.nodes.n2.tokens, 4200);
+    assert.equal(main(["doctor", "--ledger", f.ledger_dir]).healthy, true);
   } finally { f.cleanup(); }
 });
+
+test("Token and duration input validation rejects strings, negatives, invalid totals and unknown keys", () => {
+  const f = makeFixture();
+  try {
+    main(["add-node", "--ledger", f.ledger_dir, "--input", f.input("n.json", node({ node_id: "n", role: "worker", objective: "测试校验" }))]);
+    main(["dispatch-record", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("d.json", { worker_id: "w", model: "inherited", reasoning_effort: "inherited" })]);
+    main(["attach", "--ledger", f.ledger_dir, "--node", "n", "--type", "artifact", "--input", f.input("a.json", artifactRef())]);
+
+    // String tokens
+    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad1.json", { state: "passed", tokens: { total_tokens: "100" } })]), /必须为非负安全整数/);
+    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad2.json", { state: "passed", tokens: "100" })]), /必须为非负安全整数/);
+
+    // Negative tokens or duration
+    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad3.json", { state: "passed", tokens: -50 })]), /必须为非负安全整数/);
+    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad4.json", { state: "passed", duration_ms: -100 })]), /duration_ms 必须为非负安全整数/);
+    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad5.json", { state: "passed", duration_ms: "1.5s" })]), /duration_ms 必须为非负安全整数/);
+
+    // Total mismatch: input (100) + output (200) != total (500)
+    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad6.json", { state: "passed", tokens: { input_tokens: 100, output_tokens: 200, total_tokens: 500 } })]), /total_tokens 必须等于 input_tokens \+ output_tokens/);
+
+    // Unknown keys in tokens
+    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad7.json", { state: "passed", tokens: { total_tokens: 100, cached_tokens: 50 } })]), /tokens 包含未知字段/);
+  } finally { f.cleanup(); }
+});
+

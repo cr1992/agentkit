@@ -2,7 +2,7 @@
 // @ts-check
 
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseJsonStrict } from './contract-tool.mjs';
@@ -17,6 +17,7 @@ const TOOL_KEYS = new Set(['name', 'parameters', 'returns']);
 const SNAPSHOT_KEYS = new Set(['schema_version', 'host', 'host_version', 'generated_at', 'expires_at', 'capability_fingerprint', 'source', 'observed']);
 const EVENT_KEYS = new Set(['schema_version', 'category', 'summary', 'confidence', 'evidence', 'portable']);
 const CONFIDENCE_VALUES = new Set(['observed-once', 'reproduced', 'schema-confirmed']);
+const ISO_TZ_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/u;
 
 export class CapabilityCacheError extends Error {}
 
@@ -28,7 +29,7 @@ function checkKeys(value, allowed, label) {
 }
 
 function assertHost(value) {
-  if (!HOST_PATTERN.test(value)) {
+  if (typeof value !== 'string' || !HOST_PATTERN.test(value)) {
     throw new CapabilityCacheError(`host must match ${HOST_PATTERN}`);
   }
   return value;
@@ -145,22 +146,22 @@ function readJsonFile(path) {
   }
 }
 
-function atomicWrite(path, value) {
+export function atomicWrite(path, value) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   try {
-    const { renameSync } = require('node:fs');
+    writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
     renameSync(temp, path);
-  } catch {
-    writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-    try { unlinkSync(temp); } catch {}
+  } finally {
+    try {
+      if (existsSync(temp)) unlinkSync(temp);
+    } catch {}
   }
 }
 
-function parseTime(value, label) {
-  if (typeof value !== 'string') {
-    throw new CapabilityCacheError(`${label} must be an ISO-8601 string`);
+export function parseTime(value, label) {
+  if (typeof value !== 'string' || !ISO_TZ_PATTERN.test(value)) {
+    throw new CapabilityCacheError(`${label} must be a valid ISO-8601 string with timezone (e.g. 2026-08-01T12:00:00Z)`);
   }
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) {
@@ -170,8 +171,8 @@ function parseTime(value, label) {
 }
 
 export function refreshSnapshot(root, host, observedValue, ttlHours = 168, now = null) {
-  if (ttlHours < 1 || ttlHours > 24 * 90) {
-    throw new CapabilityCacheError('ttl_hours must be between 1 and 2160');
+  if (!Number.isInteger(ttlHours) || ttlHours < 1 || ttlHours > 24 * 90) {
+    throw new CapabilityCacheError('ttl_hours must be an integer between 1 and 2160');
   }
   const current = now || new Date();
   const observed = normalizeObserved(observedValue, assertHost(host));
@@ -183,7 +184,7 @@ export function refreshSnapshot(root, host, observedValue, ttlHours = 168, now =
     generated_at: current.toISOString(),
     expires_at: expires.toISOString(),
     capability_fingerprint: capabilityFingerprint(observed),
-    source: 'live-tool-schema',
+    source: 'live-discovered',
     observed,
   };
   const path = snapshotPath(root, host);
@@ -201,122 +202,156 @@ export function refreshSnapshot(root, host, observedValue, ttlHours = 168, now =
 }
 
 export function inspectSnapshot(root, host, observedValue, now = null) {
-  const observed = normalizeObserved(observedValue, assertHost(host));
-  const path = snapshotPath(root, host);
-  const base = {
-    snapshot_path: path,
-    observations_path: observationsDir(root, host),
-    current_fingerprint: capabilityFingerprint(observed),
-  };
-  if (!existsSync(path)) {
-    return { ...base, status: 'absent', refresh_required: true, reasons: ['snapshot-missing'] };
-  }
   const current = now || new Date();
+  const path = snapshotPath(root, host);
+  if (!existsSync(path)) {
+    return {
+      status: 'absent',
+      snapshot_path: path,
+      refresh_required: true,
+      reasons: ['snapshot-file-missing'],
+    };
+  }
   let snapshot;
   try {
     snapshot = readJsonFile(path);
-    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
-      throw new CapabilityCacheError('snapshot must be a JSON object');
-    }
-    checkKeys(snapshot, SNAPSHOT_KEYS, 'snapshot');
-    if (snapshot.schema_version !== SCHEMA_VERSION) {
-      throw new CapabilityCacheError('snapshot schema_version is unsupported');
-    }
-    if (snapshot.host !== host) {
-      throw new CapabilityCacheError('snapshot host does not match');
-    }
-    const cachedObserved = normalizeObserved(snapshot.observed, host);
-    if (snapshot.host_version !== cachedObserved.host_version) {
-      throw new CapabilityCacheError('snapshot host_version does not match its observed descriptor');
-    }
-    if (snapshot.capability_fingerprint !== capabilityFingerprint(cachedObserved)) {
-      throw new CapabilityCacheError('snapshot fingerprint does not match its observed descriptor');
-    }
-    if (snapshot.source !== 'live-tool-schema') {
-      throw new CapabilityCacheError('snapshot source must be live-tool-schema');
-    }
-    const expiresAt = parseTime(snapshot.expires_at, 'snapshot.expires_at');
-    const generatedAt = parseTime(snapshot.generated_at, 'snapshot.generated_at');
-    if (generatedAt.getTime() > current.getTime() + 5 * 60 * 1000) {
-      throw new CapabilityCacheError('snapshot generated_at is in the future');
-    }
-    if (expiresAt.getTime() <= generatedAt.getTime() || expiresAt.getTime() - generatedAt.getTime() > 24 * 90 * 3600 * 1000) {
-      throw new CapabilityCacheError('snapshot validity window is invalid');
-    }
-    const reasons = [];
-    if (current.getTime() >= expiresAt.getTime()) {
-      reasons.push('snapshot-expired');
-    }
-    if (snapshot.host_version !== observed.host_version) {
-      reasons.push('host-version-changed');
-    }
-    if (snapshot.capability_fingerprint !== base.current_fingerprint) {
-      reasons.push('live-capability-fingerprint-changed');
-    }
+  } catch (error) {
     return {
-      ...base,
-      status: reasons.length ? 'stale' : 'fresh',
-      refresh_required: reasons.length > 0,
+      status: 'stale',
+      snapshot_path: path,
+      refresh_required: true,
+      reasons: [`snapshot-unreadable: ${error.message}`],
+    };
+  }
+
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+    return {
+      status: 'stale',
+      snapshot_path: path,
+      refresh_required: true,
+      reasons: ['snapshot-not-an-object'],
+    };
+  }
+  try {
+    checkKeys(snapshot, SNAPSHOT_KEYS, 'snapshot');
+  } catch (error) {
+    return {
+      status: 'stale',
+      snapshot_path: path,
+      refresh_required: true,
+      reasons: [error.message],
+    };
+  }
+
+  const reasons = [];
+  if (snapshot.schema_version !== SCHEMA_VERSION) reasons.push('schema-version-mismatch');
+  if (snapshot.host !== host) reasons.push('host-mismatch');
+
+  let expiresAt = null;
+  try {
+    expiresAt = parseTime(snapshot.expires_at, 'expires_at');
+    if (expiresAt.getTime() <= current.getTime()) reasons.push('snapshot-expired');
+  } catch (error) {
+    reasons.push(error.message);
+  }
+
+  let observed = null;
+  try {
+    observed = normalizeObserved(snapshot.observed, host);
+    if (capabilityFingerprint(observed) !== snapshot.capability_fingerprint) {
+      reasons.push('capability-fingerprint-mismatch');
+    }
+    if (observed.host_version !== snapshot.host_version) {
+      reasons.push('host-version-mismatch');
+    }
+  } catch (error) {
+    reasons.push(`snapshot-observed-invalid: ${error.message}`);
+  }
+
+  if (observedValue !== null && observedValue !== undefined) {
+    try {
+      const liveObserved = normalizeObserved(observedValue, host);
+      const liveFingerprint = capabilityFingerprint(liveObserved);
+      if (snapshot.capability_fingerprint && snapshot.capability_fingerprint !== liveFingerprint) {
+        reasons.push('live-capability-fingerprint-mismatch');
+      }
+      if (liveObserved.host_version !== 'unknown' && snapshot.host_version !== 'unknown' && liveObserved.host_version !== snapshot.host_version) {
+        reasons.push('live-host-version-mismatch');
+      }
+    } catch (error) {
+      reasons.push(`live-observed-invalid: ${error.message}`);
+    }
+  }
+
+  if (reasons.length) {
+    return {
+      status: 'stale',
+      snapshot_path: path,
+      refresh_required: true,
       reasons,
       snapshot,
     };
-  } catch (error) {
-    return { ...base, status: 'stale', refresh_required: true, reasons: [`snapshot-invalid: ${error.message}`] };
   }
+  return {
+    status: 'fresh',
+    snapshot_path: path,
+    refresh_required: false,
+    reasons: [],
+    snapshot,
+  };
 }
 
-export function recordObservation(root, host, value, now = null) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new CapabilityCacheError('observation must be a JSON object');
-  }
-  checkKeys(value, EVENT_KEYS, 'observation');
-  if (value.schema_version !== SCHEMA_VERSION) {
-    throw new CapabilityCacheError(`observation must declare schema_version ${SCHEMA_VERSION}`);
-  }
-  const category = value.category;
-  if (typeof category !== 'string' || !KEY_PATTERN.test(category)) {
-    throw new CapabilityCacheError('observation.category is invalid');
-  }
-  const summary = value.summary;
-  if (typeof summary !== 'string' || !summary.trim() || summary.length > 2000) {
-    throw new CapabilityCacheError('observation.summary must be 1-2000 characters');
-  }
-  const confidence = value.confidence;
-  if (!CONFIDENCE_VALUES.has(confidence)) {
-    throw new CapabilityCacheError('observation.confidence is invalid');
-  }
-  const evidence = flatMap(value.evidence || {}, 'observation.evidence');
-  const portable = value.portable === true;
-  if (value.portable !== undefined && typeof value.portable !== 'boolean') {
-    throw new CapabilityCacheError('observation.portable must be boolean');
-  }
+export function recordObservation(root, host, eventValue, now = null) {
   const current = now || new Date();
-  const snapshotFile = snapshotPath(root, assertHost(host));
-  let fingerprint = null;
-  if (existsSync(snapshotFile)) {
-    try {
-      const cached = readJsonFile(snapshotFile);
-      if (cached && typeof cached.capability_fingerprint === 'string' && /^sha256:[0-9a-f]{64}$/u.test(cached.capability_fingerprint)) {
-        fingerprint = cached.capability_fingerprint;
-      }
-    } catch {}
+  if (!eventValue || typeof eventValue !== 'object' || Array.isArray(eventValue)) {
+    throw new CapabilityCacheError('observation event must be a JSON object');
   }
+  checkKeys(eventValue, EVENT_KEYS, 'observation event');
+  if (eventValue.schema_version !== SCHEMA_VERSION) {
+    throw new CapabilityCacheError(`observation event must declare schema_version ${SCHEMA_VERSION}`);
+  }
+  const category = eventValue.category;
+  if (typeof category !== 'string' || !KEY_PATTERN.test(category)) {
+    throw new CapabilityCacheError('observation category is invalid');
+  }
+  const summary = eventValue.summary;
+  if (typeof summary !== 'string' || !summary || summary.length > 500) {
+    throw new CapabilityCacheError('observation summary must be a string up to 500 characters');
+  }
+  const confidence = eventValue.confidence;
+  if (!CONFIDENCE_VALUES.has(confidence)) {
+    throw new CapabilityCacheError(`confidence must be one of: ${Array.from(CONFIDENCE_VALUES).join(', ')}`);
+  }
+  const evidence = eventValue.evidence;
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
+    throw new CapabilityCacheError('evidence must be a JSON object');
+  }
+  const portable = eventValue.portable;
+  if (typeof portable !== 'boolean') {
+    throw new CapabilityCacheError('portable must be a boolean');
+  }
+
+  const inspection = inspectSnapshot(root, host, null, current);
+  const fingerprint = inspection.snapshot ? inspection.snapshot.capability_fingerprint : null;
+  const eventId = randomUUID();
+  const timestamp = current.toISOString().replace(/[:.]/gu, '-');
+  const filename = `${timestamp}_${category}_${eventId.slice(0, 8)}.json`;
+  const dir = observationsDir(root, host);
+  const path = join(dir, filename);
+
   const record = {
     schema_version: SCHEMA_VERSION,
-    host,
-    recorded_at: current.toISOString(),
+    event_id: eventId,
+    host: assertHost(host),
+    observed_at: current.toISOString(),
     capability_fingerprint: fingerprint,
-    event: {
-      category,
-      summary: summary.trim(),
-      confidence,
-      evidence,
-      portable,
-    },
+    category,
+    summary,
+    confidence,
+    evidence: flatMap(evidence, 'evidence'),
+    portable,
   };
-  const directory = observationsDir(root, host);
-  const filename = `${current.toISOString().replace(/[:.]/gu, '')}-${randomUUID()}.json`;
-  const path = join(directory, filename);
+
   try {
     atomicWrite(path, record);
   } catch (error) {
@@ -331,6 +366,9 @@ export function recordObservation(root, host, value, now = null) {
 }
 
 export function parseCli(argv = process.argv.slice(2)) {
+  if (!argv.length) {
+    throw new CapabilityCacheError('missing command: status, refresh, or observe');
+  }
   const command = argv[0];
   if (!['status', 'refresh', 'observe'].includes(command)) {
     throw new CapabilityCacheError('command must be status, refresh, or observe');
@@ -338,16 +376,56 @@ export function parseCli(argv = process.argv.slice(2)) {
   const options = { command, host: '', repo: '.', scope: 'global', config_dir: null, observed: null, ttl_hours: 168, event: null };
   for (let i = 1; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === '--host') options.host = argv[++i];
-    else if (arg === '--repo') options.repo = argv[++i];
-    else if (arg === '--scope') options.scope = argv[++i];
-    else if (arg === '--config-dir') options.config_dir = argv[++i];
-    else if (arg === '--observed') options.observed = argv[++i];
-    else if (arg === '--ttl-hours') options.ttl_hours = Number(argv[++i]);
-    else if (arg === '--event') options.event = argv[++i];
-    else throw new CapabilityCacheError(`unknown option: ${arg}`);
+    if (arg === '--host') {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw new CapabilityCacheError('缺少 --host 参数值');
+      options.host = argv[++i];
+    } else if (arg === '--repo') {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw new CapabilityCacheError('缺少 --repo 参数值');
+      options.repo = argv[++i];
+    } else if (arg === '--scope') {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw new CapabilityCacheError('缺少 --scope 参数值');
+      options.scope = argv[++i];
+    } else if (arg === '--config-dir') {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw new CapabilityCacheError('缺少 --config-dir 参数值');
+      options.config_dir = argv[++i];
+    } else if (arg === '--observed') {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw new CapabilityCacheError('缺少 --observed 参数值');
+      options.observed = argv[++i];
+    } else if (arg === '--ttl-hours') {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw new CapabilityCacheError('缺少 --ttl-hours 参数值');
+      const raw = argv[++i];
+      const parsed = Number(raw);
+      if (!Number.isInteger(parsed) || !/^-?\d+$/u.test(raw)) {
+        throw new CapabilityCacheError(`--ttl-hours must be an integer, got ${JSON.stringify(raw)}`);
+      }
+      options.ttl_hours = parsed;
+    } else if (arg === '--event') {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw new CapabilityCacheError('缺少 --event 参数值');
+      options.event = argv[++i];
+    } else {
+      throw new CapabilityCacheError(`unknown option: ${arg}`);
+    }
   }
   if (!options.host) throw new CapabilityCacheError('缺少 --host');
+  assertHost(options.host);
+
+  if (!['global', 'project'].includes(options.scope)) {
+    throw new CapabilityCacheError(`scope must be "global" or "project", got ${JSON.stringify(options.scope)}`);
+  }
+  if (options.command === 'status' && !options.observed) {
+    throw new CapabilityCacheError('status command requires --observed <path>');
+  }
+  if (options.command === 'refresh') {
+    if (!options.observed) {
+      throw new CapabilityCacheError('refresh command requires --observed <path>');
+    }
+    if (options.ttl_hours < 1 || options.ttl_hours > 2160) {
+      throw new CapabilityCacheError(`--ttl-hours must be between 1 and 2160, got ${options.ttl_hours}`);
+    }
+  }
+  if (options.command === 'observe' && !options.event) {
+    throw new CapabilityCacheError('observe command requires --event <path>');
+  }
   return options;
 }
 

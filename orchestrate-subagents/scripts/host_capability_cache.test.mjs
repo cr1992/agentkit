@@ -1,11 +1,11 @@
 // @ts-check
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { CapabilityCacheError, inspectSnapshot, normalizeObserved, recordObservation, refreshSnapshot } from './host_capability_cache.mjs';
+import { CapabilityCacheError, inspectSnapshot, normalizeObserved, parseCli, parseTime, recordObservation, refreshSnapshot } from './host_capability_cache.mjs';
 
 const OBSERVED_SAMPLE = {
   schema_version: 1,
@@ -62,7 +62,7 @@ test('Snapshot lifecycle: absent -> refresh -> fresh -> expire -> stale', () => 
   }
 });
 
-test('Record observation event', () => {
+test('Record observation event and atomic file write cleanup', () => {
   const tempDir = mkdtempSync(join(tmpdir(), 'test-cap-observe-'));
   try {
     refreshSnapshot(tempDir, 'codex', OBSERVED_SAMPLE, 24);
@@ -77,7 +77,68 @@ test('Record observation event', () => {
     const res = recordObservation(tempDir, 'codex', observation);
     assert.equal(res.status, 'recorded');
     assert.ok(res.record.capability_fingerprint);
+
+    // Verify atomic file cleanup: no leftover .tmp files
+    const capDir = join(tempDir, 'capabilities');
+    const files = readdirSync(capDir);
+    assert.ok(files.includes('codex.json'));
+    assert.ok(!files.some((f) => f.endsWith('.tmp')));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+test('Timezone validation strictly requires explicit timezone in ISO strings', () => {
+  // Valid timestamps with UTC Z or offset
+  const dateZ = parseTime('2026-08-01T12:00:00Z', 'test_time');
+  assert.equal(dateZ.toISOString(), '2026-08-01T12:00:00.000Z');
+
+  const dateOffset = parseTime('2026-08-01T20:00:00+08:00', 'test_time');
+  assert.equal(dateOffset.toISOString(), '2026-08-01T12:00:00.000Z');
+
+  // Invalid: missing timezone (local time string)
+  assert.throws(
+    () => parseTime('2026-08-01T12:00:00', 'test_time'),
+    /must be a valid ISO-8601 string with timezone/
+  );
+
+  // Invalid: garbage string
+  assert.throws(
+    () => parseTime('not-a-date', 'test_time'),
+    /must be a valid ISO-8601 string with timezone/
+  );
+});
+
+test('CLI parser validates required commands, parameters, scope, and TTL integer range', () => {
+  // Missing command
+  assert.throws(() => parseCli([]), /missing command/);
+
+  // Unknown command
+  assert.throws(() => parseCli(['invalid']), /command must be status, refresh, or observe/);
+
+  // Missing --host
+  assert.throws(() => parseCli(['status', '--observed', 'obs.json']), /缺少 --host/);
+
+  // Status missing --observed
+  assert.throws(() => parseCli(['status', '--host', 'codex']), /status command requires --observed/);
+
+  // Refresh missing --observed
+  assert.throws(() => parseCli(['refresh', '--host', 'codex']), /refresh command requires --observed/);
+
+  // Refresh invalid TTL
+  assert.throws(() => parseCli(['refresh', '--host', 'codex', '--observed', 'obs.json', '--ttl-hours', 'invalid']), /--ttl-hours must be an integer/);
+  assert.throws(() => parseCli(['refresh', '--host', 'codex', '--observed', 'obs.json', '--ttl-hours', '0']), /--ttl-hours must be between 1 and 2160/);
+  assert.throws(() => parseCli(['refresh', '--host', 'codex', '--observed', 'obs.json', '--ttl-hours', '5000']), /--ttl-hours must be between 1 and 2160/);
+
+  // Observe missing --event
+  assert.throws(() => parseCli(['observe', '--host', 'codex']), /observe command requires --event/);
+
+  // Invalid scope
+  assert.throws(() => parseCli(['status', '--host', 'codex', '--observed', 'obs.json', '--scope', 'invalid']), /scope must be "global" or "project"/);
+
+  // Valid status
+  const parsed = parseCli(['status', '--host', 'codex', '--observed', 'obs.json', '--scope', 'project']);
+  assert.equal(parsed.command, 'status');
+  assert.equal(parsed.host, 'codex');
+  assert.equal(parsed.scope, 'project');
 });

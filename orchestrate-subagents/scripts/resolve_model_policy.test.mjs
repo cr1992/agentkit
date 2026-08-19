@@ -182,3 +182,33 @@ test('Constraints and minimum effort enforcement', () => {
     rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+test('Host-level budget_mode configuration and hierarchical precedence', () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'test-policy-host-budget-'));
+  try {
+    const globalRoot = join(tempDir, 'global');
+    const projectRoot = join(tempDir, 'project', '.agents', 'orchestrate-subagents');
+    writeJson(join(globalRoot, 'policy.json'), { ...COMMON, budget_mode: 'balanced' });
+    writeJson(join(globalRoot, 'hosts', 'codex.json'), { ...CODEX, budget_mode: 'economy' });
+
+    // Host config specifies economy, so worker (implementation: medium) is downgraded to low
+    const resHost = resolve(makeArgs(globalRoot, projectRoot, { role: 'worker' }));
+    assert.equal(resHost.budget_mode, 'economy');
+    assert.equal(resHost.effort, 'low');
+
+    // CLI override takes precedence over host
+    const resCli = resolve(makeArgs(globalRoot, projectRoot, { role: 'worker', budget_mode: 'quality' }));
+    assert.equal(resCli.budget_mode, 'quality');
+    assert.equal(resCli.effort, 'high');
+
+    // Invalid budget_mode in host.json must throw PolicyError
+    writeJson(join(globalRoot, 'hosts', 'codex.json'), { ...CODEX, budget_mode: 'invalid_mode' });
+    assert.throws(
+      () => resolve(makeArgs(globalRoot, projectRoot, { role: 'worker' })),
+      /budget_mode must be one of/
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+

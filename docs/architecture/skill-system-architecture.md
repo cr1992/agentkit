@@ -973,8 +973,23 @@ adapter 的 app 相对路径允许 suffix-relative 低置信度兜底。低置�
 | `capabilities --json` | 声明 schema 与 provider 能力 |
 | `batch-integrate --plan <json>` | 校验冻结计划新鲜度，建/复用一次性候选树并按冻结顺序合成精确 SHA |
 | `batch-step <candidate> --step --state` | 登记 Profile 声明的合成后再生成步骤的执行结果 |
+| `plan-batch --scan-conflicts` | 冻结前对 included 输入两两写树式干跑，输出冲突矩阵 |
 
 它继续只拥有 Git 隔离与生命周期，不读取 Verification verdict，不推进 Loop iteration。
+
+`--scan-conflicts` 是 `plan-batch` 的**附加输出**，产生 `conflict_scan`（`schema_version: 1`）：
+`pairs[]` / `against_target[]` 各给 `state`、`conflict_files`、`adjacent_files`、`files[]`、
+`files_total`、`conflict_notes[]`，`summary` 给冲突面排序与产物类命中。它落在 `cmdPlanBatch`，
+**不进 `computeBatchPlan`**——后者同时是 `batch-integrate` 的新鲜度重算口径，把扫描塞进去会让每次
+合成白跑一遍 `merge-tree`，也会把决策辅助信息混进"必须逐项比对"的冻结契约。指纹只绑 target SHA
+与有序输入 SHA，加不加这个 flag 都是同一份计划；带 `conflict_scan` 的计划仍是合法冻结契约。
+
+运行时边界与 §8.2 一致：干跑用 `git merge-tree --write-tree`，合并在对象库里算完，只产生未被任何
+ref 引用的临时 tree/blob，不动工作区、index、HEAD 和任何 ref，因此不破坏 `plan-batch` 的只读语义，
+也不需要先建候选树。三条 fail-closed 口径：冲突判定只认 `merge-tree` 退出码（git-merge-tree(1)
+MISTAKES TO AVOID 明确禁止把空的 Conflicted file info 当成干净合并，目录重命名类冲突就属此列）；
+相邻面算不出来时 `adjacent_files` 保持 `null` 并落 `incomplete`，不退化成空集；Git 低于 2.39 整段回报
+`supported: false`（2.38 的 `-z` 信息段还不是结构化记录，按新格式解会错判冲突类型），计划照常冻结。
 
 `batch-integrate` 把「合成」机械化，但**不扩大执行面**：它不跑任何门禁命令，也不执行 Profile 中的
 任何内容。Profile 的 `post_integrate_steps` 是纯声明（只有 `name` / `hint`，未知键 fail-closed），
@@ -1226,7 +1241,7 @@ Loop 收到 verification abort 时：
 需要证明多个 feature 合成后兼容时，在 `audit` 之后插入批量集成段：
 
 ~~~text
-plan-batch（冻结 target 与有序输入）
+plan-batch（冻结 target 与有序输入；可选 --scan-conflicts 出冲突矩阵定合并顺序）
 → batch-integrate（建/复用一次性候选树并合成）
 → controller 跑门禁 + batch-step 登记合成后再生成步骤
 → 各输入按可独立评审的交付单元分别合入

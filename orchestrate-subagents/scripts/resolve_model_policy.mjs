@@ -10,7 +10,7 @@ import { parseJsonStrict } from './contract-tool.mjs';
 const SCHEMA_VERSION = 1;
 export const BUDGET_MODES = new Set(['economy', 'balanced', 'quality']);
 const POLICY_KEYS = new Set(['schema_version', 'routes', 'task_overrides', 'budget_mode', 'budget_modes']);
-const HOST_KEYS = new Set(['schema_version', 'host', 'effort_order', 'aliases', 'profiles', 'constraints', 'budget_modes']);
+const HOST_KEYS = new Set(['schema_version', 'host', 'effort_order', 'aliases', 'profiles', 'constraints', 'budget_mode', 'budget_modes']);
 const PROFILE_KEYS = new Set(['model', 'effort', 'channel', 'dispatch']);
 const CONSTRAINT_KEYS = new Set(['allowed_models', 'minimum_effort']);
 const DISPATCH_PROVENANCE = new Set(['explicit', 'inherited-controller', 'host-default']);
@@ -168,6 +168,10 @@ function validateHost(data, label) {
     }
   }
 
+  if (data.budget_mode !== undefined && !BUDGET_MODES.has(data.budget_mode)) {
+    throw new PolicyError(`${label}.budget_mode must be one of ${Array.from(BUDGET_MODES).sort().join(', ')}`);
+  }
+
   if (data.budget_modes !== undefined) {
     const bModes = assertObject(data.budget_modes, `${label}.budget_modes`);
     for (const [modeName, modeVal] of Object.entries(bModes)) {
@@ -232,10 +236,13 @@ function adjustEffortByBudget(effort, budgetMode, effortOrder, effortRank, minim
         return effortOrder[candidateIndex];
       }
     }
-  } else if (budgetMode === 'quality') {
+    return effort;
+  }
+  if (budgetMode === 'quality') {
     if (currentIndex < effortOrder.length - 1) {
       return effortOrder[currentIndex + 1];
     }
+    return effort;
   }
   return effort;
 }
@@ -247,12 +254,16 @@ export function resolve(args) {
   const [globalPolicyPath, globalHostPath] = configPaths(globalRoot, args.host);
   const [projectPolicyPath, projectHostPath] = configPaths(projectRoot, args.host);
 
+  let globalPolicy = null;
+  let projectPolicy = null;
   const sources = [];
   let policy = { routes: {}, task_overrides: {} };
-  for (const path of [globalPolicyPath, projectPolicyPath]) {
+  for (const [path, isProject] of [[globalPolicyPath, false], [projectPolicyPath, true]]) {
     const data = loadJson(path, 'policy');
     if (data !== null) {
       validatePolicy(data, path);
+      if (isProject) projectPolicy = data;
+      else globalPolicy = data;
       const { schema_version, ...rest } = data;
       policy = mergeDict(policy, rest);
       sources.push(path);
@@ -280,7 +291,12 @@ export function resolve(args) {
     effortRank
   );
 
-  const budgetMode = args.budget_mode || policy.budget_mode || 'balanced';
+  const budgetMode = args.budget_mode
+    || projectHost?.budget_mode
+    || projectPolicy?.budget_mode
+    || globalHost?.budget_mode
+    || globalPolicy?.budget_mode
+    || 'balanced';
   if (!BUDGET_MODES.has(budgetMode)) {
     throw new PolicyError(`budget_mode ${JSON.stringify(budgetMode)} must be one of ${Array.from(BUDGET_MODES).sort().join(', ')}`);
   }
