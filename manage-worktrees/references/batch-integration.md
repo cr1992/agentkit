@@ -30,6 +30,62 @@
 
 fingerprint 只绑定 target SHA 和有序输入 SHA，不纳入本机路径、repository UUID 或平台默认目录，因此同一组 Git 对象在不同宿主上保持一致。验收契约与环境指纹另外记录；它们变化时即使 Git fingerprint 未变，报告也必须标记 `stale`。
 
+## 冻结前的冲突预测
+
+冲突对和冲突文件如果只在真的合到一半时才暴露，合并排序和"这两支是不是该并成一支"就都成了事后
+补救。`plan-batch --scan-conflicts` 把这份信息提前到规划期。
+
+**形态是 `plan-batch` 的附加输出，不是独立子命令。** 理由：矩阵要针对的恰好是这份计划**冻结下来的
+那一组输入**——同一批 selector、同一个 target、同一套折叠与准入规则（dirty / HEAD 漂移 / 未推送的
+输入根本不该进矩阵，否则读到的是不可复现的现场）。独立子命令得把选择器解析、准入和折叠再实现
+一遍，两套口径迟早漂移。因此扫描只挂在 `cmdPlanBatch` 上，**不进 `computeBatchPlan`**：后者同时是
+`batch-integrate` 的新鲜度重算口径，把扫描塞进去会让每次合成都白跑一遍 `merge-tree`，也会把决策
+辅助信息混进"必须逐项比对"的冻结契约。指纹只绑 SHA，加不加 flag 都一样。
+
+干跑用 `git merge-tree --write-tree`：合并在**对象库**里算完，只产生未被任何 ref 引用的临时
+tree/blob（随 gc 回收），不动工作区、index、HEAD 和任何 ref，因此可以在 `plan-batch` 的只读语义下
+跑，也不需要先建候选树。
+
+**冲突判定只认退出码，不认文件条目数。** git-merge-tree(1) 的 EXIT STATUS 是 0=可自动合并、
+1=有冲突、其他=Git 自身失败；同一页的 MISTAKES TO AVOID 明确写着不得把空的 Conflicted file info
+当成干净合并——有几类目录重命名冲突就是退出码 1 却没有任何 unmerged 文件条目。按条目数判 clean
+会把真冲突报成"没事"，这是最坏的一种错。这类格子的信息全在 `conflict_notes` 里，人读输出用
+`[NOTE]` 单独打出来。
+
+**Git ≥ 2.39。** `merge-tree --write-tree` 2.38 就有，但本扫描依赖 `-z` 信息段里的结构化 NUL 记录
+（`<路径数>NUL<路径>...NUL<conflict-type>NUL<message>NUL`，其中 `<conflict-type>` 是 man page 明说的
+stable string）；2.38 的 `-z` 信息段还是自由文本，按结构化格式去解会把消息当类型，冲突类型粗分
+随之错判。与其写一段本机无法实测的 2.38 兼容分支，不如把线抬到 2.39 并 fail-closed 降级：低版本
+整段回报 `supported: false` 并说明原因，计划本身照常冻结——**宁可没有矩阵，不要一份可能错的矩阵。**
+
+输出结构（`conflict_scan`）：
+
+- `pairs[]`：两两干跑。每对给 `merge_base`、`conflict_files`、`adjacent_files`、`state`、
+  `files[]`、`files_total`、`conflict_notes[]`。
+- `state` 五态：`conflict`（退出码 1）、`adjacent`（可自动合但有同文件相邻）、`clean`、
+  `incomplete`（能自动合，但相邻面没算出来）、`error`（merge-tree 自身失败）。
+- `adjacent_files` 允许为 `null`，表示相邻面**未知**（merge base 解析不了、`git diff` 失败或超时）。
+  未知一律显式标注，绝不退化成 `0`——空集会被读成"确认没有相邻文件"，那是静默降级。汇总里
+  `incomplete_pairs`、`unknown_adjacency_rows`、`pathless_conflict_pairs` 分别计数，人读输出在存在
+  未完成格子时打 `[WARN]`：矩阵不完整就不能据它断言"没有冲突"。
+- `against_target[]`：每个输入各自对 target 干跑一次。它常常全是 `clean`——这恰好说明冲突只在
+  "合到一起"时出现，正是矩阵要提前暴露的东西。
+- `files[].class` 三分：`overlapping`（Git 报的内容冲突，同 hunk）、`structural`（改/删、重命名、
+  distinct types 这类非内容重叠冲突，处置方式和挑 hunk 完全不同）、`adjacent`（两支相对
+  merge base 都改了同一文件，但能自动合）。`adjacent` 单独成类是因为语义冲突只会藏在这一格，
+  机器判不了，必须交给人看清单。
+- **截断只发生在展示层。** `files[]` 每对上限 50 项并置 `files_truncated`，但 `files_total`、
+  `conflict_files` 和 `summary.regenerated_paths` 都跑在**未截断的全量清单**上——先截断再统计会让
+  排在 50 项之后的 lock/golden 从产物类汇总里凭空消失，而那恰恰是最需要被看见的一类。
+- `files[].regenerated`：命中 lock / golden / codegen / dist 这类"只能在合成态重新生成"的产物
+  （见 Profile 的 `post_integrate_steps`）。命中只是提示，portable core 不猜也不代跑生成命令。
+- `summary.inputs[]`：按冲突面降序，直接支撑"冲突面大的压轴"这条排序口径。排序主键是
+  `conflicting_peers` 而不是 `conflict_files`——没有文件条目的目录重命名类冲突同样是真冲突，
+  不能因为 `conflict_files=0` 被排到干净输入后面。
+
+**已知边界**：两两干跑预测的是**成对**冲突，实际合成是顺序累积的三方合并，两两干净不等于合成一定
+干净。矩阵是决策输入，不是通过证明，替代不了 `batch-integrate` 的实合与门禁。
+
 ## 候选树状态
 
 ```text

@@ -18,6 +18,32 @@ const SHA_A = 'a'.repeat(40);
 const SHA_B = 'b'.repeat(40);
 
 function node(value, verification = SELF_CHECK) { return { ...value, verification }; }
+function dispatch(workerId, overrides = {}) {
+  return {
+    schema_version: 2,
+    worker_id: workerId,
+    orchestration_mode: 'full',
+    attempt_id: `attempt-${workerId}`,
+    attempt: 1,
+    previous_attempt_id: null,
+    tier: 'primary',
+    model: 'provider-primary-current',
+    reasoning_effort: 'medium',
+    adjustment_action: 'initial',
+    failure_kind: null,
+    failure_ref: null,
+    selection_reason: '明确实现任务，使用已确认的常规执行配置',
+    config_source: ['global:/config/hosts/test.json'],
+    configuration_state: 'persisted-config',
+    model_resolution_state: 'discovered-and-validated',
+    capability_source: 'cache:/config/capabilities/test.json+live-validation',
+    capability_fingerprint: `sha256:${'e'.repeat(64)}`,
+    dispatch_provenance: 'explicit',
+    token_budget: 'unsupported',
+    max_attempts: 2,
+    ...overrides,
+  };
+}
 function artifactRef(overrides = {}) { return { schema_version: 1, provider: 'caller-supplied', repository_id: 'git:sha1:test', object_format: 'sha1', base_sha: SHA_A, artifact_sha: SHA_B, ...overrides }; }
 function evidencePackage(contract, artifact, overrides = {}) {
   const evidence = {
@@ -57,19 +83,62 @@ test('任务图 barrier、派发回执、稳定产物和终态由 ledger 机械�
     main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('a.json', node({ node_id: 'a', objective: '先完成 A' }))]);
     main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('b.json', node({ node_id: 'b', objective: '再完成 B' }))]);
     main(['add-edge', '--ledger', f.ledger_dir, '--input', f.input('edge.json', { from: 'a', to: 'b', kind: 'barrier' })]);
-    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'b', '--input', f.input('dispatch-b-early.json', { worker_id: 'b1', model: 'inherited', reasoning_effort: 'inherited' })]), /依赖/);
-    main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'a', '--input', f.input('dispatch-a.json', { worker_id: 'a1', model: 'inherited', reasoning_effort: 'inherited' })]);
+    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'b', '--input', f.input('dispatch-b-early.json', dispatch('b1'))]), /依赖/);
+    main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'a', '--input', f.input('dispatch-a.json', dispatch('a1'))]);
     assert.throws(() => main(['update', '--ledger', f.ledger_dir, '--node', 'a', '--input', f.input('pass-a-early.json', { state: 'passed' })]), /稳定交付物/);
     main(['attach', '--ledger', f.ledger_dir, '--node', 'a', '--type', 'worktree', '--input', f.input('worktree.json', { worktree_id: 'wt-a' })]);
     assert.throws(() => main(['update', '--ledger', f.ledger_dir, '--node', 'a', '--input', f.input('pass-a-worktree-only.json', { state: 'passed' })]), /稳定交付物/);
-    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'b', '--input', f.input('dispatch-b-still-blocked.json', { worker_id: 'b1', model: 'inherited', reasoning_effort: 'inherited' })]), /依赖/);
+    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'b', '--input', f.input('dispatch-b-still-blocked.json', dispatch('b1'))]), /依赖/);
     main(['attach', '--ledger', f.ledger_dir, '--node', 'a', '--type', 'artifact', '--input', f.input('artifact.json', artifactRef())]);
     main(['update', '--ledger', f.ledger_dir, '--node', 'a', '--input', f.input('pass-a.json', { state: 'passed' })]);
-    main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'b', '--input', f.input('dispatch-b.json', { worker_id: 'b1', model: 'inherited', reasoning_effort: 'inherited' })]);
+    main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'b', '--input', f.input('dispatch-b.json', dispatch('b1'))]);
     main(['attach', '--ledger', f.ledger_dir, '--node', 'b', '--type', 'report', '--input', f.input('report.json', { report_id: 'report-b' })]);
     main(['update', '--ledger', f.ledger_dir, '--node', 'b', '--input', f.input('pass-b.json', { state: 'passed' })]);
     assert.equal(main(['status', '--ledger', f.ledger_dir]).summary.completion_ready, true);
     assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
+  } finally { f.cleanup(); }
+});
+
+test('派发记录必须完整绑定模型、强度、配置状态与能力证据', () => {
+  const f = makeFixture();
+  try {
+    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('node.json', node({ node_id: 'n', objective: 'audit dispatch' }))]);
+    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'n', '--input', f.input('minimal.json', { schema_version: 1, worker_id: 'w', model: 'provider-primary-current', reasoning_effort: 'medium' })]), /字段不完整/);
+    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'n', '--input', f.input('unknown.json', dispatch('w', { unexpected: true }))]), /未知字段/);
+    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'n', '--input', f.input('state.json', dispatch('w', { configuration_state: 'auto-guessed' }))]), /configuration_state/);
+    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'n', '--input', f.input('model-state.json', dispatch('w', { model_resolution_state: 'user-explicit-unverifiable' }))]), /用户当轮显式模型/);
+    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'n', '--input', f.input('host-default-state.json', dispatch('w', { model_resolution_state: 'host-default-unexposed' }))]), /宿主默认派发/);
+    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'n', '--input', f.input('fingerprint.json', dispatch('w', { capability_fingerprint: null }))]), /capability_fingerprint/);
+    const recorded = main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'n', '--input', f.input('valid.json', dispatch('w', { configuration_state: 'session-confirmed', token_budget: 12000, max_attempts: 3 }))]);
+    assert.equal(recorded.nodes.n.dispatch.model, 'provider-primary-current');
+    assert.equal(recorded.nodes.n.dispatch.reasoning_effort, 'medium');
+    assert.equal(recorded.nodes.n.dispatch.configuration_state, 'session-confirmed');
+    assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
+  } finally { f.cleanup(); }
+});
+
+test('验收失败后的动态重派必须创建新节点并绑定前序失败证据', () => {
+  const f = makeFixture();
+  try {
+    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('attempt-1-node.json', node({ node_id: 'work.attempt-1', objective: '完成实现第一次尝试', required: false }))]);
+    main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'work.attempt-1', '--input', f.input('attempt-1-dispatch.json', dispatch('worker-1', { attempt_id: 'work-attempt-1' }))]);
+    const withFailure = main(['attach', '--ledger', f.ledger_dir, '--node', 'work.attempt-1', '--type', 'report', '--input', f.input('failure-report.json', { report_type: 'acceptance_failure', failure_kind: 'reasoning_gap', summary: '跨模块约束遗漏' })]);
+    const failureRef = withFailure.attachments.at(-1).digest;
+    main(['update', '--ledger', f.ledger_dir, '--node', 'work.attempt-1', '--input', f.input('attempt-1-failed.json', { state: 'failed', reason: '验收未通过' })]);
+
+    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('attempt-2-node.json', node({ node_id: 'work.attempt-2', objective: '根据失败证据重新实现' }))]);
+    const rerouted = dispatch('worker-2', {
+      attempt_id: 'work-attempt-2', attempt: 2, previous_attempt_id: 'work-attempt-1',
+      tier: 'frontier', model: 'provider-frontier-current', reasoning_effort: 'high',
+      adjustment_action: 'promote_tier', failure_kind: 'reasoning_gap', failure_ref: failureRef,
+      selection_reason: '验收证据显示跨模块推理缺口，提升到本地更高 tier',
+    });
+    const result = main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'work.attempt-2', '--input', f.input('attempt-2-dispatch.json', rerouted)]);
+    assert.equal(result.nodes['work.attempt-2'].dispatch.previous_attempt_id, 'work-attempt-1');
+    assert.equal(result.nodes['work.attempt-2'].dispatch.failure_ref, failureRef);
+
+    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('bad-retry-node.json', node({ node_id: 'work.bad', objective: '错误重派', required: false }))]);
+    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'work.bad', '--input', f.input('bad-retry.json', { ...rerouted, attempt_id: 'work-attempt-bad', failure_ref: `sha256:${'f'.repeat(64)}` })]), /failure_ref/);
   } finally { f.cleanup(); }
 });
 
@@ -143,7 +212,13 @@ test('node 权限、CLI typo、rebuild revision 与 journal 链均 fail closed',
 
 test('capabilities --json 保持统一能力发现兼容', () => {
   const output = execFileSync(process.execPath, [LEDGER_SCRIPT, 'capabilities', '--json'], { encoding: 'utf8' });
-  assert.equal(JSON.parse(output).skill, 'orchestrate-subagents');
+  const capabilities = JSON.parse(output);
+  assert.equal(capabilities.skill, 'orchestrate-subagents');
+  assert.equal(capabilities.protocol_version, '1.1.0');
+  assert.equal(capabilities.runtime_version, '1.5.0');
+  assert.ok(capabilities.features.includes('worker-capability-preflight'));
+  assert.ok(capabilities.features.includes('lightweight-reflection'));
+  assert.ok(capabilities.features.includes('evidence-bound-dynamic-reroute'));
 });
 
 test('dead owner 遗留的 ledger reclaim 子锁可自愈', () => {
@@ -373,5 +448,56 @@ test('parent 的额外顶层字段被投影继承，并原样走完独立验收�
     const passed = main(['update', '--ledger', f.ledger_dir, '--node', 'verified', '--input', f.input('pass.json', { state: 'passed', verification_ref: attached.nodes.verified.evidence.at(-1).digest })]);
     assert.equal(passed.nodes.verified.verification_assurance, 'independent_evidence');
     assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
+  } finally { f.cleanup(); }
+});
+
+test("Token accounting tracks per-node usage and status aggregates summary", () => {
+  const f = makeFixture();
+  try {
+    main(["add-node", "--ledger", f.ledger_dir, "--input", f.input("n1.json", node({ node_id: "n1", role: "scout", objective: "探索目录" }))]);
+    main(["add-node", "--ledger", f.ledger_dir, "--input", f.input("n2.json", node({ node_id: "n2", role: "worker", objective: "实现功能" }))]);
+    main(["dispatch-record", "--ledger", f.ledger_dir, "--node", "n1", "--input", f.input("d1.json", dispatch("w1"))]);
+    main(["dispatch-record", "--ledger", f.ledger_dir, "--node", "n2", "--input", f.input("d2.json", dispatch("w2"))]);
+    main(["attach", "--ledger", f.ledger_dir, "--node", "n1", "--type", "artifact", "--input", f.input("a1.json", artifactRef())]);
+    main(["attach", "--ledger", f.ledger_dir, "--node", "n2", "--type", "artifact", "--input", f.input("a2.json", artifactRef())]);
+
+    main(["update", "--ledger", f.ledger_dir, "--node", "n1", "--input", f.input("u1.json", { state: "passed", tokens: { input_tokens: 500, output_tokens: 1000, total_tokens: 1500 }, duration_ms: 1200 })]);
+    main(["update", "--ledger", f.ledger_dir, "--node", "n2", "--input", f.input("u2.json", { state: "passed", tokens: 4200, duration_ms: 3500 })]);
+
+    const status = main(["status", "--ledger", f.ledger_dir]);
+    assert.equal(status.summary.token_accounting.total_tokens, 5700);
+    assert.equal(status.summary.token_accounting.by_role.scout, 1500);
+    assert.equal(status.summary.token_accounting.by_role.worker, 4200);
+    assert.equal(status.nodes.n1.tokens.total_tokens, 1500);
+    assert.equal(status.nodes.n1.duration_ms, 1200);
+    assert.equal(status.nodes.n2.tokens, 4200);
+    assert.equal(main(["doctor", "--ledger", f.ledger_dir]).healthy, true);
+  } finally { f.cleanup(); }
+});
+
+test("Token and duration input validation rejects strings, negatives, invalid totals and unknown keys", () => {
+  const f = makeFixture();
+  try {
+    main(["add-node", "--ledger", f.ledger_dir, "--input", f.input("n.json", node({ node_id: "n", role: "worker", objective: "测试校验" }))]);
+    main(["dispatch-record", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("d.json", dispatch("w"))]);
+    main(["attach", "--ledger", f.ledger_dir, "--node", "n", "--type", "artifact", "--input", f.input("a.json", artifactRef())]);
+
+    // String tokens
+    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad1.json", { state: "passed", tokens: { input_tokens: 40, output_tokens: 60, total_tokens: "100" } })]), /必须为非负安全整数/);
+    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad2.json", { state: "passed", tokens: "100" })]), /必须为非负安全整数/);
+
+    // Negative tokens or duration
+    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad3.json", { state: "passed", tokens: -50 })]), /必须为非负安全整数/);
+    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad4.json", { state: "passed", duration_ms: -100 })]), /duration_ms 必须为非负安全整数/);
+    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad5.json", { state: "passed", duration_ms: "1.5s" })]), /duration_ms 必须为非负安全整数/);
+
+    // Total mismatch: input (100) + output (200) != total (500)
+    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad6.json", { state: "passed", tokens: { input_tokens: 100, output_tokens: 200, total_tokens: 500 } })]), /total_tokens 必须等于 input_tokens \+ output_tokens/);
+
+    // Unknown keys in tokens
+    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad7.json", { state: "passed", tokens: { input_tokens: 40, output_tokens: 60, total_tokens: 100, cached_tokens: 50 } })]), /必须且只能包含/);
+
+    // Partial objects would otherwise be accepted but contribute zero to status.
+    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad8.json", { state: "passed", tokens: { input_tokens: 100 } })]), /必须且只能包含/);
   } finally { f.cleanup(); }
 });

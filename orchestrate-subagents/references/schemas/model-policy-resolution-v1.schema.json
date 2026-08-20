@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-skills.local/schemas/model-policy-resolution-v1.schema.json",
+  "title": "Model Policy Resolution v1",
+  "type": "object",
+  "required": ["schema_version", "record_type", "host", "tier_rank", "channel", "selection_source", "dispatch_record_patch"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "record_type": { "const": "model-policy-resolution" },
+    "host": { "type": "string", "minLength": 1 },
+    "tier_rank": { "type": "integer", "minimum": 0 },
+    "channel": { "type": "string", "minLength": 1 },
+    "selection_source": { "enum": ["user-explicit", "local-config"] },
+    "dispatch_record_patch": { "$ref": "#/$defs/dispatchRecordPatch" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "dispatchRecordPatch": {
+      "type": "object",
+      "required": ["attempt_id", "attempt", "previous_attempt_id", "tier", "model", "reasoning_effort", "adjustment_action", "failure_kind", "failure_ref", "selection_reason", "config_source", "configuration_state", "model_resolution_state", "dispatch_provenance", "max_attempts"],
+      "properties": {
+        "attempt_id": { "type": "string", "minLength": 1 },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "previous_attempt_id": { "type": ["string", "null"] },
+        "tier": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "reasoning_effort": { "type": "string", "minLength": 1 },
+        "adjustment_action": { "enum": ["initial", "retry_same", "raise_effort", "switch_model", "promote_tier", "fresh_context", "change_strategy"] },
+        "failure_kind": { "type": ["string", "null"] },
+        "failure_ref": { "type": ["string", "null"] },
+        "selection_reason": { "type": "string", "minLength": 1 },
+        "config_source": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "configuration_state": { "enum": ["user-explicit", "persisted-config"] },
+        "model_resolution_state": { "enum": ["discovered-and-validated", "user-explicit-unverifiable"] },
+        "dispatch_provenance": { "enum": ["explicit", "inherited-controller", "host-default"] },
+        "max_attempts": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

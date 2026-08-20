@@ -1,137 +1,186 @@
-# 模型路由配置
+# 本地模型路由与动态调整
 
-外部配置承载团队、个人和项目的模型偏好；skill 正文只维护稳定协议，宿主能力从当次工具契约
-实时发现。配置使用 JSON，解析器只依赖 Python 3.9+ 标准库，可在 Windows、macOS 与 Linux 运行。
+模型路由只保存用户在当前宿主上的执行偏好。Skill 不内置具体模型名、供应商排序、价格、上下文长度，
+也不再维护 `economy / balanced / quality`、role route、task override、alias 和 profile 的多层组合。
+最强适配 Controller 根据节点难度和验收证据选择本地 tier；脚本只负责校验选择是否在用户配置、
+宿主实时能力和动态调整上限内。
 
-## 目录
+## 配置位置
 
-- [配置发现](#配置发现)
-- [文件分工](#文件分工)
-- [公共策略](#公共策略)
-- [宿主策略](#宿主策略)
-- [合并与约束](#合并与约束)
-- [解析与验收](#解析与验收)
+每个宿主只有一个用户级文件：
 
-## 配置发现
+```text
+<user-config-root>/
+└── hosts/
+    └── <host>.json
+```
 
-平台用户目录是逻辑位置，不把 `~` 或 `/` 写死：
+用户配置根：
 
-| 平台 | 用户配置根 |
+| 平台 | 默认位置 |
 |---|---|
-| Windows | `%APPDATA%\agent-skills\orchestrate-subagents`；缺 `APPDATA` 时回退 `%USERPROFILE%\AppData\Roaming\...` |
+| Windows | `%APPDATA%\agent-skills\orchestrate-subagents`；缺失时回退 `%USERPROFILE%\AppData\Roaming\...` |
 | macOS | `~/Library/Application Support/agent-skills/orchestrate-subagents` |
 | Linux | `$XDG_CONFIG_HOME/agent-skills/orchestrate-subagents`；未设置时 `~/.config/agent-skills/...` |
 
-`ORCHESTRATE_SUBAGENTS_CONFIG` 可显式指定用户配置根。项目配置根固定为
-`<git-root>/.agents/orchestrate-subagents`；路径一律通过平台文件 API 拼接。
+`ORCHESTRATE_SUBAGENTS_CONFIG` 可覆盖配置根。仓库内配置不参与模型与成本路由，避免项目文件静默
+改变用户的模型消费偏好。不同宿主独立配置，不从另一宿主复制或猜测模型 ID。
 
-解析优先级从低到高：skill 保守默认 → 用户公共策略 → 用户当前宿主策略 → 项目公共策略 →
-项目当前宿主策略 → 当轮用户显式覆盖。公共文件不出现具体模型；非当前宿主的文件不加载。
+## 配置结构
 
-## 文件分工
-
-```text
-orchestrate-subagents/
-├── policy.json
-├── hosts/
-│   ├── host-a.json
-│   └── host-b.json
-├── capabilities/               # 自动生成的宿主能力快照，不参与偏好合并
-│   └── host-a.json
-└── observations/               # 结构化运行观察，不是可执行指令
-    └── host-a/
-```
-
-用户级与项目级目录使用同一结构。`policy.json` 只把 role / task type 映射到语义 profile；
-`hosts/<host>.json` 才把 profile 解析成精确 model、effort、channel 和 dispatch。
-`capabilities/` 与 `observations/` 由
-[宿主能力缓存协议](host-capability-cache.md) 管理，解析器不得把其中的数据合并成模型偏好。
-
-配置必须带 `schema_version: 1`。未知顶层字段判错，不静默忽略拼写错误；项目文件可以只写需要
-覆盖的部分。模型凭证、token 或任何秘密不得进入配置。
-
-## 公共策略
+下面是贴近“强 Controller + 主力 + 杂活”偏好的**非规范性占位示例**。现场必须用当前宿主实际
+暴露的精确 ID 替换 `provider-*`；示例名称不是内置型号：
 
 ```json
 {
-  "schema_version": 1,
-  "routes": {
-    "scout": "mechanical",
-    "worker": "implementation",
-    "critic": "judgment",
-    "judge": "judgment"
-  },
-  "task_overrides": {
-    "flutter_implementation": "implementation",
-    "merge_request_audit": "judgment",
-    "repository_scan": "mechanical"
-  }
-}
-```
-
-`task_overrides` 优先于 `routes`；没有 task type 命中时按 role 选 profile。项目公共策略只表达
-项目任务分类，不复制各宿主模型名。
-
-## 宿主策略
-
-宿主配置示例（ID 为占位符）：
-
-```json
-{
-  "schema_version": 1,
+  "schema_version": 2,
   "host": "host-a",
-  "effort_order": ["low", "medium", "high"],
-  "aliases": {
-    "primary": "provider-primary-current",
-    "economical": "provider-economical-current"
+  "effort_order": ["low", "medium", "high", "xhigh"],
+  "tier_order": ["utility", "primary", "frontier"],
+  "tiers": {
+    "utility": {
+      "models": ["provider-utility-current"],
+      "effort": {"default": "xhigh", "min": "medium", "max": "xhigh"},
+      "channel": "worker",
+      "dispatch": "explicit"
+    },
+    "primary": {
+      "models": ["provider-primary-current"],
+      "effort": {"default": "xhigh", "min": "medium", "max": "xhigh"},
+      "channel": "worker",
+      "dispatch": "explicit"
+    },
+    "frontier": {
+      "models": ["provider-frontier-current"],
+      "effort": {"default": "high", "min": "medium", "max": "xhigh"},
+      "channel": "worker",
+      "dispatch": "explicit"
+    }
   },
-  "profiles": {
-    "mechanical": {"model": "economical", "effort": "medium", "channel": "worker", "dispatch": "explicit"},
-    "implementation": {"model": "primary", "effort": "medium", "channel": "worker", "dispatch": "explicit"},
-    "judgment": {"model": "primary", "effort": "high", "channel": "worker", "dispatch": "explicit"}
-  },
-  "constraints": {
-    "allowed_models": ["provider-primary-current", "provider-economical-current"],
-    "minimum_effort": {"provider-economical-current": "medium"}
+  "dynamic_adjustment": {
+    "enabled": true,
+    "max_attempts": 3,
+    "allowed_actions": [
+      "retry_same",
+      "raise_effort",
+      "switch_model",
+      "promote_tier",
+      "fresh_context",
+      "change_strategy"
+    ]
   }
 }
 ```
 
-不同宿主独立配置 model / effort / channel，不能从另一宿主的 profile 推导。当前首选通道不支持
-精确 effort 时，应在外部 profile 选择支持该参数的通道；最终仍以实时工具契约校验。
+- tier 名称和数量由用户定义；`tier_order` 从低到高排列，脚本不猜模型强弱。
+- `models` 是有序候选；解析器选择当前宿主实时可用的第一个候选。
+- `effort.default` 是普通派发默认值，Controller 可在 `min..max` 内按节点和失败证据调整。
+- `channel / dispatch` 必须能由当前宿主工具契约验证。
+- `max_attempts` 包含首次派发；达到上限后停止，不通过改配置现场绕过。
 
-模型版本变化时只更新对应宿主文件中的 alias；项目通常继续引用稳定 profile，不用跟随改版。
+上述示例表达一种合理个人偏好：复杂、高模糊、高爆炸半径任务用 `frontier`，日常实现和评审用
+`primary`，边界清楚的提取、扫描、格式化等工作用 `utility`。三个 tier 都可以使用较高 effort；
+便宜来自模型选择，不强制来自低 effort。最终选哪个 tier、是否降低或提高 effort，由最强适配
+Controller 根据任务证据判断。
 
-## 合并与约束
+## 首次配置与修改确认
 
-- `routes`、`task_overrides`、`aliases` 和 `profiles` 由项目同名键覆盖用户值。
-- `constraints.allowed_models` 取交集；项目只能缩小全局允许范围。
-- `constraints.minimum_effort` 对同一模型取更高档；项目不能降低全局下限。
-- effort 强弱顺序由各外部 host 文件的 `effort_order` 定义；新增档位或宿主差异不需要改 skill。
-  当前工具不支持的值仍在实时能力校验阶段判错。
-- 当轮 `--model / --effort` 是用户显式覆盖，但仍受 allowed models 和 minimum effort 约束。
-- 配置或实时 schema 无法满足严格要求时派发前阻塞；当前 schema 不提供隐式 fallback。
+配置文件不存在时，Controller 只根据宿主实时 schema 形成候选表，展示 tier、精确模型、effort
+范围、默认值、成本/质量影响和目标文件。不得凭记忆写型号，也不得先保存再让用户追认。
 
-## 解析与验收
+以下动作需要用户确认：
+
+- 首次写入本地配置；
+- 增加新模型、提高 effort 上限或增加最大尝试数；
+- 替换 tier 顺序或默认模型，且可能明显影响质量或成本；
+- 宿主候选变化导致原配置失效。
+
+已有合法配置就是用户授权的动态调整 envelope。在其模型候选、effort 范围、动作集合和尝试上限内，
+Controller 可以根据当轮证据自主调整，不逐次询问；超出 envelope 时停止并展示待确认变更。
+
+## Controller 选择 tier
+
+Controller 不按 worker 的角色名机械路由，按节点实际决策杠杆选择：
+
+| 节点特征 | 常见选择 |
+|---|---|
+| 输入完备、输出机械、错误容易由测试发现 | 较低 tier |
+| 日常实现、局部评审、常规跨文件修改 | 中间或默认 tier |
+| 高模糊、跨系统、隐蔽错误、高爆炸半径、关键对抗核验 | 较高 tier |
+
+这只是启发式，不把 tier 名称写死成 `utility / primary / frontier`。Controller 必须记录
+`selection_reason`，说明为何当前配置是最低可靠选择。
+
+## 验收失败后的动态调整
+
+先把失败归一为：
+
+| `failure_kind` | 处置 |
+|---|---|
+| `implementation_defect` | 可定向重试、换策略或按证据提升配置 |
+| `reasoning_gap` | 可提高 effort、切模型或提升 tier |
+| `context_gap` | 优先新上下文；必要时切模型或提升 tier |
+| `strategy_gap` | 改策略、切模型或提升 tier |
+| `environment_fault` | 诊断工具、权限或依赖；不得用模型重路由掩盖 |
+| `contract_gap` | 停止并 re-contract |
+| `safety` | 停止或进入人工门 |
+| `undecidable` | 停止并升级 Controller / 用户 |
+
+允许的重路由动作：
+
+- `retry_same`：配置不变，只携带精确 finding 定向重试；
+- `raise_effort`：同 tier、同模型，effort 沿本地顺序提高；
+- `switch_model`：切换到本地 envelope 内另一模型；
+- `promote_tier`：沿 `tier_order` 向更高 tier 移动；
+- `fresh_context`：模型参数不变，换干净 Worker 上下文；
+- `change_strategy`：保留失败事实但替换实现策略。
+
+不要固定成“第 N 次必升模型”。Controller 先判断失败是实现缺陷、推理、上下文还是策略问题；
+环境、合同、安全和不可判定失败不能通过重路由继续试错。每次重派都必须绑定前序 attempt、失败类型、
+稳定失败证据摘要和选择理由。
+
+## 解析器
+
+首次派发：
 
 ```text
-<python-executable> "<skill-directory>/scripts/resolve_model_policy.py" \
+node "<skill-dir>/scripts/resolve_model_policy.mjs" \
   --host host-a \
-  --repo /path/to/repo \
-  --role worker \
-  --task-type flutter_implementation \
-  --available-model provider-primary-current \
-  --available-model provider-economical-current \
-  --available-effort medium \
-  --available-effort high \
-  --available-channel worker \
-  --explain
+  --tier primary \
+  --selection-reason "常规跨文件实现使用本地主力层" \
+  --available-model <live-model-id> \
+  --available-effort <live-effort> \
+  --available-channel <live-channel>
 ```
 
-`--available-*` 来自当次宿主工具 schema；给出后解析器会拒绝陈旧 model / effort。输出包含
-profile、精确执行配置、来源文件和派发 provenance，原样进入任务契约与 Agent 台账。
+失败后由 Controller 选择调整方式，并把上一份解析结果作为 lineage：
 
-调用解析器前先检查四个有效候选文件：用户级与项目级的 `policy.json`、`hosts/<host>.json`。四者均
-不存在时，表示没有外部偏好：**跳过解析器**，不得临时生成、复制或猜测这些文件；controller 按
-SKILL.md 第 8 节和当前宿主工具契约保守选型，并记录 `config_source: skill-default`。候选文件存在但
-内容不完整或无效时才视为配置错误并在派发前阻塞，不能把错误配置静默降级成默认值。
+```text
+node "<skill-dir>/scripts/resolve_model_policy.mjs" \
+  --host host-a \
+  --tier frontier \
+  --attempt 2 \
+  --previous-dispatch <attempt-1.json> \
+  --action promote_tier \
+  --failure-kind reasoning_gap \
+  --failure-ref sha256:<digest> \
+  --selection-reason "验收显示跨模块推理遗漏，提升到更高本地 tier" \
+  --available-model <live-model-id> \
+  --available-effort <live-effort> \
+  --available-channel <live-channel>
+```
+
+解析器验证配置 schema、实时候选、effort 上下限、tier 顺序、动作语义、前序 attempt、失败摘要和
+最大尝试数。它不判断业务失败原因，也不直接派发 Agent；Controller 对分类与选择负责。
+
+解析结果是独立的 [`model-policy-resolution` schema v1](schemas/model-policy-resolution-v1.schema.json)，
+不是 ledger 的 `dispatch-record` schema v2。
+结果中的 `dispatch_record_patch` 已直接使用 dispatch 字段名。Controller 必须补齐
+`schema_version: 2 / worker_id / orchestration_mode / capability_source / capability_fingerprint /
+token_budget`，再与该 patch 合并后交给 `dispatch-record`；不得把整个解析结果或不完整 patch 直接
+写入 ledger。解析结果顶层的 `host / channel / tier_rank / selection_source` 是派发控制信息，不属于
+ledger dispatch。下一次重派的 `--previous-dispatch` 接收上一份完整解析结果，以校验 attempt lineage。
+
+宿主无法列举模型时，持久本地配置不能验证并阻塞。只有用户当轮同时明确给出的精确 `--model` 与
+`--effort` 才可配合 `--user-explicit` 继续，并标记 `user-explicit-unverifiable`；单独传 flag 或省略
+任一显式值都拒绝，不得把旧配置静默标成用户授权。

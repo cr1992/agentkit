@@ -233,6 +233,11 @@ Agent 必须执行当前冻结协议，同时持续审计以下冲突：
 
 独立模式的交付不是“子 Agent 都回复了”，而是 controller 对稳定产物和证据完成最终验收。
 
+编排档位与 worker 有效权限是正交轴。controller 在选择 lightweight / full 前，先为节点声明
+`required_capabilities`，并用实时接口事实、与当前接口指纹和 worker 配置绑定的有效记录，或按需最小
+探针证明。full 只增加 ledger、恢复、barrier 和缓存，不扩大 worker 权限；未知能力不能通过升级档位
+变成可用。探针是实际 worker，必须计入数量、预算和台账。
+
 ### 5.2 manage-worktrees
 
 独立触发场景：
@@ -408,6 +413,7 @@ controller 根据任务事实选择能力：
 ~~~json
 {
   "skill": "verify-agent-output",
+  "protocol_version": "1.0.0",
   "runtime_version": "1.0.0",
   "contracts": {
     "task_contract": [1],
@@ -420,6 +426,10 @@ controller 根据任务事实选择能力：
 
 controller 或宿主只能在 Skill 已被正常加载后，使用宿主解析出的 Skill 绝对路径调用该命令；
 runtime 不自行扫描兄弟目录或全局安装位置。
+
+`protocol_version` 表示跨实现兼容语义，`runtime_version` 表示脚本实现版本，Skill tree
+`content_digest` 表示精确安装内容。三者必须分别报告；软链安装不能依赖 Git 信息、mtime 或路径字符串
+识别版本，CLI 入口判断也必须对调用路径和模块路径做 realpath 归一化。
 
 调用方必须在合同 freeze 前完成版本交集判断，并把最终 provider 写入合同。没有交集时可以在
 freeze 前选择 standalone provider 或 fail closed；合同 freeze 后发现 provider 缺失、版本不兼容
@@ -513,6 +523,48 @@ contract_digest: "sha256:..."
 - 实现者不能修改 verification extension；需要 `independent_evidence` 的节点只能在此处已声明
   `verify-agent-output` 且 `skill_set` 已冻结同名 Skill 时创建。
 - freeze 后 provider 缺失或不兼容必须 abort / re-contract，不得修改原合同。
+
+### 7.1.1 Worker Capability Requirements 与 Effective Capability
+
+节点的能力需求与当前 worker 配置的有效能力分开冻结。Requirements 只声明本节点真正会用到的
+能力：
+
+~~~yaml
+schema_version: 1
+host: kiro
+worker_profile: readonly-agent
+capability_fingerprint: "sha256:..."
+binding: "session:<opaque> | config:sha256:<digest>"
+required:
+  - worker.read.cwd
+  - worker.execute_commands
+~~~
+
+Effective Worker Capability 保存事实化结果和稳定证据引用：
+
+~~~yaml
+schema_version: 1
+host: kiro
+worker_profile: readonly-agent
+capability_fingerprint: "sha256:..."
+binding: "session:<opaque>"
+observed_at: "RFC3339"
+expires_at: "RFC3339"
+outcomes:
+  worker.read.cwd: allowed
+  worker.execute_commands: denied_by_policy
+  worker.approval_channel: approval_channel_fault
+evidence_refs:
+  - type: probe | schema | observation
+    id: "stable opaque ref"
+    digest: "sha256:..."
+~~~
+
+outcome 固定为 `allowed / denied_by_policy / unavailable_or_unproven / approval_channel_fault /
+execution_fault`，只有 `allowed` 满足 requirement。session binding 最长 24 小时；能稳定绑定宿主 agent
+配置摘要时可用 config binding，最长 168 小时。当前接口指纹、host、profile、binding、有效期任一不符
+都不能复用。错误字符串只是 evidence，不是 outcome 判据；探针实现属于宿主编排边界，portable runtime
+只做 schema、binding、expiry 和 reaction 的机械校验。
 
 ### 7.2 Worktree Binding
 
@@ -810,6 +862,10 @@ Reflection 不能改变 Artifact verdict、Evidence、合同或当前 Skill。�
 作为低置信候选，不能推动自动改进。
 runtime 必须验证每个 evidence ref 的 digest；无法稳定引用的聊天印象不得标成高置信证据。
 
+Reflection 不以机械 ledger 为存在前提。轻量编排可在仓库外 session state root 中直接追加同一 v1
+记录，证据引用绑定轻量快照、worker 输出或诊断文件；Proposal 仍只允许 `proposed`。宿主能力
+`observations/<host>/` 只保存宿主能力事实，不承载通用 contract / routing / verification / skill gap。
+
 ### 7.11 Convergence Report
 
 每个 Loop 在 `completed` 或 `stopped` 时生成不可变收敛报告；`waiting_human` 只生成 checkpoint：
@@ -878,8 +934,7 @@ proposal_digest: "sha256:..."
 
 ### 8.2 通用脚本约束
 
-- Node.js 脚本优先使用 Node 18+ 标准库；
-- 现有 Python 工具保留，避免为统一语言做无收益重写；
+- 统一使用 Node 18+ 原生 ESM 模块（`.mjs`），不引入第三方或 Python 运行时依赖；
 - 所有机器消费命令支持 `--json`；
 - 所有状态修改命令使用 revision / lock；
 - init 冻结相关 Skill manifest；provider 派发、Evidence 接收和 Loop `next` 前重算摘要；
@@ -904,17 +959,56 @@ orchestrate-subagents/
 ├── agents/openai.yaml
 ├── references/
 └── scripts/
-    ├── host_capability_cache.py          # 已有
-    ├── resolve_model_policy.py           # 已有
-    ├── orchestration-ledger.mjs          # 新增
-    ├── contract-tool.mjs                 # 新增
-    └── *.test.*
+    ├── host_capability_cache.mjs
+    ├── resolve_model_policy.mjs
+    ├── worker-capability-preflight.mjs
+    ├── orchestration-reflection.mjs
+    ├── orchestration-ledger.mjs
+    ├── contract-tool.mjs
+    └── *.test.mjs
 ~~~
 
-编排先按规模选档：`≤3` 个独立只读 worker、单 stage、无副作用/资源/Loop/barrier 时使用
-`orchestration_mode: lightweight`，只写仓库外单一状态快照，并直接按当次实时 schema 校验实际使用
-的宿主参数；不运行 capability cache、模型路由解析器或 ledger。effort 参数未暴露时记录
-`unsupported`，不能写成 `inherited`。任一资格失效时把现有节点和产物收养到完整 ledger。
+编排先列节点所需有效能力，再按规模选档。`worker-capability-preflight.mjs` 只让 `allowed` 满足
+requirements；把策略拒绝、未证明、审批通道故障和执行故障分开处置，不把易变错误串写成判据。
+无运行时工具需求的节点可以使用空 requirements，不固定花一个 worker 探针。有效记录绑定 host、
+worker profile、接口指纹和 session / 配置摘要，过期或 binding 漂移 fail closed。
+
+在必要能力已证明的前提下，`≤3` 个独立只读 worker、单 stage、无副作用/资源/Loop/barrier 时使用
+`orchestration_mode: lightweight`，写仓库外状态快照，不运行完整 capability cache、模型路由解析器或
+ledger。effort 参数未暴露时记录 `unsupported`，不能写成 `inherited`。轻量异常由
+`orchestration-reflection.mjs` 直接绑定快照 / worker 输出追加 Reflection；任一资格失效时把现有节点
+和产物收养到完整 ledger。
+
+完整档先用 `host_capability_cache.mjs` 校验实时工具描述：快照固定声明
+`source: live-tool-schema`，`generated_at` 不得超前当前时间五分钟以上，`expires_at` 必须晚于生成时间且
+有效窗口不超过 2160 小时；观察记录只绑定格式有效的 `sha256:` 能力指纹，并保持输入事件嵌套在
+`event` 字段。随后 `resolve_model_policy.mjs` 只加载用户级 `hosts/<host>.json` schema v2。配置直接定义
+有序 tier、每个 tier 的候选模型、effort 默认值与上下限、channel、dispatch provenance，以及允许的
+动态调整动作和最大尝试数；不再维护 budget mode、公共 policy、role route、task override、alias 与
+profile 的多层合并。tier 名称和数量由用户决定，脚本只信任显式 `tier_order`，不猜模型强弱。
+
+本地配置不存在时，Controller 只根据实时 schema 形成候选映射，不复制示例或凭记忆猜型号；首次
+保存、增加模型、提高 effort / attempt 上限或明显增费前必须获用户确认。已有合法配置构成动态调整
+envelope，在模型候选、effort 范围、动作集合和 `max_attempts` 内可自主调整，无需逐次确认。项目仓库
+配置不参与模型与成本路由，避免仓库内容静默扩大用户偏好。
+
+模型候选发现是显式能力事实：可列举时 `model.discovery: available`，自由字符串但无候选接口时
+`unavailable`。派发另记 `model_resolution_state`：`discovered-and-validated`、
+`user-explicit-unverifiable` 或 `host-default-unexposed`。持久配置在 discovery unavailable 时阻塞；
+只有用户当轮同时明确 `model` 与 `effort` 才能以第二种低保证状态继续；单独的 `--user-explicit` 不能
+把持久配置洗成用户授权。`hosts/<host>.json` 只保存偏好，不保存能力事实。
+
+模型解析结果使用独立的 `model-policy-resolution` schema v1，不复用 ledger 的 `dispatch-record`
+schema v2。其 `dispatch_record_patch` 直接采用 dispatch 同名字段，Controller 再补
+`schema_version / worker_id / orchestration_mode / capability_source / capability_fingerprint /
+token_budget` 后写入 ledger；顶层 `host / channel / tier_rank / selection_source` 只服务派发控制。
+后续 attempt 将上一份完整解析结果作为 lineage 输入。resolver 与 ledger 的 envelope 不可互换。
+
+验收失败先归一为 `implementation_defect / reasoning_gap / context_gap / strategy_gap /
+environment_fault / contract_gap / safety / undecidable`。前四类可以由最强适配 Controller 在本地 envelope
+内选择 `retry_same / raise_effort / switch_model / promote_tier / fresh_context / change_strategy`；后四类
+分别诊断环境、re-contract、停止或升级，不得用更强模型掩盖。解析器验证 Controller 已选择的动作，
+不根据失败次数自动选模型，也不直接派发 Agent。
 
 `contract-tool.mjs`：
 
@@ -932,8 +1026,8 @@ orchestrate-subagents/
 | --- | --- |
 | `init` | 创建任务图和 revision 0 |
 | `add-node` / `add-edge` | 登记节点、依赖与 barrier |
-| `dispatch-record` | 记录宿主派发参数和 worker identity |
-| `update` | 记录运行中、阻塞、待验收和终态 |
+| `dispatch-record` | 严格记录 worker identity、本地 tier、精确模型 / 强度、attempt lineage、调整动作、失败证据、配置确认状态、能力证据与最大尝试数 |
+| `update` | 记录运行中、阻塞、待验收和终态，可附 Token / duration 计量 |
 | `attach` | 绑定 worktree、artifact、Evidence 或 Loop 结果 |
 | `batch-init` | 登记一组独立 Loop、顺序/并发和批级 limits |
 | `batch-record` | 原子记录单个 Loop 终态与批级失败键 |
@@ -946,6 +1040,16 @@ orchestrate-subagents/
 | `doctor` | 检查孤儿节点、revision 冲突和未闭环资源 |
 
 脚本不直接派发 Agent。派发 API 属于宿主，Skill 负责把宿主回执写入 ledger。
+protocol `1.1.0` 与 runtime `1.5.0` 分别标识兼容语义和脚本实现；capabilities 另给精确 Skill
+content digest。dispatch schema v2 以 `attempt_id / attempt / previous_attempt_id / adjustment_action /
+failure_kind / failure_ref` 保存动态重路由 lineage。首次派发使用 `initial`；重派必须创建新节点，前序
+节点已进入 `failed`，且 `failure_ref` 指向前序节点已附的 report / Evidence。完整档必须绑定实时
+复核过的 capability fingerprint，`doctor` 重新校验持久化记录。该记录说明“实际派发参数从何而来”，
+但仍处于受信 controller/operator writer 边界内，不是宿主签名证明。
+`update.tokens` 只接受非负安全整数，或完整的
+`{ input_tokens, output_tokens, total_tokens }` 三元组且总数必须等于输入与输出之和；`duration_ms` 只接受
+非负安全整数。`status.summary.token_accounting` 汇总总量和按角色分布，`doctor` 复核持久化值；这些
+字段同时属于 `orchestration-ledger-v1.schema.json` 的公开节点 schema。
 
 ### 8.4 manage-worktrees 的脚本工具
 
@@ -974,8 +1078,23 @@ adapter 的 app 相对路径允许 suffix-relative 低置信度兜底。低置�
 | `capabilities --json` | 声明 schema 与 provider 能力 |
 | `batch-integrate --plan <json>` | 校验冻结计划新鲜度，建/复用一次性候选树并按冻结顺序合成精确 SHA |
 | `batch-step <candidate> --step --state` | 登记 Profile 声明的合成后再生成步骤的执行结果 |
+| `plan-batch --scan-conflicts` | 冻结前对 included 输入两两写树式干跑，输出冲突矩阵 |
 
 它继续只拥有 Git 隔离与生命周期，不读取 Verification verdict，不推进 Loop iteration。
+
+`--scan-conflicts` 是 `plan-batch` 的**附加输出**，产生 `conflict_scan`（`schema_version: 1`）：
+`pairs[]` / `against_target[]` 各给 `state`、`conflict_files`、`adjacent_files`、`files[]`、
+`files_total`、`conflict_notes[]`，`summary` 给冲突面排序与产物类命中。它落在 `cmdPlanBatch`，
+**不进 `computeBatchPlan`**——后者同时是 `batch-integrate` 的新鲜度重算口径，把扫描塞进去会让每次
+合成白跑一遍 `merge-tree`，也会把决策辅助信息混进"必须逐项比对"的冻结契约。指纹只绑 target SHA
+与有序输入 SHA，加不加这个 flag 都是同一份计划；带 `conflict_scan` 的计划仍是合法冻结契约。
+
+运行时边界与 §8.2 一致：干跑用 `git merge-tree --write-tree`，合并在对象库里算完，只产生未被任何
+ref 引用的临时 tree/blob，不动工作区、index、HEAD 和任何 ref，因此不破坏 `plan-batch` 的只读语义，
+也不需要先建候选树。三条 fail-closed 口径：冲突判定只认 `merge-tree` 退出码（git-merge-tree(1)
+MISTAKES TO AVOID 明确禁止把空的 Conflicted file info 当成干净合并，目录重命名类冲突就属此列）；
+相邻面算不出来时 `adjacent_files` 保持 `null` 并落 `incomplete`，不退化成空集；Git 低于 2.39 整段回报
+`supported: false`（2.38 的 `-z` 信息段还不是结构化记录，按新格式解会错判冲突类型），计划照常冻结。
 
 `batch-integrate` 把「合成」机械化，但**不扩大执行面**：它不跑任何门禁命令，也不执行 Profile 中的
 任何内容。Profile 的 `post_integrate_steps` 是纯声明（只有 `name` / `hint`，未知键 fail-closed），
@@ -1227,7 +1346,7 @@ Loop 收到 verification abort 时：
 需要证明多个 feature 合成后兼容时，在 `audit` 之后插入批量集成段：
 
 ~~~text
-plan-batch（冻结 target 与有序输入）
+plan-batch（冻结 target 与有序输入；可选 --scan-conflicts 出冲突矩阵定合并顺序）
 → batch-integrate（建/复用一次性候选树并合成）
 → controller 跑门禁 + batch-step 登记合成后再生成步骤
 → 各输入按可独立评审的交付单元分别合入
@@ -1384,6 +1503,10 @@ assurance:
 - 合同 / 路由 reflection 与改进候选只写 proposed；
 - orphan / barrier / resource doctor；
 - 宿主能力缓存和模型路由。
+- 软链安装路径下所有 CLI 入口真实执行而不是静默 exit 0；
+- worker effective capability binding / expiry、拒绝与审批通道故障分类、无需能力时不强制探针；
+- 轻量 Reflection 不依赖 ledger，仍校验证据摘要并只生成 proposed Proposal；
+- 模型发现不可用、用户显式不可验证与宿主默认未暴露三种状态不混写。
 
 `manage-worktrees`：
 
@@ -1464,6 +1587,8 @@ assurance:
 - “Skill 的规则与仓库真源冲突，记录证据并停止重签，不能现场改 Skill”；
 - “用户纠正了 Agent，形成低噪声 reflection 和待评估改进候选”；
 - “Loop 成功但过程低效，生成收敛报告而不污染 Artifact verdict”。
+- “Kiro 类宿主 schema 不暴露 worker 权限，先按节点需求探测；审批通道故障后停止同类派发”。
+- “轻量编排发现 Skill 缺口，不补造 ledger 也能形成有证据 Reflection”。
 
 ## 14. 分阶段落地计划
 

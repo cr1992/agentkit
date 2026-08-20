@@ -300,6 +300,21 @@ node "$SKILL_DIR/scripts/worktree-mgr.mjs" plan-batch \
 - 排除已被 target 包含的 HEAD；子分支已包含父分支时折叠父分支，避免重复合成。
 - 只在没有 blocker 且仍有唯一输入时返回 `ready=true` 和稳定 `fingerprint`。
 
+**冻结前先看冲突面。** 加 `--scan-conflicts`，`plan-batch` 会对 included 输入两两做 `git merge-tree` 写树式干跑，再各自对 target 干跑一次，输出冲突矩阵。它只往对象库写游离对象（随 gc 回收），不动工作区、index、ref，也不改变指纹——加不加这个 flag，冻结出来的计划是同一份。
+
+矩阵怎么读：
+
+- `overlapping`（同 hunk）和 `structural`（改/删、重命名这类）是 Git 自己合不了的格子，合成时必然要人裁决。`[LOAD]` 已按冲突面从大到小排好：**冲突面大的压轴**——先合干净的输入，把最难的一支放最后，前面的合成结果就不会被反复推翻，冲突现场也只用面对一次。
+- `adjacent`（同文件相邻）是 Git 能自动合、但两支确实都改了同一个文件的格子。语义冲突（同一个哨兵值两种含义、同一个开关两种默认）正藏在这里，机器判不出来，只能靠人看清单。它不影响合并顺序，但要求验收覆盖到这些文件。
+- 两支既有 `overlapping` 又有大面积 `adjacent`，通常说明它们在做同一件事的两半：**考虑并支**，让它们在一棵树上收敛，而不是各写各的再来合。
+- `[REGEN]` 命中（lock、golden、codegen、dist 这类产物）说明该处冲突不该挑边解，只能在合成态重新生成一次。确认仓库 Profile 已声明对应的 `post_integrate_steps`；没有就先补，否则合成后会漏掉重生成。
+- `[NOTE]` 出现在 `conflict=0` 却仍判 `state=conflict` 的格子上：有几类目录重命名冲突压根没有冲突文件条目，判定只认 `merge-tree` 退出码。读 `[NOTE]` 给的冲突类型和受影响目录，别因为文件数是 0 就当没事。
+- `[WARN]` 表示矩阵里有未完成的格子（`incomplete` / `error` / 相邻面未知）。**不完整的矩阵只能用来确认已发现的冲突，不能用来断言"没有冲突"。**
+
+矩阵是**预测不是保证**：它算的是成对合并，实际合成是顺序累积的三方合并，两两干净不等于合成一定干净。它替代不了 `batch-integrate` 的实合，只把"哪两支会打架、打在哪些文件上"提前到冻结前，供合并排序和并支决策使用。
+
+扫描要求 Git ≥ 2.39（2.38 的 `merge-tree -z` 信息段还不是结构化记录，解出来的冲突类型会是错的）。低版本整段回报 `supported: false` 并说明原因，计划照常冻结——宁可没有矩阵，不要一份可能错的矩阵。
+
 `ready=true` 后由 `batch-integrate` 完成合成，不再手工建树、手工 merge、手工记指纹：
 
 ```bash
@@ -395,7 +410,7 @@ worktree 位于当前宿主或沙箱写权限之外时，先取得该目录的�
 |---|---|
 | `list [--all] [--json]` | 展示 tracked、untracked、missing、branch pending 和历史记录 |
 | `doctor [--json]` | 只读检查 Profile、命名、事件链、watcher、目录和 branch cleanup |
-| `plan-batch <selector...> [--target] [--json]` | 固定批次 target/输入 SHA，折叠依赖并输出可复现指纹 |
+| `plan-batch <selector...> [--target] [--scan-conflicts] [--json]` | 固定批次 target/输入 SHA，折叠依赖并输出可复现指纹；`--scan-conflicts` 附加冻结前的两两冲突矩阵 |
 | `batch-integrate --plan <json> \| <selector...>` | 校验计划新鲜度，建/复用一次性候选树并按冻结顺序合成；重合成需 owner + 精确 HEAD 授权；不跑门禁 |
 | `batch-step <candidate> --step --state` | 登记 Profile 声明的合成后再生成步骤的执行结果 |
 | `spawn` / `adopt` | 创建或接管可追踪 worktree |

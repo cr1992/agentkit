@@ -1,8 +1,8 @@
 # 编排运行时 v1
 
-本运行时用于 `orchestration_mode: full`。`SKILL.md` 定义的 `≤3` 个独立只读 worker 轻量档使用单一
-仓库外 JSON 快照，不初始化本 ledger；任一轻量资格失效时，将节点、宿主派发回执和已有产物收养
-到本 ledger 后继续。
+本运行时用于 `orchestration_mode: full`。`SKILL.md` 定义的 `≤3` 个独立只读 worker 轻量档使用仓库外
+JSON 快照，不初始化本 ledger；两种档位都先通过 `worker-capability-preflight.mjs` 校验节点所需有效
+能力。任一轻量资格失效时，将节点、宿主派发回执和已有产物收养到本 ledger 后继续。
 
 `contract-tool.mjs` 是 Task Contract 的机械入口：
 
@@ -24,9 +24,90 @@ record-reflection / propose-improvement
 status / inspect / rebuild / doctor / capabilities
 ```
 
+`capabilities` 同时输出独立的 `protocol_version`、`runtime_version` 和 Skill tree `content_digest`。
+当前协议版本为 `1.1.0`，ledger runtime 为 `1.5.0`；三者分别表达兼容语义、脚本实现和精确安装内容，
+不能互相替代。
+
 所有修改命令支持 `--expected-revision`。状态默认写在业务仓库外；宿主派发回执必须通过
-`dispatch-record` 绑定精确 worker identity、model 和 reasoning effort。每个 `add-node` 输入必须显式
-包含：
+`dispatch-record` 绑定精确 worker identity、本地 tier、model、reasoning effort、attempt lineage、
+动态调整动作、选择理由、配置来源 / 确认状态、能力证据、派发 provenance、token budget 和
+`max_attempts`。完整档的
+`capability_fingerprint` 必须是当轮实时复核过的 `sha256:` 摘要；未知字段和缺字段均拒绝。示例：
+
+`resolve_model_policy.mjs` 输出的是 `model-policy-resolution` schema v1；其
+`dispatch_record_patch` 与下列 v2 dispatch 的同名字段可直接合并。Controller 仍须补齐
+`schema_version / worker_id / orchestration_mode / capability_source / capability_fingerprint /
+token_budget`。两种记录各自版本化，不能把 resolver 顶层 envelope 当作 dispatch 写入 ledger。
+
+```json
+{
+  "schema_version": 2,
+  "worker_id": "opaque-worker-id",
+  "orchestration_mode": "full",
+  "attempt_id": "opaque-attempt-id",
+  "attempt": 1,
+  "previous_attempt_id": null,
+  "tier": "primary",
+  "model": "provider-primary-current",
+  "reasoning_effort": "medium",
+  "adjustment_action": "initial",
+  "failure_kind": null,
+  "failure_ref": null,
+  "selection_reason": "规范明确且测试可低成本发现偏差",
+  "config_source": ["user-host:<path>/hosts/<host>.json"],
+  "configuration_state": "persisted-config",
+  "model_resolution_state": "discovered-and-validated",
+  "capability_source": "cache:<path>+live-validation",
+  "capability_fingerprint": "sha256:...",
+  "dispatch_provenance": "explicit",
+  "token_budget": "unsupported",
+  "max_attempts": 3
+}
+```
+
+示例模型名不是推荐值。`configuration_state` 只接受 `user-explicit / session-inferred /
+session-confirmed / persisted-config / host-default`；它说明偏好如何形成，不替代宿主调用参数或回执。
+`doctor` 会重新校验持久化 dispatch。
+
+`model_resolution_state` 只接受 `discovered-and-validated / user-explicit-unverifiable /
+host-default-unexposed`。第二种必须同时是 `configuration_state: user-explicit`；第三种必须使用
+`model: host-default`、`configuration_state: host-default` 和 `dispatch_provenance: host-default`。
+
+验收失败后的重派必须创建新节点；前序节点先附 `report` 或 `evidence` 并进入 `failed`。新 dispatch
+使用连续 `attempt`，通过 `previous_attempt_id` 指向前序 dispatch，并用 `failure_ref` 指向前序节点的
+稳定失败附件摘要。ledger 拒绝重复 attempt ID、不连续 lineage、未失败前序或错绑证据。环境、合同、
+安全和不可判定失败不属于可重路由类型，不能写进重派 dispatch。
+
+## Worker 有效能力预检
+
+`worker-capability-preflight.mjs` 不派发探针，只校验 controller 提供的 Requirements 与 Effective
+Capability：
+
+```text
+capabilities
+normalize --input <effective.json>
+check --requirements <requirements.json> [--effective <effective.json>]
+```
+
+没有 required capability 时允许缺省 effective 文件；有要求但缺记录时返回
+`scoped_probe_or_replan`。binding / 指纹不匹配或过期返回 `refresh_effective_profile`；策略拒绝、审批
+通道故障和执行故障分别返回 `replan_or_controller`、`stop_same_class_and_escalate`、
+`stop_same_class_and_diagnose`。具体结构见对应两个 v1 schema。
+
+## 轻量 Reflection
+
+轻量档通过独立入口记录改进输入，不初始化 ledger：
+
+```text
+node scripts/orchestration-reflection.mjs record --state-root <session-state> --input <reflection-input.json>
+node scripts/orchestration-reflection.mjs propose --state-root <session-state> --reflection <relative-ref> --input <proposal-input.json>
+```
+
+`record` 的 `evidence_refs[].id` 必须是 state root 内相对路径，并逐项校验文件摘要；没有证据只能记录
+`confidence: low`。`propose` 重验 Reflection 与证据，只生成 `lifecycle: proposed`。完整档仍由 ledger
+登记同一 v1 Reflection / Proposal，二者不需要共享 journal。
+
+每个 `add-node` 输入必须显式包含：
 
 ```json
 {
@@ -58,6 +139,8 @@ status / inspect / rebuild / doctor / capabilities
 时，后两档的 `update` 输入必须用 `verification_ref` 指向被采信的 report / Evidence attachment digest；
 Evidence 必须为 `terminal_outcome: pass` 且不再要求 human gate。节点终态后不再接受 attachment。
 `status.summary.verification_assurance` 分别计数三档和 `none`，`doctor` 重新执行同一门禁。
+
+**Token 消耗与成本核算（v1.2）**：`update` 支持记录节点消耗的 `tokens`（非负安全整数，或字段完整的 `{ input_tokens, output_tokens, total_tokens }`，其中 `total_tokens = input_tokens + output_tokens`）及非负安全整数 `duration_ms`。`status` 命令在 `summary.token_accounting` 中自动汇总总 Token 与按角色分级的消耗分布，支持计算多 Agent 分发相比全量顶配模型的 Token 节省率；`doctor` 使用同一校验器复核持久化节点。
 
 **合同投影（v1.2）**：Evidence 的合同绑定有两条合法路径，缺省仍是全等——verify-agent-output
 那次验证直接使用本 ledger 的公共合同（同一份 JSON、同一个摘要）。多节点图下若多个节点各自
@@ -113,5 +196,6 @@ Ledger v1 schema 仍可读取旧快照，但 Skill content digest 已变化的�
 
 批级熔断属于此 ledger；每个 Loop 仍只维护自己的单个收敛对象。
 
-Reflection 与 Improvement Proposal 是追加式改进输入。Proposal 的生命周期固定为 `proposed`，
+Reflection 与 Improvement Proposal 是追加式改进输入；轻量档也有 ledger-independent 的同 schema
+入口。Proposal 的生命周期固定为 `proposed`，
 当前执行面不读取它，也不会据此改写合同、节点状态或验收结论。

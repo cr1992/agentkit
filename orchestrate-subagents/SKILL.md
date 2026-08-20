@@ -39,7 +39,7 @@ controller 亲自完成：
 
 实际派生过 worker 的运行必须维护两张 Agent 台账；有并行 worker 时还须维护工作进展表。三张表在派发后、批次收口、用户询问进度和最终答复时更新，不用散文代替：
 
-- **活跃 Agent**：`编号 / 任务 / 执行配置（model / effort / 选择理由）/ 目标仓 / 隔离位置（共享树或 worktree + 分支）/ 可写范围 / 状态 / 检查点或阻塞原因`。`model` 写宿主调用使用的精确 ID；继承主会话时写 `inherited`，宿主未暴露 ID 时写 `host-default（ID 未暴露）`，不得用“机械档 / 判断档”代替实际值。`effort` 写精确值；继承或宿主不支持时分别写 `inherited` / `unsupported`，不得省略。状态只用 `运行中 / 阻塞 / 待验收`，按 `阻塞 → 待验收 → 运行中` 排序；不用虚构百分比，优先写 `8/12 文件`、`3/5 测试` 等可观察检查点。最终答复没有活跃 worker 时仍写 `当前活跃子 Agent：0`。
+- **活跃 Agent**：`编号 / 任务 / 执行配置（本地 tier / model / effort / attempt / 配置状态 / 选择理由）/ 目标仓 / 隔离位置（共享树或 worktree + 分支）/ 可写范围 / 状态 / 检查点或阻塞原因`。`tier` 写本地配置中的实际名称；`model` 写宿主调用使用的精确 ID，继承主会话时写 `inherited`，宿主未暴露 ID 时写 `host-default（ID 未暴露）`。`effort` 写精确值；继承或宿主不支持时分别写 `inherited` / `unsupported`，不得省略。状态只用 `运行中 / 阻塞 / 待验收`，按 `阻塞 → 待验收 → 运行中` 排序；不用虚构百分比，优先写 `8/12 文件`、`3/5 测试` 等可观察检查点。最终答复没有活跃 worker 时仍写 `当前活跃子 Agent：0`。
 - **本批已完成**：验收后立即从活跃表移入，保留原编号，记录 `编号 / 任务 / 执行配置（model / effort）/ 结果（通过 / 未通过 / 取消）/ 稳定交付物 / 关键证据 / 环境收尾`。日常可只显示最近几项，批次收口展示完整表。
 - **工作进展**：`工作项 / owner / 产出或范围 / 状态 / 稳定交付物 / 验收证据 / 收尾`。状态写 `待执行 / 进行中 / 已完成 / 已阻塞 / 已取消`；每行必须能对上任务图节点或 controller 自己的集成工作，不能只汇报 worker 而漏掉 controller 的提交、发布、合并与回收工作。
 
@@ -55,9 +55,23 @@ pipeline/制品链接，或稳定报告路径。只读审计可以状态包 + �
 mechanical ledger；轻量档写单一 JSON 快照。controller 失效后它是接手协议（见第 6 节）的台账输入，
 闭环审计通过后随本轮临时资源一并清理，不进项目仓。
 
+### 档位无关的有效能力预检
+
+先为每个节点列出它实际需要的 `required_capabilities`，再选轻量档或完整档。工具 schema 只能证明
+派发接口和参数，不能证明 worker 能执行命令、读取哪些路径或完成审批往返；这类运行时能力必须由
+当轮事实、与当前宿主接口指纹及 worker 配置绑定的新鲜 Effective Worker Capability，或最小范围探针
+证明。使用 `scripts/worker-capability-preflight.mjs check` 机械判断；只有 `allowed` 能满足需求，未知、
+缺失、过期或 binding 不匹配都不能当作可用。
+
+不固定为每次运行派一个探针。节点没有运行时工具 / 路径需求、输入已完整随契约提供时，
+`required_capabilities` 可以为空；否则先复用当前 session 或配置摘要绑定的有效记录，仅在缺少必要事实且
+探针成本低于 controller 自做或缩小节点范围时探测。探针本身是实际 worker，计入 worker 总数、预算和
+台账。无法证明时缩小节点、留给 controller，或停止；升级为完整档只增加控制与恢复能力，不会扩大
+worker 权限。
+
 ### 显式轻量档
 
-同时满足以下条件时使用 `orchestration_mode: lightweight`，无需 capability cache、模型路由解析器或
+同时满足以下条件时使用 `orchestration_mode: lightweight`，无需完整 capability cache、模型路由解析器或
 `orchestration-ledger.mjs`：
 
 - 总 worker 数不超过 3，全部只读且互相独立；
@@ -65,6 +79,7 @@ mechanical ledger；轻量档写单一 JSON 快照。controller 失效后它是�
 - 不创建 worktree，不拥有端口、数据库、凭证或其他待回收资源；
 - 不执行发布、部署、发消息、写外部系统等副作用；
 - controller 能在当前上下文内直接验收全部输出。
+- 每个节点要求的有效 worker 能力均已由本轮事实或新鲜、binding 匹配的记录证明。
 
 轻量档仍保留每个节点的 `objective / scope / inputs（事实与假设分栏）/ output_contract /
 acceptance / evidence / stop_conditions`，并把以下单一快照写到仓库外：
@@ -72,15 +87,21 @@ acceptance / evidence / stop_conditions`，并把以下单一快照写到仓库�
 ```json
 {
   "schema_version": 1,
+  "protocol_version": "1.1.0",
   "mode": "lightweight",
   "contract_digest": "sha256:...",
-  "nodes": [{"node_id":"s1","worker_id":"opaque","state":"running","model":"host-default","reasoning_effort":"unsupported","checkpoint":null}],
+  "nodes": [{"node_id":"s1","worker_id":"opaque","state":"running","required_capabilities":[],"effective_capability_ref":null,"attempt_id":"opaque","attempt":1,"previous_attempt_id":null,"tier":"host-default","model":"host-default","reasoning_effort":"unsupported","adjustment_action":"initial","failure_kind":null,"failure_ref":null,"configuration_state":"host-default","model_resolution_state":"host-default-unexposed","dispatch_provenance":"host-default","selection_reason":"输入随契约提供，不需要运行时工具能力；宿主未暴露精确派发参数","checkpoint":null}],
   "updated_at": "RFC3339"
 }
 ```
 
 快照只记录当前事实，不伪造 journal 或 hash chain。任一资格失效时，停止新增派发，将现有状态和产物
 收养进完整 ledger 后再继续；不得继续轻量档并登记“偏离”。
+
+轻量运行发现合同、路由、验收或 Skill 缺口时，用 `scripts/orchestration-reflection.mjs record`
+把 Reflection 直接绑定到仓库外快照、worker 输出或诊断文件；需要提案时再用 `propose`。这条路径
+不依赖 ledger journal，仍校验证据摘要、只追加并保持 Proposal 为 `proposed`。只有宿主能力事实才写
+`observations/<host>/`；通用 `skill_gap / routing_gap / verification_gap` 不得污染能力缓存。
 
 ### 完整档机械台账工具
 
@@ -104,8 +125,9 @@ barrier 未通过时不能派发下游。批量任务由 orchestrator 为每个 
 ledger 按稳定 failure key 做连续同因熔断；Loop 本身不维护批队列。
 完整命令和边界见 [编排运行时](references/orchestration-runtime.md)。
 
-Reflection 只记录合同、路由、并行、资源或批级异常的证据化观察；Improvement Proposal 永远是
-`proposed`，当前执行面不读取它，也不自动改变模型路由、授权或验收规则。
+Reflection 只记录合同、路由、并行、资源或批级异常的证据化观察；完整档由 ledger 登记，轻量档由
+独立 reflection 工具追加。Improvement Proposal 永远是 `proposed`，当前执行面不读取它，也不自动
+改变模型路由、授权或验收规则。
 
 ### 台账信任边界
 
@@ -191,6 +213,7 @@ environment:
   branch: controller 已确认的分支；worker 禁止切换
   runtime: 按需填写共享资源，不用则省略
 dependencies: 前置节点与下游消费者
+required_capabilities: 该节点真正需要的 worker.* 运行时能力；没有则 []
 verification:
   requirement: worker_self_check | controller_recheck | independent_evidence
   provider: none | verify-agent-output
@@ -202,16 +225,26 @@ extensions:
     provider: none | manage-worktrees
 execution:
   orchestration_mode: lightweight | full
+  attempt_id: 本次派发的不透明唯一 ID
+  attempt: 从 1 开始，不能超过本地 max_attempts
+  previous_attempt_id: 首次为 null；重派时绑定直接前序 attempt
+  tier: 本地 host 配置中的实际 tier 名称 | host-default
   model: 宿主调用使用的精确模型 ID | inherited | host-default
   reasoning_effort: 宿主调用使用的精确值 | inherited | unsupported
+  adjustment_action: initial | retry_same | raise_effort | switch_model | promote_tier | fresh_context | change_strategy
+  failure_kind: 首次为 null；重派时为 implementation_defect | reasoning_gap | context_gap | strategy_gap
+  failure_ref: 首次为 null；重派时绑定前序稳定失败证据摘要
   selection_reason: 该 model + effort 与节点决策杠杆、上下文和工具需求的匹配理由
-  config_source: session | project:<path> | global:<path> | skill-default
-  capability_source: live-schema | cache:<path>+live-validation
+  config_source: [session | user-host:<path> | host-default]
+  configuration_state: user-explicit | session-inferred | session-confirmed | persisted-config | host-default
+  model_resolution_state: discovered-and-validated | user-explicit-unverifiable | host-default-unexposed
+  capability_source: live-schema | live-schema+effective:<ref> | cache:<path>+live-validation
   capability_fingerprint: 当前宿主能力描述的 sha256
+  effective_capability_ref: 与当前 host / worker tier / 接口指纹 / session 或配置 binding 匹配的记录；无需运行时能力时为 null
   capability_cache_status: fresh | refreshed | absent-write-blocked | stale-write-blocked | not-required-lightweight
   dispatch_provenance: explicit | inherited-controller | host-default
   token_budget: 明确预算；宿主未提供该能力时写 unsupported
-  retry_limit: 最大重试次数
+  max_attempts: 本地动态调整 envelope 的最大尝试数，包含首次派发
 stop_conditions: 阻塞、中止和预算退出条件
 ```
 
@@ -235,6 +268,24 @@ next_action: 建议后续动作
 用户可见台账只用三态：执行中为 `运行中`；worker 报 `blocked`、等待输入或外部条件统一记为 `阻塞` 并写清原因；worker 返回 `completed` 后为 `待验收`。`partial` 由 controller 决定继续运行、带明确卡点转为阻塞，或停止重试后判 `未通过`，不新增状态。只有 controller 能给出 `通过 / 未通过 / 取消` 并归档。
 
 事件驱动监控，只在结论交付、需要输入、scope / 写入冲突、预算将尽、新依赖、失败或置信度不足时介入。“等待中”不是状态包；要求 worker 交完整结果或报 blocked + 卡点。
+
+运行失败先归一为 `allowed / denied_by_policy / unavailable_or_unproven / approval_channel_fault /
+execution_fault`，具体错误串只作证据，不作为长期判据。`denied_by_policy` 是已知拒绝，不能记成
+unknown 后继续派需要该能力的节点；应缩小范围或交 controller。`approval_channel_fault` 表示授权
+往返环境故障，停止同类派发并升级给人；`execution_fault` 停止同类派发并先诊断环境。禁止让 worker
+在能力故障后自行扩大 scope、拿替代样本冒充目标对象或绕过停止条件。
+
+业务验收失败与能力故障分开处理。Controller 先把验收失败归一为
+`implementation_defect / reasoning_gap / context_gap / strategy_gap / environment_fault / contract_gap /
+safety / undecidable`，再决定是否重派。前四类可在本地配置 envelope 内选择 `retry_same / raise_effort /
+switch_model / promote_tier / fresh_context / change_strategy`；后四类分别要求诊断环境、re-contract、
+停止或升级，不得用更强模型掩盖。不要按失败次数机械加码，也不要让 worker 自己决定下一次模型。
+
+每次实际重派都是新的 attempt 和新的 ledger 节点：前序节点先绑定稳定失败 report / Evidence 并进入
+`failed`，新节点的 dispatch 必须绑定直接前序 `attempt_id`、连续序号、`failure_kind`、`failure_ref` 与
+新选择理由。完整档由 ledger 校验 lineage；轻量档把同样字段追加到快照。达到本地 `max_attempts`、
+连续同因熔断或需要超出本地模型/effort envelope 时停止并交回用户。详细配置与动作语义见
+[本地模型路由与动态调整](references/model-routing-config.md)。
 
 宿主把 worker 标为 `interrupted` 时，controller 先向原 worker 下发**只读状态恢复**：只回报原任务、
 进度、产物、改动和中断原因，不继续业务写入；恢复包按第 7 节验收，有产物则收养，无产物或无法
@@ -282,60 +333,51 @@ Evidence 的合同绑定缺省按**全等**校验（验证合同就是公共合�
 
 只有上述审计与声明的闭环对象一致时才使用“已闭环”。若需要用户授权、评审或外部状态变化才能继续，当前轮应报告“已完成可自主部分，整体未闭环”，给出唯一明确的解阻动作。
 
-## 8. 按决策杠杆选择模型
+## 8. 本地 tier 与 Controller 动态路由
 
-最强适配模型掌握低频、高杠杆控制节点；其余节点使用最低可靠档。按错误对全局的影响分配，不按工作量分配；适配同时考虑推理、上下文、工具、延迟与成本。
+最强适配模型持续担任 Controller，掌握目标解释、任务图、re-plan、失败分类、动态重路由和最终验收。
+Worker 只执行被分配的节点，不自选下一次模型。Controller 按推理深度、需求模糊度、爆炸半径和
+上下文集成度选择**本地配置中最低可靠的 tier**；若错误容易由测试、Lint 或格式校验发现，可以用
+较低 tier，难察觉且易扩散则使用较高 tier或独立验收。常见节点模式见
+[任务类型剧本](references/task-playbooks.md)。
 
-- **控制节点**：目标解释、任务图、re-plan、风险裁决、最终验收 → 当前编排会话的最强适配模型。
-- **判断重节点**：复杂实现、跨案例映射、对抗核验、局部评审 → 强推理档；会改变全局则升级 controller。
-- **机械节点**：读文件、清单抽取、格式整理、同构修改 → 明确指定机械档。
-- **动态升级**：出现契约歧义、新依赖、高风险或反复失败时停止试错，带证据返回 controller。
+Skill 不规定 tier 数量、名称和具体模型，也不再提供 `economy / balanced / quality` 预算模式或
+role→profile→alias 多层路由。用户在单一 `hosts/<host>.json` 中定义 tier 顺序、模型候选和每个 tier
+允许的 effort 范围；较便宜的模型也可以使用较高 effort。具体模型 ID、effort 枚举、通道、价格和
+上下文能力只来自本地配置与当前宿主实时 schema，文档值均为非规范性占位示例。
 
-模型档只用于做选择，不作为派发或台账记录值。每次派发必须把最终选择落成同一个 `execution` 表单：精确 `model`、精确 `reasoning_effort`、`selection_reason`、`token_budget` 和 `retry_limit`；用户可见台账把前三项合并展示为“执行配置”。模型或 effort 确实由可观察的主会话配置继承时才写 `inherited`；宿主派发接口没有 effort 参数、回执也不暴露实际值时写 `unsupported`，不得把“未暴露”记成 `inherited`。模型 ID 未暴露时写 `host-default（ID 未暴露）`，不得猜测或留空。
+本地配置不存在时，Controller 根据实时 schema 提出紧凑候选映射和目标路径，获得用户确认后再保存；
+不得凭记忆写型号。已有合法配置就是用户授权的动态调整 envelope：在候选模型、effort 范围、动作
+集合和 `max_attempts` 内可自主调整；增加模型、提高上限、延长尝试数或显著增加成本时先确认。
 
-子 agent 若未显式指定模型通常继承主会话，可能意外使用贵档；按宿主的单次模型参数分层，不设置会覆盖所有子 agent 的全局模型变量。具体可用模型名随宿主与版本映射，不在 skill 中预设，但一次运行选定后必须记录实际调用值。
+每次派发都落成精确 `tier / model / reasoning_effort / attempt / adjustment_action / selection_reason /
+configuration_state / model_resolution_state / token_budget / max_attempts`。验收失败后先按第 6 节分类，
+再由 Controller 选择保持配置、提高 effort、切模型、提升 tier、换干净上下文或改变策略；不采用
+“第 N 次必升档”的固定规则。用 `resolve_model_policy.mjs` 验证本地 envelope、宿主实时候选、前序
+attempt 与失败摘要，完整说明见 [本地模型路由与动态调整](references/model-routing-config.md)。
+resolver 返回独立的 `model-policy-resolution` v1；只把其中 `dispatch_record_patch` 与 Controller
+补齐的 worker、能力、token 字段合成为 `dispatch-record` v2，不得把 resolver 顶层结果直接写入 ledger。
 
-### 外部模型路由配置
-
-团队 / 个人偏好不写进正文。按
-[模型路由配置](references/model-routing-config.md) 依次加载平台用户配置与项目配置；公共
-`policy.json` 只把 role / task type 映射到语义 profile，当前宿主的 `hosts/<host>.json`
-再解析精确 model、effort、channel 与 dispatch。项目约束只能收紧全局约束，用户当轮明确指定
-优先级最高。
-
-先检查用户级与项目级的 `policy.json`、`hosts/<host>.json` 四个有效候选文件。四者均不存在时，
-**跳过解析器**，不得临时生成、复制或猜测偏好文件；直接按实时工具契约保守选型并记录
-`config_source: skill-default`。只要候选文件存在，就优先从本 skill 文件位置解析脚本绝对路径，
-再使用宿主可用的 Python 3.9+ 解释器运行 `<skill-dir>/scripts/resolve_model_policy.py --explain`
-做确定性合并；不要假设当前目录是 skill 目录，也不要把解释器名称写死为 `python3`。存在但无效
-的配置必须在派发前阻塞，不得静默降级。把输出的精确配置、来源和
-派发 provenance 写入任务契约与台账；解析后仍须对照当次宿主工具 schema 校验。严格指定无法
-由显式派发参数或已知 controller 配置证明时，**派发前阻塞**，不得先创建 worker 再要求它自证。
-配置引用了宿主已移除 / 新增的模型或 effort 时，以实时 schema 为准完成当轮选型，并提醒维护
-对应外部配置；不得为此反复改本 skill。
+宿主无法列举候选时，持久配置不能验证并阻塞；只有用户当轮同时明确给出的精确 model 与 effort
+可以低保证继续。
+宿主无法控制或不暴露实际值时，记录 `host-default（ID 未暴露）` / `unsupported`，不得猜测。
 
 ## 9. 宿主自适配与配置加载
 
-本 skill 不内置任何宿主的静态能力声明。`agents/openai.yaml` 只是宿主 UI 元数据，不是适配文件，
-不得从中推导派发能力。轻量档只对当次实际使用的派发、wait/message 和生命周期参数检查实时工具
-schema，并记录 `capability_source: live-schema`、`capability_cache_status: not-required-lightweight`；
-未暴露参数写 `unsupported`，不为查询缓存先构造完整 observed descriptor。完整档每轮首次派发前按
-[宿主能力缓存协议](references/host-capability-cache.md) 执行：
+本 skill 不内置任何宿主的静态能力声明。`agents/openai.yaml` 只是宿主 UI 元数据，不是适配文件，不得从中推导派发能力。所有档位先执行本节前述有效能力预检；轻量档不为此构造完整宿主缓存，只对实际使用的派发、wait/message、生命周期参数和节点所需 worker 能力取证，并记录 `capability_cache_status: not-required-lightweight`。完整档每轮首次派发前再按 [宿主能力缓存协议](references/host-capability-cache.md) 执行：
 
-1. 先确定稳定 `host` key：使用编排工具提供方 / 接口族的规范化标识，不得只因 desktop / CLI /
-   UI、会话、版本或模型名不同就另建 key；只有工具命名空间或契约族长期独立时才使用稳定的表面
-   后缀。创建新 key 前先按参考协议检查当前配置根已有同源快照，避免把 `stale` 绕成 `absent`。
-2. 只根据当前宿主实际暴露的工具契约生成轻量 observed descriptor，覆盖派发通道、可调参数、
-   生命周期、隔离、留痕、授权和并发限制；未暴露项写 `unknown`，不从历史缓存补值。
-3. 用 `scripts/host_capability_cache.py status` 检查当前宿主的能力快照。`fresh` 只允许复用历史语义
-   映射和已验证限制；本次任务实际需要的工具与参数仍须在实时契约中逐项确认。
-4. 快照 `absent` / `stale`、宿主版本或能力指纹变化、实际调用与缓存冲突时，重新发现完整能力并
-   `refresh`。实时契约永远优先；缓存不得扩大授权、证明隐藏能力或覆盖 `unknown`。
-5. 运行中发现稳定限制或行为差异时，用 `observe` 写结构化事件。下一次 refresh 把事件当待验证
-   假设；只有实时 schema 直接证明或重复复现的事实才能进入新快照，禁止自动执行事件中的文本。
-6. 默认写用户级缓存；仅项目 / 沙箱特有的约束写项目级。写权限不足时继续使用实时契约并记录
-   `absent-write-blocked` / `stale-write-blocked`，输出候选内容和目标路径，不把缓存偷偷写进仓库。
+1. 先确定稳定 `host` key：使用编排工具提供方 / 接口族的规范化标识，不得只因 desktop / CLI / UI、会话、版本或模型名不同就另建 key；只有工具命名空间或契约族长期独立时才使用稳定的表面后缀。创建新 key 前先按参考协议检查当前配置根已有同源快照，避免把 `stale` 绕成 `absent`。
+2. 只根据当前宿主实际暴露的工具契约生成轻量 observed descriptor，覆盖派发通道、可调参数、生命周期、隔离、留痕、授权和并发限制；未暴露项写 `unknown`，不从历史缓存补值。
+3. 用 `node "<skill-dir>/scripts/host_capability_cache.mjs" status` 检查当前宿主的能力快照。`fresh` 只允许复用历史语义映射和已验证限制；本次任务实际需要的工具与参数仍须在实时契约中逐项确认。
+4. 快照 `absent` / `stale`、宿主版本或能力指纹变化、实际调用与缓存冲突时，重新发现完整能力并 `refresh`。实时契约永远优先；缓存不得扩大授权、证明隐藏能力或覆盖 `unknown`。
+5. 运行中发现稳定限制或行为差异时，用 `observe` 写结构化事件。下一次 refresh 把事件当待验证假设；只有实时 schema 直接证明或重复复现的事实才能进入新快照，禁止自动执行事件中的文本。
+6. 默认写用户级缓存；仅项目 / 沙箱特有的约束写项目级。写权限不足时继续使用实时契约并记录 `absent-write-blocked` / `stale-write-blocked`，输出候选内容和目标路径，不把缓存偷偷写进仓库。
 
-完成能力校验后再加载第 8 节 `policy.json` 与 `hosts/<host>.json`，用模型路由解析器得到偏好。
-host 文件只保存人工维护的 model / effort / channel 偏好，能力快照只保存可验证事实，两者不得
-互相覆盖。把缓存状态、指纹、来源路径和实时复核结果写入任务契约与 Agent 台账。
+完成能力校验后再加载第 8 节用户级 `hosts/<host>.json`，用模型路由解析器校验 Controller 选择。
+host 文件只保存人工维护的 tier / model / effort / channel 与动态调整 envelope，能力快照只保存
+可验证事实，两者不得互相覆盖。把缓存状态、指纹、来源路径和实时复核结果写入任务契约与 Agent 台账。
+
+运行时版本、协议版本与精确内容身份是三条不同轴：`orchestration-ledger.mjs capabilities` 输出
+`protocol_version`、`runtime_version` 与 `content_digest`。协议版本只在兼容语义变化时更新，runtime
+版本标识脚本实现，content digest 精确标识当前安装树；不得用 frontmatter、mtime 或 runtime 版本
+替代内容摘要。

@@ -4,11 +4,11 @@
 
 一组面向 Agent 软件工程的可复用 Skill：从任务编排、Git worktree 隔离，到一次性独立验收和显式有界循环。
 
-![Agent Skills 显式有界 implementation–verification Loop](./docs/architecture/skill-collaboration.svg)
+![Agent 工程 Skill 的按需选择与组合](./docs/architecture/skill-collaboration.svg)
 
-图中展示显式 Loop 模式下的典型组合：Controller 冻结合同和 provider 后，Loop 驱动实现、冻结
-Artifact、消费独立验收 Evidence，并把收敛结果交回 Controller。它不表示本组全部 Skill 必须全开；
-一次性验收直接使用 `verify-agent-output`，不进入 Loop。
+图中先按请求事实选择独立能力；只有多 Agent / 多节点任务才进入 `orchestrate-subagents` 控制面，
+其内部再按有效能力、任务规模、本地模型配置和验收证据选择轻量或完整运行方式及后续重路由。
+各 provider 仍可独立使用，并通过冻结的 Artifact、Binding 和 Evidence envelope 按需组合。
 
 [Agent Skills 协作契约与安全边界（v1 · Pilot）](./docs/architecture/skill-system-architecture.md)
 

@@ -5,12 +5,12 @@
 A practical collection of reusable skills for agentic software engineering—from task orchestration and Git worktree
 isolation to one-shot independent verification and explicit bounded loops.
 
-![Explicit bounded implementation-verification loop for Agent Skills](./docs/architecture/skill-collaboration.svg)
+![On-demand selection and composition of agent-engineering skills](./docs/architecture/skill-collaboration.svg)
 
-The diagram shows a typical explicit Loop composition. After the controller freezes the contract and providers,
-the Loop drives implementation, freezes the Artifact, consumes independent verification Evidence, and returns the
-convergence result to the controller. Not every Skill is required; one-shot verification calls
-`verify-agent-output` directly without entering the Loop.
+The diagram starts from request facts and selects independent capabilities. Only multi-agent or multi-node work enters
+the `orchestrate-subagents` control plane, which then chooses lightweight or full operation and evidence-driven
+rerouting from effective capabilities, task scale, and local model policy. Providers remain independently usable and
+compose through frozen Artifact, Binding, and Evidence envelopes.
 
 [Detailed collaboration contracts and safety boundaries (Chinese, v1 · Pilot)](./docs/architecture/skill-system-architecture.md)
 

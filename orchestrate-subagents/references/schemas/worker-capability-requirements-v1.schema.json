@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-skills.local/schemas/worker-capability-requirements-v1.schema.json",
+  "title": "Worker Capability Requirements v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "host", "worker_profile", "capability_fingerprint", "binding", "required"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "host": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
+    "worker_profile": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "capability_fingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "binding": { "type": "string", "pattern": "^(session:[A-Za-z0-9._-]{1,128}|config:sha256:[0-9a-f]{64})$" },
+    "required": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^worker\\.[a-z][a-z0-9_.-]{0,63}$" }
+    }
+  }
+}
