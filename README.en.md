@@ -64,13 +64,11 @@ exists.
 
 - Git.
 - Node.js 18 or newer for the deterministic runtimes and helper scripts in all four skills.
-- Python 3.9 or newer for the `orchestrate-subagents` model-policy and configuration helpers; they use only the standard library.
 - A host with task or sub-agent isolation primitives when actual multi-agent execution is required.
 
 ## Local validation
 
 ```bash
-python3 -m unittest discover -s orchestrate-subagents/scripts -p 'test_*.py'
 node --test \
   manage-worktrees/scripts/*.test.mjs \
   orchestrate-subagents/scripts/*.test.mjs \
