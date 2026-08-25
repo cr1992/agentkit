@@ -54,6 +54,19 @@
             "provider": { "enum": ["none", "verify-agent-output", "run-agent-verify-loop"] }
           }
         },
+        "review_policy": {
+          "type": "object",
+          "required": ["schema_version", "max_primary_reviews_per_artifact", "max_escalation_reviews_per_artifact", "require_distinct_lens", "review_only_after_smoke_pass", "max_review_input_tokens"],
+          "properties": {
+            "schema_version": { "const": 1 },
+            "max_primary_reviews_per_artifact": { "type": "integer", "minimum": 0 },
+            "max_escalation_reviews_per_artifact": { "type": "integer", "minimum": 0 },
+            "require_distinct_lens": { "type": "boolean" },
+            "review_only_after_smoke_pass": { "type": "boolean" },
+            "max_review_input_tokens": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        },
         "projection": {
           "type": "object",
           "required": ["parent_contract_digest", "projected_item_ids"],

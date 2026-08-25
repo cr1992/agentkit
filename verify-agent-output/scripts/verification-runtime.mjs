@@ -12,12 +12,14 @@ import {
   fsyncSync,
   linkSync,
   lstatSync,
+  mkdtempSync,
   mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
   realpathSync,
   renameSync,
+  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -28,7 +30,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildProposal, buildReflection, readAndValidateReflection, verifyEvidenceRefs } from './reflection-support.mjs';
 import { collectJsonSchemaErrors, validateJsonSchema } from './json-schema-lite.mjs';
 
-export const RUNTIME_VERSION = '1.2.0';
+export const RUNTIME_VERSION = '1.3.0';
 export const PROTOCOL_VERSION = 1;
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const FINDING_CLASSES = new Set(['functional', 'scope', 'verification_definition', 'safety']);
@@ -36,6 +38,7 @@ const REVIEW_FINDING_FIELDS = ['contract_item_id', 'class', 'evidence', 'expecte
 const REVIEW_VERDICTS = new Set(['fail', 'no_defect_found', 'undecidable']);
 const STAGES = new Set(['smoke', 'final', 'both']);
 const TERMINAL_OUTCOMES = new Set(['pass', 'fail', 'undecidable', 'blocked_safety']);
+const REVIEW_STDIN_MAX_BYTES = 1024 * 1024;
 const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const schema = (name) => parseJsonStrict(readFileSync(join(SKILL_ROOT, 'references', 'schemas', name), 'utf8'));
 
@@ -791,23 +794,54 @@ const CLI_SPEC = {
   readiness: { values: ['contract', 'profile', 'workdir', 'state-root'], flags: [] },
   preflight: { values: ['contract', 'profile', 'artifact'], flags: ['network-isolated'] },
   init: { values: ['contract', 'profile', 'artifact', 'workdir', 'state-root', 'isolation-assurance', 'run-id'], flags: ['network-isolated', 'allow-repository-state'] },
-  'run-smoke': { values: ['run', 'expected-revision'], flags: [] },
+  'prepare-run': { values: ['contract', 'profile', 'artifact', 'workdir', 'state-root', 'isolation-assurance', 'run-id'], flags: ['network-isolated', 'allow-repository-state', 'verbose'] },
+  'run-smoke': { values: ['run', 'expected-revision'], flags: ['verbose'] },
   'review-input': { values: ['run'], flags: [] },
   'review-bundle': { values: ['run', 'out'], flags: [] },
-  'record-review': { values: ['run', 'review', 'verifier-run-id', 'isolation-assurance', 'expected-revision'], flags: [] },
-  'run-final': { values: ['run', 'expected-revision'], flags: [] },
+  'record-review': { values: ['run', 'review', 'verifier-run-id', 'isolation-assurance', 'expected-revision'], flags: ['stdin', 'verbose'] },
+  'run-final': { values: ['run', 'expected-revision'], flags: ['verbose'] },
   'record-reflection': { values: ['run', 'input', 'expected-revision'], flags: [] },
   'propose-improvement': { values: ['run', 'reflection', 'input', 'expected-revision'], flags: [] },
   status: { values: ['run'], flags: [] }, inspect: { values: ['run'], flags: [] }, validate: { values: ['run'], flags: [] }, doctor: { values: ['run'], flags: [] },
 };
 const CLI_USAGE = {
+  capabilities: '用法: capabilities [--json]',
   scaffold: '用法: scaffold --kind contract|profile|artifact|review|bundle [--workdir <git-root> --base-sha <full-sha>] [--review-input <json>]',
   prepare: '用法: prepare --workdir <git-root> [--out-dir <dir>]',
   digest: '用法: digest --kind contract|profile|review --input <json>',
   readiness: '用法: readiness --contract <json> --profile <json> --workdir <git-root> [--state-root <dir>]',
+  preflight: '用法: preflight --contract <json> --profile <json> --artifact <json> [--network-isolated]',
+  init: '用法: init --contract <json> --profile <json> --artifact <json> --workdir <git-root> --isolation-assurance host_reported|user_relayed [--state-root <dir>] [--run-id <id>]',
+  'prepare-run': '用法: prepare-run --contract <json> --profile <json> --artifact <json> --workdir <git-root> --isolation-assurance host_reported|user_relayed [--state-root <dir>] [--run-id <id>] [--network-isolated] [--verbose]',
+  'run-smoke': '用法: run-smoke --run <run-dir> [--expected-revision <n>] [--verbose]',
+  'review-input': '用法: review-input --run <run-dir>',
   'review-bundle': '用法: review-bundle --run <run-dir> [--out <path>]',
+  'record-review': '用法: record-review --run <run-dir> (--review <json>|--stdin) --verifier-run-id <id> --isolation-assurance host_reported|user_relayed [--expected-revision <n>] [--verbose]',
+  'run-final': '用法: run-final --run <run-dir> [--expected-revision <n>] [--verbose]',
+  'record-reflection': '用法: record-reflection --run <run-dir> --input <json> [--expected-revision <n>]',
+  'propose-improvement': '用法: propose-improvement --run <run-dir> --reflection <ref> --input <json> [--expected-revision <n>]',
+  status: '用法: status --run <run-dir>',
+  inspect: '用法: inspect --run <run-dir>',
+  validate: '用法: validate --run <run-dir>',
+  doctor: '用法: doctor --run <run-dir>',
 };
 const CLI_COMMANDS = Object.keys(CLI_SPEC).join('/');
+
+/** @param {string|null} command */
+function helpText(command = null) {
+  if (command) {
+    if (!CLI_SPEC[command]) throw new ValidationError(`未知命令: ${command}`);
+    return `${CLI_USAGE[command] ?? `用法: ${command}`}\n`;
+  }
+  return [
+    'verify-agent-output verification runtime',
+    '',
+    '命令：',
+    ...Object.keys(CLI_SPEC).map((name) => `  ${name.padEnd(20)} ${CLI_USAGE[name] ?? ''}`),
+    '',
+    '运行 `<command> --help` 查看子命令用法。',
+  ].join('\n') + '\n';
+}
 
 /** @param {string} command */
 function usageHint(command) {
@@ -856,7 +890,7 @@ function capabilities() {
     runtime_version: RUNTIME_VERSION,
     protocol_versions: [PROTOCOL_VERSION],
     contracts: { task_contract: [1], verification_profile: [1], artifact_ref: [1], review_result: [1], evidence_package: [1], reflection_record: [1], improvement_proposal: [1] },
-    features: ['input-scaffold', 'digest-helper', 'aggregate-preflight', 'prepare-scaffold-chain', 'readiness-preconditions', 'review-bundle', 'git-artifact', 'strict-json', 'rfc8785-digest', 'argv-l0', 'immutable-evidence', 'journal-recovery', 'skill-drift', 'evidence-bound-reflection', 'proposed-only-improvement'],
+    features: ['input-scaffold', 'digest-helper', 'aggregate-preflight', 'prepare-scaffold-chain', 'prepare-run', 'readiness-preconditions', 'review-bundle', 'review-stdin', 'compact-cli-output', 'command-help', 'git-artifact', 'strict-json', 'rfc8785-digest', 'argv-l0', 'immutable-evidence', 'journal-recovery', 'skill-drift', 'evidence-bound-reflection', 'proposed-only-improvement'],
     content_digest: skillContentDigest(),
   };
 }
@@ -1000,6 +1034,27 @@ function digestEnvelope(options) {
   return addDigest(readJson(required(options, 'input')), field);
 }
 
+/** @param {Record<string,any>|null} contract @param {Record<string,any>|null} profile @param {Record<string,any>|null} artifact @param {Set<string>} flags */
+function inspectValues(contract, profile, artifact, flags) {
+  const issues = [];
+  if (contract) issues.push(...collectContractIssues(contract));
+  const acceptanceIds = new Set(Array.isArray(contract?.acceptance) ? contract.acceptance.map((item) => item?.contract_item_id).filter(Boolean) : []);
+  if (profile) issues.push(...collectProfileIssues(profile, acceptanceIds));
+  if (artifact) issues.push(...collectArtifactIssues(artifact));
+  if (contract) {
+    try { validateSkillBinding(contract, skillContentDigest()); }
+    catch (error) { issues.push(error instanceof Error ? error.message : String(error)); }
+  }
+  if (profile?.runtime?.network_policy === 'denied' && !flags.has('network-isolated')) issues.push('network_policy=denied 时必须由宿主提供 --network-isolated assurance');
+  return {
+    valid: issues.length === 0,
+    errors: [...new Set(issues)],
+    content_digest: skillContentDigest(),
+    contract_digest: contract?.contract_digest ?? null,
+    verification_profile_digest: profile?.verification_profile_digest ?? null,
+  };
+}
+
 /** @param {Record<string,string>} options @param {Set<string>} flags */
 function inspectInputs(options, flags) {
   const issues = [];
@@ -1011,23 +1066,10 @@ function inspectInputs(options, flags) {
   const contract = load('contract', 'Task Contract');
   const profile = load('profile', 'Verification Profile');
   const artifact = load('artifact', 'Artifact Ref');
-  if (contract) issues.push(...collectContractIssues(contract));
-  const acceptanceIds = new Set(Array.isArray(contract?.acceptance) ? contract.acceptance.map((item) => item?.contract_item_id).filter(Boolean) : []);
-  if (profile) issues.push(...collectProfileIssues(profile, acceptanceIds));
-  if (artifact) issues.push(...collectArtifactIssues(artifact));
-  if (contract) {
-    try { validateSkillBinding(contract, skillContentDigest()); }
-    catch (error) { issues.push(error instanceof Error ? error.message : String(error)); }
-  }
-  if (profile?.runtime?.network_policy === 'denied' && !flags.has('network-isolated')) issues.push('network_policy=denied 时必须由宿主提供 --network-isolated assurance');
+  const report = inspectValues(contract, profile, artifact, flags);
+  const errors = [...new Set([...issues, ...report.errors])];
   return {
-    report: {
-      valid: issues.length === 0,
-      errors: [...new Set(issues)],
-      content_digest: skillContentDigest(),
-      contract_digest: contract?.contract_digest ?? null,
-      verification_profile_digest: profile?.verification_profile_digest ?? null,
-    },
+    report: { ...report, valid: errors.length === 0, errors },
     contract,
     profile,
     artifact,
@@ -1157,6 +1199,60 @@ function readiness(options) {
   const report = evaluateReadiness({ contract: loaded.contract ?? null, profile: loaded.profile ?? null, workdir, stateRoot: options['state-root'] ?? null });
   if (readErrors.length === 0) return report;
   return { ...report, ready: false, blockers: [...readErrors, ...report.blockers] };
+}
+
+/**
+ * Happy path：只在 readiness 与 preflight 都通过后创建 run；输入文件只读，digest 在临时副本中规范化。
+ * @param {Record<string,string>} options @param {Set<string>} flags
+ */
+function prepareRun(options, flags) {
+  const contractSource = readJson(required(options, 'contract'));
+  const profileSource = readJson(required(options, 'profile'));
+  const artifact = readJson(required(options, 'artifact'));
+  const contract = addDigest(contractSource, 'contract_digest');
+  const profile = addDigest(profileSource, 'verification_profile_digest');
+  const workdir = required(options, 'workdir');
+  const stateRoot = options['state-root'] ?? join(tmpdir(), 'verify-agent-output-state');
+  const readinessReport = evaluateReadiness({ contract, profile, workdir, stateRoot });
+  if (!readinessReport.ready) {
+    return { prepared: false, status: 'blocked_precondition', readiness: readinessReport, preflight: null, run_id: null, revision: null, evidence_digest: null };
+  }
+  const preflightReport = inspectValues(contract, profile, artifact, flags);
+  if (!preflightReport.valid) {
+    return { prepared: false, status: 'invalid_input', readiness: readinessReport, preflight: preflightReport, run_id: null, revision: null, evidence_digest: null };
+  }
+
+  const temporary = mkdtempSync(join(tmpdir(), 'verify-agent-output-prepare-'));
+  try {
+    const paths = {
+      contract: join(temporary, 'contract.json'),
+      profile: join(temporary, 'profile.json'),
+      artifact: join(temporary, 'artifact.json'),
+    };
+    writeNewJson(paths.contract, contract);
+    writeNewJson(paths.profile, profile);
+    writeNewJson(paths.artifact, artifact);
+    const initialized = initialize({
+      ...options,
+      contract: paths.contract,
+      profile: paths.profile,
+      artifact: paths.artifact,
+      'state-root': stateRoot,
+    }, flags);
+    return {
+      prepared: true,
+      ...initialized,
+      readiness: readinessReport,
+      preflight: preflightReport,
+      normalized_digests: {
+        contract_digest: contract.contract_digest,
+        verification_profile_digest: profile.verification_profile_digest,
+      },
+      evidence_digest: null,
+    };
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
 }
 
 /** @param {Record<string,string>} options @param {Set<string>} flags */
@@ -1408,10 +1504,23 @@ function reviewBundle(options) {
   return { out: outPath, bytes: Buffer.byteLength(text, 'utf8'), run_id: bundle.run_id, contract_kind: contractKind };
 }
 
-/** @param {Record<string,string>} options */
-function recordReview(options) {
+/** @param {Record<string,string>} options @param {Set<string>} flags */
+function reviewPayload(options, flags) {
+  const fromStdin = flags.has('stdin');
+  if (fromStdin && options.review) throw new ValidationError('record-review 的 --review 与 --stdin 互斥');
+  if (!fromStdin) return readJson(required(options, 'review'));
+  if (process.stdin.isTTY === true) throw new ValidationError('--stdin 拒绝从交互式 TTY 等待输入；请使用 pipe 或 --review <json>');
+  const text = readFileSync(0, 'utf8');
+  if (!text.trim()) throw new ValidationError('--stdin 未收到 Review Result JSON');
+  if (Buffer.byteLength(text, 'utf8') > REVIEW_STDIN_MAX_BYTES) throw new ValidationError(`--stdin 超过 ${REVIEW_STDIN_MAX_BYTES} bytes 上限`);
+  const parsed = parseJsonStrict(text);
+  return parsed.review_result_digest ? parsed : addDigest(parsed, 'review_result_digest');
+}
+
+/** @param {Record<string,string>} options @param {Set<string>} flags */
+function recordReview(options, flags) {
   const runDir = realpathSync(required(options, 'run'));
-  const review = readJson(required(options, 'review'));
+  const review = reviewPayload(options, flags);
   const verifierRunId = required(options, 'verifier-run-id');
   const assurance = required(options, 'isolation-assurance');
   if (!['host_reported', 'user_relayed'].includes(assurance)) throw new ValidationError('isolation-assurance 非法');
@@ -1507,6 +1616,8 @@ function doctor(options) {
 
 /** @param {string[]} argv */
 export function main(argv = process.argv.slice(2)) {
+  if (['--help', '-h', 'help'].includes(argv[0] ?? '')) return { __help: helpText(argv[0] === 'help' ? argv[1] ?? null : null) };
+  if (['--help', '-h'].includes(argv[1] ?? '')) return { __help: helpText(argv[0] ?? null) };
   const { command, options, flags } = parseCli(argv);
   switch (command) {
     case 'capabilities': return capabilities();
@@ -1516,10 +1627,11 @@ export function main(argv = process.argv.slice(2)) {
     case 'readiness': return readiness(options);
     case 'preflight': return preflight(options, flags);
     case 'init': return initialize(options, flags);
+    case 'prepare-run': return prepareRun(options, flags);
     case 'run-smoke': return runSmoke(options);
     case 'review-input': return reviewInput(options);
     case 'review-bundle': return reviewBundle(options);
-    case 'record-review': return recordReview(options);
+    case 'record-review': return recordReview(options, flags);
     case 'run-final': return runFinal(options);
     case 'record-reflection': return recordReflection(options);
     case 'propose-improvement': return proposeImprovement(options);
@@ -1529,6 +1641,28 @@ export function main(argv = process.argv.slice(2)) {
     case 'doctor': return doctor(options);
     default: throw new ValidationError(`命令必须是 ${CLI_COMMANDS}`);
   }
+}
+
+/** @param {Record<string,any>} result */
+function compactRunResult(result) {
+  const failedChecks = [];
+  for (const stage of Object.values(result?.stages ?? {})) {
+    for (const check of stage?.checks ?? []) if (check.passed === false) failedChecks.push(check.check_id);
+  }
+  for (const finding of result?.review_result?.findings ?? []) failedChecks.push(`l1:${finding.contract_item_id}`);
+  const outcome = result?.terminal?.outcome ?? result?.status ?? (result?.prepared === false ? 'blocked' : null);
+  return {
+    run_id: result?.run_id ?? null,
+    revision: result?.revision ?? null,
+    status: outcome,
+    failed_checks: [...new Set(failedChecks)],
+    evidence_digest: result?.terminal?.evidence_digest ?? result?.evidence_digest ?? null,
+    ...(result?.run_dir ? { run_dir: result.run_dir } : {}),
+    ...(result?.prepared !== undefined ? { prepared: result.prepared } : {}),
+    ...(result?.terminal && result.terminal.outcome !== 'pass' ? {
+      next_mode_hint: '本次单 Artifact 验收已终止并保留 Evidence；若已授权修复且预期多轮，请用 run-agent-verify-loop 创建新 Artifact/run。',
+    } : {}),
+  };
 }
 
 /** @param {string} metaUrl @param {string} argv1 */
@@ -1544,9 +1678,15 @@ export function isCliEntry(metaUrl, argv1) {
 if (isCliEntry(import.meta.url, process.argv[1])) {
   try {
     const result = main();
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    if (result?.__help) process.stdout.write(result.__help);
+    else {
+      const command = process.argv[2];
+      const compact = ['prepare-run', 'run-smoke', 'record-review', 'run-final'].includes(command) && !process.argv.includes('--verbose');
+      process.stdout.write(`${JSON.stringify(compact ? compactRunResult(result) : result, null, 2)}\n`);
+    }
     if (process.argv[2] === 'preflight' && result?.valid === false) process.exitCode = 2;
     if (process.argv[2] === 'readiness' && result?.ready === false) process.exitCode = 2;
+    if (process.argv[2] === 'prepare-run' && result?.prepared === false) process.exitCode = 2;
   } catch (error) {
     const code = error instanceof OperationalAbort ? error.code : error instanceof ValidationError ? 'invalid_input' : 'runtime_error';
     process.stderr.write(`${JSON.stringify({ error: code, message: error instanceof Error ? error.message : String(error) })}\n`);

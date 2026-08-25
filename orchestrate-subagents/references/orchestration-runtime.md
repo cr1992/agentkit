@@ -25,8 +25,22 @@ status / inspect / rebuild / doctor / capabilities
 ```
 
 `capabilities` 同时输出独立的 `protocol_version`、`runtime_version` 和 Skill tree `content_digest`。
-当前协议版本为 `1.1.0`，ledger runtime 为 `1.5.0`；三者分别表达兼容语义、脚本实现和精确安装内容，
+当前协议版本为 `1.1.0`，ledger runtime 为 `1.6.0`；三者分别表达兼容语义、脚本实现和精确安装内容，
 不能互相替代。
+
+## Reviewer 预算门禁
+
+Reviewer 不是 worker 的 1:1 配套。合同需要 reviewer 时，在 freeze 前写入
+`extensions.review_policy`，派发前执行：
+
+```text
+review-budget.mjs evaluate --policy <json> --history <json> --request <json>
+```
+
+默认每个 Artifact 最多一次 primary review；仅当 primary 为 `undecidable`、证据冲突或协议歧义时，
+允许一个不同 lens 的 escalation review。smoke 未通过、同 lens 重复、输入预算超限或已有 safety stop
+均拒绝派发。runtime 只做纯门禁，不直接创建 reviewer；详细 envelope 和建议默认值见
+[Reviewer 与 Token 预算](review-budget.md)。
 
 所有修改命令支持 `--expected-revision`。状态默认写在业务仓库外；宿主派发回执必须通过
 `dispatch-record` 绑定精确 worker identity、本地 tier、model、reasoning effort、attempt lineage、

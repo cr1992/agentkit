@@ -1,6 +1,6 @@
 ---
 name: run-agent-verify-loop
-description: "运行显式的 Agent 实现—独立验收有界循环：controller 先冻结 Task Contract、Verification Profile、provider 和轮次限制，再由 implementer 迭代产出 Artifact、独立 reviewer 主动证伪，runtime 通过状态台账、防重放、失败指纹、熔断和人工门推进收敛。当用户明确要求一个 Agent 实现另一个验收、独立 reviewer 反复复查直到通过、设置可恢复的验证循环，或显式调用 /run-agent-verify-loop + 目标时使用。普通目标、一次性独立验收、实现者自测、普通批量处理不适用。"
+description: "运行有界的 Agent 实现—独立验收循环，记录 Artifact、Evidence、失败指纹和熔断状态。仅在用户明确要求反复修复验收，或已预期同一目标会产生多轮新 Artifact 时使用；一次性验收和普通批量不适用。"
 ---
 
 # run-agent-verify-loop：显式实现—验收循环
@@ -13,7 +13,8 @@ description: "运行显式的 Agent 实现—独立验收有界循环：controll
 命中以下两类之一才启动：
 
 - 用户明确要求反复修复并由独立 reviewer 验收；
-- 用户显式调用 `/run-agent-verify-loop <目标>`。
+- 用户显式调用 `/run-agent-verify-loop <目标>`；
+- controller 在 freeze 前已有证据表明同一收敛对象很可能需要连续新 Artifact，且用户已经授权该修复范围与有界重试。
 
 启动前固定顺序：
 
@@ -22,6 +23,10 @@ description: "运行显式的 Agent 实现—独立验收有界循环：controll
 3. freeze 前完成 capability discovery 和 provider 选择；
 4. 冻结 Task Contract、Verification Profile、Skill content digest、limits 与 H gate；
 5. 创建 Loop State，再开始 implement → artifact → verify → decide。
+
+不要先手工串多次 `verify-agent-output` 再把结果伪装成一个 Loop。若一次性 verification 已 terminal 后
+才获得循环授权，旧 Evidence 保持不可变；新建 Loop、冻结 limits，并把后续新 Artifact 作为正式
+iteration。Loop 可以把旧 Evidence 当背景/失败证据，但不得重写其 run_id、revision 或 verdict。
 
 普通 Loop 不自动创建宿主持久 Goal。只有用户明确要求持续追踪 Goal 时，controller 才创建外部 Goal
 并把不透明 `goal_ref` 绑定进 Loop；Loop completed 仍只是 Goal 的完成证据之一。
@@ -52,7 +57,6 @@ verifier 行为语义以 `verify-agent-output/references/verification-protocol.m
 从宿主解析出的 Skill 目录调用脚本，状态默认放仓库外：
 
 ```text
-node <skill-dir>/scripts/loop-runtime.mjs capabilities
 node <skill-dir>/scripts/loop-runtime.mjs init \
   --contract contract.json --profile profile.json \
   --provider verify-agent-output --state-root <state-root> \
@@ -62,13 +66,7 @@ node <skill-dir>/scripts/loop-runtime.mjs record-artifact \
 node <skill-dir>/scripts/loop-runtime.mjs record-evidence \
   --loop <loop-dir> --evidence evidence.json
 node <skill-dir>/scripts/loop-runtime.mjs next --loop <loop-dir>
-node <skill-dir>/scripts/loop-runtime.mjs record-reflection \
-  --loop <loop-dir> --input reflection-input.json
-node <skill-dir>/scripts/loop-runtime.mjs convergence-report --loop <loop-dir>
-node <skill-dir>/scripts/loop-runtime.mjs propose-improvement \
-  --loop <loop-dir> --reflection <relative-ref> --input proposal-input.json
 node <skill-dir>/scripts/loop-runtime.mjs status --loop <loop-dir>
-node <skill-dir>/scripts/loop-runtime.mjs adopt-root --state-root <moved-or-copied-state-root>
 ```
 
 Embedded 模式在 `record-artifact` 后执行：
@@ -79,7 +77,8 @@ run-embedded-l0 → 新上下文 reviewer → record-embedded-review
 
 所有状态写命令可带 `--expected-revision <n>`；revision 不匹配时拒绝写入。详细状态迁移见
 [references/loop-state-machine.md](references/loop-state-machine.md)，恢复和熔断见
-[references/recovery-and-fuses.md](references/recovery-and-fuses.md)。
+[references/recovery-and-fuses.md](references/recovery-and-fuses.md)。只有发生复制/移动、journal 恢复、
+reflection 或提案时才使用 `adopt-root / record-reflection / convergence-report / propose-improvement --help`。
 
 ## 决策规则
 

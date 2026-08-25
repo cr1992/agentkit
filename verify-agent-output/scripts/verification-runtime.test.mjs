@@ -166,6 +166,89 @@ test('scaffold/digest 生成可复用骨架并冻结当前 Skill 摘要', () => 
   } finally { fixture.cleanup(); }
 });
 
+test('prepare-run 只读规范化输入并一次完成 readiness、preflight 与 init', () => {
+  const fixture = makeFixture();
+  try {
+    const contractPath = join(fixture.sandbox, 'contract.json');
+    const profilePath = join(fixture.sandbox, 'profile.json');
+    const contract = JSON.parse(readFileSync(contractPath, 'utf8'));
+    const profile = JSON.parse(readFileSync(profilePath, 'utf8'));
+    contract.contract_digest = 'placeholder';
+    delete profile.verification_profile_digest;
+    writeFileSync(contractPath, `${JSON.stringify(contract, null, 2)}\n`);
+    writeFileSync(profilePath, `${JSON.stringify(profile, null, 2)}\n`);
+    const before = { contract: readFileSync(contractPath, 'utf8'), profile: readFileSync(profilePath, 'utf8') };
+
+    const cli = spawnSync(process.execPath, [
+      join(SCRIPT_DIR, 'verification-runtime.mjs'), 'prepare-run',
+      '--contract', contractPath, '--profile', profilePath, '--artifact', join(fixture.sandbox, 'artifact.json'),
+      '--workdir', fixture.repo, '--state-root', fixture.stateRoot, '--isolation-assurance', 'host_reported',
+    ], { encoding: 'utf8' });
+    assert.equal(cli.status, 0, cli.stderr);
+    const compact = JSON.parse(cli.stdout);
+    assert.equal(compact.prepared, true);
+    assert.equal(compact.status, 'initialized');
+    assert.deepEqual(compact.failed_checks, []);
+    assert.equal(readFileSync(contractPath, 'utf8'), before.contract, '源 contract 不得被改写');
+    assert.equal(readFileSync(profilePath, 'utf8'), before.profile, '源 profile 不得被改写');
+    const frozenContract = JSON.parse(readFileSync(join(compact.run_dir, 'contract.json'), 'utf8'));
+    const frozenProfile = JSON.parse(readFileSync(join(compact.run_dir, 'profile.json'), 'utf8'));
+    assert.equal(frozenContract.contract_digest, envelopeDigest(frozenContract, 'contract_digest'));
+    assert.equal(frozenProfile.verification_profile_digest, envelopeDigest(frozenProfile, 'verification_profile_digest'));
+  } finally { fixture.cleanup(); }
+});
+
+test('CLI 子命令支持 --help，状态变更默认 compact 且 --verbose 保留完整 snapshot', () => {
+  const fixture = makeFixture();
+  try {
+    const script = join(SCRIPT_DIR, 'verification-runtime.mjs');
+    const help = spawnSync(process.execPath, [script, 'record-review', '--help'], { encoding: 'utf8' });
+    assert.equal(help.status, 0);
+    assert.match(help.stdout, /record-review --run/);
+    assert.equal(help.stderr, '');
+
+    const initialized = initialize(fixture);
+    const compactCli = spawnSync(process.execPath, [script, 'run-smoke', '--run', initialized.run_dir], { encoding: 'utf8' });
+    assert.equal(compactCli.status, 0, compactCli.stderr);
+    const compact = JSON.parse(compactCli.stdout);
+    assert.deepEqual(Object.keys(compact), ['run_id', 'revision', 'status', 'failed_checks', 'evidence_digest']);
+    assert.equal(compact.status, 'smoke_passed');
+    assert.equal(compact.revision, 1);
+
+    const nextFixture = makeFixture();
+    try {
+      const next = initialize(nextFixture);
+      const verboseCli = spawnSync(process.execPath, [script, 'run-smoke', '--run', next.run_dir, '--verbose'], { encoding: 'utf8' });
+      assert.equal(verboseCli.status, 0, verboseCli.stderr);
+      const verbose = JSON.parse(verboseCli.stdout);
+      assert.equal(verbose.status, 'smoke_passed');
+      assert.equal(verbose.stages.smoke_l0.passed, true);
+      assert.equal(verbose.contract_digest, nextFixture.contract.contract_digest);
+    } finally { nextFixture.cleanup(); }
+  } finally { fixture.cleanup(); }
+});
+
+test('record-review --stdin 接收结构化 reviewer 结果、自动补 digest 且不需要临时文件', () => {
+  const fixture = makeFixture();
+  try {
+    const initialized = initialize(fixture);
+    main(['run-smoke', '--run', initialized.run_dir]);
+    const review = validReview(fixture);
+    delete review.review_result_digest;
+    const cli = spawnSync(process.execPath, [
+      join(SCRIPT_DIR, 'verification-runtime.mjs'), 'record-review',
+      '--run', initialized.run_dir, '--stdin', '--verifier-run-id', 'stdin-reviewer',
+      '--isolation-assurance', 'host_reported', '--expected-revision', '1',
+    ], { encoding: 'utf8', input: JSON.stringify(review) });
+    assert.equal(cli.status, 0, cli.stderr);
+    const compact = JSON.parse(cli.stdout);
+    assert.equal(compact.status, 'review_recorded');
+    assert.equal(compact.revision, 2);
+    const persisted = JSON.parse(readFileSync(join(initialized.run_dir, 'review-result.json'), 'utf8'));
+    assert.equal(persisted.review_result_digest, envelopeDigest(persisted, 'review_result_digest'));
+  } finally { fixture.cleanup(); }
+});
+
 test('preflight 与 init 一次汇总 Profile 形状、枚举、摘要和隔离 assurance 错误', () => {
   const fixture = makeFixture();
   try {

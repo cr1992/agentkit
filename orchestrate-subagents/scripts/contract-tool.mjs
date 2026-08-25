@@ -67,6 +67,20 @@ export function validateContract(contract, { requireDigest = true } = {}) {
     !verification || typeof verification !== 'object' || Array.isArray(verification)
     || !['none', 'verify-agent-output', 'run-agent-verify-loop'].includes(verification.provider)
   )) throw new ContractError('extensions.verification 无效');
+  const reviewPolicy = contract.extensions.review_policy;
+  if (reviewPolicy !== undefined) {
+    const expected = ['max_escalation_reviews_per_artifact', 'max_primary_reviews_per_artifact', 'max_review_input_tokens', 'require_distinct_lens', 'review_only_after_smoke_pass', 'schema_version'];
+    const keys = reviewPolicy && typeof reviewPolicy === 'object' && !Array.isArray(reviewPolicy) ? Object.keys(reviewPolicy).sort() : [];
+    if (
+      reviewPolicy?.schema_version !== 1
+      || JSON.stringify(keys) !== JSON.stringify(expected)
+      || !Number.isSafeInteger(reviewPolicy.max_primary_reviews_per_artifact) || reviewPolicy.max_primary_reviews_per_artifact < 0
+      || !Number.isSafeInteger(reviewPolicy.max_escalation_reviews_per_artifact) || reviewPolicy.max_escalation_reviews_per_artifact < 0
+      || !Number.isSafeInteger(reviewPolicy.max_review_input_tokens) || reviewPolicy.max_review_input_tokens < 1
+      || typeof reviewPolicy.require_distinct_lens !== 'boolean'
+      || typeof reviewPolicy.review_only_after_smoke_pass !== 'boolean'
+    ) throw new ContractError('extensions.review_policy 无效');
+  }
   if (!Array.isArray(contract.skill_set)) throw new ContractError('skill_set 必须是数组');
   const skills = new Set();
   for (const skill of contract.skill_set) {

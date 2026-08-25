@@ -91,3 +91,26 @@ test('verification extension 只接受已知 provider', () => {
     assert.throws(() => main(['normalize', '--input', f.path]), /extensions\.verification/);
   } finally { f.cleanup(); }
 });
+
+test('review_policy 在合同 freeze 前固定 reviewer 数量与输入预算', () => {
+  const f = fixture();
+  try {
+    f.value.extensions.review_policy = {
+      schema_version: 1,
+      max_primary_reviews_per_artifact: 1,
+      max_escalation_reviews_per_artifact: 1,
+      require_distinct_lens: true,
+      review_only_after_smoke_pass: true,
+      max_review_input_tokens: 12_000,
+    };
+    writeFileSync(f.path, JSON.stringify(f.value));
+    assert.equal(main(['normalize', '--input', f.path]).extensions.review_policy.max_primary_reviews_per_artifact, 1);
+    f.value.extensions.review_policy.max_review_input_tokens = 0;
+    writeFileSync(f.path, JSON.stringify(f.value));
+    assert.throws(() => main(['normalize', '--input', f.path]), /extensions\.review_policy/);
+    f.value.extensions.review_policy.max_review_input_tokens = 12_000;
+    f.value.extensions.review_policy.unbounded = true;
+    writeFileSync(f.path, JSON.stringify(f.value));
+    assert.throws(() => main(['normalize', '--input', f.path]), /extensions\.review_policy/);
+  } finally { f.cleanup(); }
+});

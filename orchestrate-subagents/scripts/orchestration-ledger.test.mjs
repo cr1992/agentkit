@@ -215,10 +215,11 @@ test('capabilities --json 保持统一能力发现兼容', () => {
   const capabilities = JSON.parse(output);
   assert.equal(capabilities.skill, 'orchestrate-subagents');
   assert.equal(capabilities.protocol_version, '1.1.0');
-  assert.equal(capabilities.runtime_version, '1.5.0');
+  assert.equal(capabilities.runtime_version, '1.6.0');
   assert.ok(capabilities.features.includes('worker-capability-preflight'));
   assert.ok(capabilities.features.includes('lightweight-reflection'));
   assert.ok(capabilities.features.includes('evidence-bound-dynamic-reroute'));
+  assert.ok(capabilities.features.includes('review-budget-gate'));
 });
 
 test('dead owner 遗留的 ledger reclaim 子锁可自愈', () => {

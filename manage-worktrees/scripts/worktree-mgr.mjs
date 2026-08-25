@@ -80,7 +80,7 @@ function git(args, cwd = process.cwd()) {
  * 有界执行外部命令。timeout 是 spawn/fetch 不得无限挂住的底线，也供单测验证。
  * @param {string} command
  * @param {string[]} args
- * @param {{cwd?:string, timeoutMs?:number, stdio?:any}} [options]
+ * @param {{cwd?:string, timeoutMs?:number, stdio?:any, env?:NodeJS.ProcessEnv}} [options]
  */
 export function runFileTry(command, args, options = {}) {
   try {
@@ -88,6 +88,7 @@ export function runFileTry(command, args, options = {}) {
       cwd: options.cwd ?? process.cwd(),
       encoding: 'utf8',
       stdio: options.stdio ?? ['ignore', 'pipe', 'pipe'],
+      env: options.env ?? process.env,
       timeout: options.timeoutMs,
       maxBuffer: 64 * 1024 * 1024,
     });
@@ -127,7 +128,7 @@ export function runFileCapture(command, args, options = {}) {
   };
 }
 
-/** @param {string[]} args @param {string} [cwd] @param {{timeoutMs?:number,stdio?:any}} [options] */
+/** @param {string[]} args @param {string} [cwd] @param {{timeoutMs?:number,stdio?:any,env?:NodeJS.ProcessEnv}} [options] */
 function gitTry(args, cwd = process.cwd(), options = {}) {
   return runFileTry('git', args, { cwd, ...options });
 }
@@ -408,7 +409,7 @@ function die(message, code = 1) {
 function parseArgs(argv) {
   const flags = new Map();
   const positionals = [];
-  const booleanFlags = new Set(['json', 'all', 'recover-lock', 'no-watch', 'abort-on-conflict', 'no-rerere', 'recompose', 'scan-conflicts']);
+  const booleanFlags = new Set(['json', 'all', 'recover-lock', 'no-watch', 'abort-on-conflict', 'no-rerere', 'recompose', 'scan-conflicts', 'abort', 'continue']);
   for (let index = 0; index < argv.length; index++) {
     const value = argv[index];
     if (!value.startsWith('--')) {
@@ -447,6 +448,23 @@ function oneLine(value, label, max) {
     die(`${label} 必须是 1-${max} 字符的单行文本。`, 2);
   }
   return normalized;
+}
+
+/** @param {string} value @param {string} label */
+function httpUrl(value, label) {
+  const normalized = oneLine(value, label, 1000);
+  let parsed;
+  try { parsed = new URL(normalized); } catch { die(`${label} 必须是合法 http(s) URL。`, 2); }
+  if (!['http:', 'https:'].includes(parsed.protocol)) die(`${label} 只接受 http(s) URL。`, 2);
+  return normalized;
+}
+
+/** 同义 flag 只允许给出一个值，避免调用者以为其中一个被忽略。 */
+function aliasedFlag(flags, primary, alias) {
+  const left = flag(flags, primary);
+  const right = flag(flags, alias);
+  if (left && right && left !== right) die(`--${primary} 与 --${alias} 指向不同值，拒绝歧义。`, 2);
+  return left ?? right;
 }
 
 /** @param {Map<string, unknown>} flags @param {{target?:boolean, requirePurpose?:boolean}} [options] */
@@ -1077,6 +1095,7 @@ function cmdSpawn(args) {
     base_ref: plan.base_ref,
     base_sha: baseSha.out,
     base_reason: baseReason,
+    stack_parent: stackParentForRef(currentRecords, plan.base_ref, baseSha.out),
     agent: identity.actor,
     owner: identity.owner,
     task_status: 'active',
@@ -1104,7 +1123,7 @@ function cmdSpawn(args) {
     worktreeId,
     eventType: 'created',
     actor: identity.actor,
-    details: { identity_sources: identity.sources, base_source: plan.base_source, base_reason: baseReason, delivery_relation: deliveryRelation },
+    details: { identity_sources: identity.sources, base_source: plan.base_source, base_reason: baseReason, stack_parent_worktree_id: record.stack_parent?.worktree_id ?? null, delivery_relation: deliveryRelation },
     mutate: () => record,
   });
   if (deliveryRelation?.kind === 'supersedes') {
@@ -1157,10 +1176,12 @@ function cmdAdopt(args) {
   initializeTraceStore(loaded.context);
   const worktreeId = randomUUID();
   const now = new Date().toISOString();
+  const adoptedBaseSha = mergeBase.ok ? mergeBase.out : head;
   const record = {
     schema_version: 1, worktree_id: worktreeId, task, purpose: identity.purpose, path,
-    branch: worktree.branch, base_ref: base.ref, base_sha: mergeBase.ok ? mergeBase.out : head,
+    branch: worktree.branch, base_ref: base.ref, base_sha: adoptedBaseSha,
     base_reason: baseReason,
+    stack_parent: stackParentForRef(records, base.ref, adoptedBaseSha),
     agent: identity.actor, owner: identity.owner, task_status: 'active', worktree_state: 'present',
     storage_class: classifyStorage(path, loaded.profile.ephemeral_path_patterns),
     profile_source: loaded.profile_source, profile_path: loaded.profile_path,
@@ -1179,6 +1200,7 @@ function cmdAdopt(args) {
       task_source: flag(args.flags, 'task') ? 'explicit' : 'branch_inferred',
       base_source: base.source,
       base_reason: baseReason,
+      stack_parent_worktree_id: record.stack_parent?.worktree_id ?? null,
     },
     mutate: () => record,
   });
@@ -1273,16 +1295,357 @@ function cmdList(args) {
   }
 }
 
+/** @param {Record<string,any>} record @param {string} command */
+function assertHistoryOperationIdle(record, command) {
+  if (!record.history_operation) return;
+  die(
+    `${command} 被未完成的 ${record.history_operation.kind ?? 'history'} 操作阻塞` +
+    `（token=${record.history_operation.token ?? 'unknown'}, state=${record.history_operation.state ?? 'unknown'}）。` +
+    '先重跑 rebase 完成恢复，或使用 rebase --abort。',
+    2,
+  );
+}
+
+/** @param {Record<string,any>[]} records @param {string} ref @param {string} baseSha */
+function stackParentForRef(records, ref, baseSha) {
+  const normalized = ref.replace(/^refs\/heads\//u, '');
+  const candidates = records.filter((record) =>
+    record.worktree_state !== 'reclaimed' &&
+    record.branch &&
+    (record.branch === normalized || normalized.endsWith(`/${record.branch}`)),
+  );
+  if (candidates.length > 1) die(`base ref ${ref} 同时匹配多个 tracked parent；请先清理歧义。`, 2);
+  const parent = candidates[0];
+  if (!parent) return null;
+  return {
+    worktree_id: parent.worktree_id,
+    task: parent.task,
+    branch: parent.branch,
+    base_ref: ref,
+    parent_head_sha: baseSha,
+    recorded_at: new Date().toISOString(),
+  };
+}
+
+/** @param {Record<string,any>} record @param {string} command */
+function historyChangeSnapshot(record, command) {
+  if (!['active', 'blocked', 'ready_for_review'].includes(record.task_status)) {
+    die(`${command} 只接受 active/blocked/ready_for_review，当前为 ${record.task_status}。`, 2);
+  }
+  if (record.worktree_state !== 'present') die(`${command} 要求 worktree_state=present。`, 2);
+  const snapshot = liveGitSnapshot(record);
+  if (!snapshot.present) die(`${command} 要求 worktree 仍存在。`, 2);
+  if (snapshot.dirty !== false) die(`${command} 要求工作树干净（含 untracked）。`, 2);
+  if (!snapshot.head || !record.branch) die(`${command} 不支持 detached HEAD。`, 2);
+  const currentBranch = gitTry(['branch', '--show-current'], record.path);
+  if (!currentBranch.ok || currentBranch.out !== record.branch) {
+    die(`${command} 检测到 branch 漂移：live=${currentBranch.out || '(detached)'} record=${record.branch}`, 2);
+  }
+  const operation = gitOperationState(record.path);
+  if (operation) die(`${command} 检测到未完成 Git 操作 ${operation}。`, 2);
+  if (record.auto_reclaim?.state === 'merge_detected') {
+    die(`${command} 拒绝改写已进入 merge_detected 的冻结边界。`, 2);
+  }
+  return snapshot;
+}
+
+/** @param {Record<string,any>} next @param {string} reason */
+function disarmHistoryWatcher(next, reason) {
+  const watch = next.auto_reclaim;
+  if (!watch || ['disarmed', 'reclaimed'].includes(watch.state)) return null;
+  watch.state = 'disarmed';
+  watch.disarmed_at = new Date().toISOString();
+  watch.disarm_reason = reason;
+  return watch.token ?? null;
+}
+
+/** @param {string} cwd @param {string} fromExclusive @param {string} through */
+function revisionList(cwd, fromExclusive, through) {
+  const result = gitTry(['rev-list', '--reverse', `${fromExclusive}..${through}`], cwd);
+  return result.ok && result.out ? result.out.split('\n').filter(Boolean) : [];
+}
+
+/** @param {Record<string,any>[]} records @param {string} ref @param {string} cwd */
+function resolveManagedBase(records, ref, cwd) {
+  const refreshed = refreshTargetRef(ref, cwd);
+  if (!refreshed.ok || !refreshed.target_sha) die(`无法解析或刷新 base ref: ${ref}`, 2);
+  return {
+    ref,
+    sha: refreshed.target_sha,
+    parent: stackParentForRef(records, ref, refreshed.target_sha),
+  };
+}
+
+/** @param {Record<string,any>[]} records @param {Record<string,any>} record @param {Record<string,any>|null} parent @param {string} command */
+function assertStackParentAcyclic(records, record, parent, command) {
+  if (!parent) return;
+  const byId = new Map(records.map((candidate) => [candidate.worktree_id, candidate]));
+  let cursor = parent.worktree_id;
+  const seen = new Set();
+  while (cursor) {
+    if (cursor === record.worktree_id) die(`${command} 会形成 stack parent 环，拒绝更新。`, 2);
+    if (seen.has(cursor)) die(`${command} 检测到已有 stack parent 环，拒绝扩散。`, 2);
+    seen.add(cursor);
+    cursor = byId.get(cursor)?.stack_parent?.worktree_id ?? null;
+  }
+}
+
+/**
+ * 只改验证/MR 目标，不改 Git 历史。新 base 必须已经是 live HEAD 的祖先；否则必须走受控 rebase。
+ * @param {{positionals:string[],flags:Map<string,unknown>}} args
+ */
+function cmdRetarget(args) {
+  rejectUnknownFlags(args.flags, ['base', 'reason', 'expected-head', 'id', 'config']);
+  const baseRef = oneLine(flag(args.flags, 'base') ?? '', 'base', 240);
+  const reason = oneLine(flag(args.flags, 'reason') ?? '', 'reason', 240);
+  const expectedHead = oneLine(flag(args.flags, 'expected-head') ?? '', 'expected-head', 128);
+  const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
+  const records = loadRecords(loaded.context.common_dir);
+  const record = selectRecord(records, args.positionals[0] ?? null, flag(args.flags, 'id'));
+  assertHistoryOperationIdle(record, 'retarget');
+  const snapshot = historyChangeSnapshot(record, 'retarget');
+  if (snapshot.head !== expectedHead) die(`retarget HEAD CAS 失败：expected=${expectedHead}, actual=${snapshot.head}`, 2);
+  const base = resolveManagedBase(records, baseRef, record.path);
+  assertStackParentAcyclic(records, record, base.parent, 'retarget');
+  if (!isAncestor(record.path, base.sha, snapshot.head)) {
+    die(`retarget 不改写历史，但 ${base.sha} 不是 live HEAD 的祖先；请改用 rebase --onto ${baseRef}。`, 2);
+  }
+  const oldWatch = record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
+    ? structuredClone(record.auto_reclaim)
+    : null;
+  const updated = updateRecord(record, 'base_retargeted', (next) => {
+    const live = liveGitSnapshot(next);
+    if (live.head !== expectedHead) throw new WorktreeTraceError('RETARGET_HEAD_CHANGED', `retarget 期间 HEAD 已变为 ${live.head}`);
+    const watcherToken = disarmHistoryWatcher(next, 'base_retargeted');
+    next.base_ref = base.ref;
+    next.base_sha = base.sha;
+    next.base_reason = reason;
+    next.stack_parent = base.parent;
+    next.last_head = live.head;
+    next.last_seen_at = new Date().toISOString();
+    if (next.change_request) {
+      const targetBranch = base.ref.includes('/') ? base.ref.slice(base.ref.indexOf('/') + 1) : base.ref;
+      next.change_request.target_branch = targetBranch;
+      next.change_request.target_ref = base.ref;
+      next.change_request.target_sync = 'record_only';
+      next.change_request.retargeted_at = new Date().toISOString();
+    }
+    if (watcherToken) next.task_status = 'active';
+  }, {
+    old_base_ref: record.base_ref,
+    old_base_sha: record.base_sha,
+    new_base_ref: base.ref,
+    new_base_sha: base.sha,
+    stack_parent_worktree_id: base.parent?.worktree_id ?? null,
+    reason,
+    expected_head: expectedHead,
+  }, loaded.context.common_dir);
+  if (oldWatch?.token) removeWatcherHeartbeat(loaded.context.common_dir, record.worktree_id, oldWatch.token);
+  log(`已 retarget ${record.task}: ${record.base_ref}@${String(record.base_sha).slice(0, 12)} -> ${base.ref}@${base.sha.slice(0, 12)}`);
+  if (oldWatch) log('旧 watcher 已失效；确认远端 MR 目标后重新 touch ready_for_review 以武装新 target。');
+  if (updated.change_request?.target_sync === 'record_only') log('MR target 仅更新本地记录；portable core 未调用远端 provider。');
+}
+
+/** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} record @param {Record<string,any>} operation */
+function finalizeManagedRebase(loaded, record, operation) {
+  const live = liveGitSnapshot(record);
+  if (!live.present || live.dirty !== false || !live.head) die('rebase 完成后的 worktree 状态不可冻结。', 2);
+  if (!isAncestor(record.path, operation.onto_sha, live.head)) die('rebase 后 onto SHA 不是 live HEAD 的祖先。', 2);
+  const newCommits = revisionList(record.path, operation.onto_sha, live.head);
+  return updateRecord(record, 'history_rebase_completed', (next) => {
+    if (next.history_operation?.token !== operation.token) {
+      throw new WorktreeTraceError('REBASE_OPERATION_CHANGED', 'rebase finalize 时 operation token 已变化。');
+    }
+    const epoch = next.ownership_epochs?.at(-1);
+    if (epoch && !epoch.ended_at) {
+      epoch.ended_at = new Date().toISOString();
+      epoch.end_sha = operation.old_head;
+    }
+    next.ownership_epochs ??= [];
+    next.ownership_epochs.push({ agent: next.agent, started_at: new Date().toISOString(), start_sha: operation.onto_sha, end_sha: null, ended_at: null, source: 'managed_rebase' });
+    next.history_rewrites ??= [];
+    next.history_rewrites.push({
+      kind: 'rebase',
+      token: operation.token,
+      old_base_ref: operation.old_base_ref,
+      old_base_sha: operation.old_base_sha,
+      old_head: operation.old_head,
+      old_commits: operation.old_commits,
+      new_base_ref: operation.onto_ref,
+      new_base_sha: operation.onto_sha,
+      new_head: live.head,
+      new_commits: newCommits,
+      reason: operation.reason,
+      completed_at: new Date().toISOString(),
+    });
+    next.base_ref = operation.onto_ref;
+    next.base_sha = operation.onto_sha;
+    next.base_reason = operation.reason;
+    next.stack_parent = operation.stack_parent;
+    next.last_head = live.head;
+    next.last_seen_at = new Date().toISOString();
+    next.history_operation = null;
+    if (next.task_status === 'ready_for_review') next.task_status = 'active';
+    if (next.change_request) {
+      next.change_request.source_head_stale = true;
+      next.change_request.rewritten_head_sha = live.head;
+      next.change_request.rewritten_at = new Date().toISOString();
+    }
+  }, {
+    token: operation.token,
+    old_head: operation.old_head,
+    new_head: live.head,
+    old_base_sha: operation.old_base_sha,
+    new_base_sha: operation.onto_sha,
+    old_commit_count: operation.old_commits.length,
+    new_commit_count: newCommits.length,
+  }, loaded.context.common_dir);
+}
+
+/**
+ * manager-owned history rewrite：先落 intent 并撤防，再执行 Git；崩溃后重跑同命令可 finalize。
+ * @param {{positionals:string[],flags:Map<string,unknown>}} args
+ */
+function cmdRebase(args) {
+  rejectUnknownFlags(args.flags, ['onto', 'reason', 'expected-head', 'id', 'config', 'abort', 'continue']);
+  if (args.flags.get('abort') && args.flags.get('continue')) die('rebase --abort 与 --continue 互斥。', 2);
+  const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
+  const records = loadRecords(loaded.context.common_dir);
+  let record = selectRecord(records, args.positionals[0] ?? null, flag(args.flags, 'id'));
+  const pending = record.history_operation;
+  if (args.flags.get('abort')) {
+    if (!pending || pending.kind !== 'rebase') die('当前没有可 abort 的 managed rebase。', 2);
+    const operationState = gitOperationState(record.path);
+    if (operationState?.startsWith('rebase')) {
+      const aborted = gitTry(['rebase', '--abort'], record.path);
+      if (!aborted.ok) die(`git rebase --abort 失败: ${commandFailureReason(aborted, 'unknown error')}`);
+    }
+    const live = liveGitSnapshot(record);
+    if (live.head !== pending.old_head || live.dirty !== false) die('rebase abort 后未恢复到原始 clean HEAD，保留 pending 供 doctor。', 2);
+    updateRecord(record, 'history_rebase_aborted', (next) => {
+      if (next.history_operation?.token !== pending.token) throw new WorktreeTraceError('REBASE_OPERATION_CHANGED', 'abort 时 operation token 已变化。');
+      next.history_operation = null;
+      next.last_head = live.head;
+      next.last_seen_at = new Date().toISOString();
+    }, { token: pending.token, restored_head: live.head }, loaded.context.common_dir);
+    log(`已 abort managed rebase，HEAD 恢复为 ${live.head.slice(0, 12)}；watcher 保持关闭。`);
+    return;
+  }
+
+  const ontoRef = oneLine(flag(args.flags, 'onto') ?? '', 'onto', 240);
+  const reason = oneLine(flag(args.flags, 'reason') ?? '', 'reason', 240);
+  const expectedHead = oneLine(flag(args.flags, 'expected-head') ?? '', 'expected-head', 128);
+  if (pending) {
+    if (pending.kind !== 'rebase' || pending.onto_ref !== ontoRef || pending.old_head !== expectedHead || pending.reason !== reason) {
+      die('已有 managed history operation 与本次参数不一致；先按原参数恢复或使用 rebase --abort。', 2);
+    }
+    let operationState = gitOperationState(record.path);
+    if (operationState?.startsWith('rebase') && args.flags.get('continue')) {
+      const continued = gitTry(['rebase', '--continue'], record.path, {
+        timeoutMs: SUBMIT_PUSH_TIMEOUT_MS,
+        env: { ...process.env, GIT_EDITOR: 'true' },
+      });
+      operationState = gitOperationState(record.path);
+      if (!continued.ok || operationState?.startsWith('rebase')) {
+        updateRecord(record, 'history_rebase_conflicted', (next) => {
+          if (next.history_operation?.token !== pending.token) throw new WorktreeTraceError('REBASE_OPERATION_CHANGED', 'continue 时 operation token 已变化。');
+          next.history_operation.state = 'conflicted';
+          next.history_operation.last_error = commandFailureReason(continued, 'rebase conflict remains');
+        }, { token: pending.token, git_state: operationState ?? 'unknown', phase: 'continue' }, loaded.context.common_dir);
+        die('managed rebase --continue 未完成；继续解决冲突后重跑相同 manager 命令，或使用 rebase --abort。');
+      }
+    } else if (operationState?.startsWith('rebase')) {
+      die('managed rebase 停在冲突态；解决文件并 git add 后，用本命令加 --continue，或使用 rebase --abort。', 2);
+    } else if (args.flags.get('continue')) {
+      die('managed rebase 当前没有可 continue 的 Git rebase 状态；去掉 --continue 以尝试 finalize。', 2);
+    }
+    const live = liveGitSnapshot(record);
+    if (live.head !== pending.old_head && live.head && isAncestor(record.path, pending.onto_sha, live.head)) {
+      const completed = finalizeManagedRebase(loaded, record, pending);
+      log(`已恢复并 finalize rebase ${record.task}: ${pending.old_head.slice(0, 12)} -> ${completed.last_head.slice(0, 12)}`);
+      return;
+    }
+    if (live.head !== pending.old_head) die('managed rebase pending，但 live HEAD 既不是 old_head 也不是可验证的新链。', 2);
+  }
+
+  const snapshot = historyChangeSnapshot(record, 'rebase');
+  if (snapshot.head !== expectedHead) die(`rebase HEAD CAS 失败：expected=${expectedHead}, actual=${snapshot.head}`, 2);
+  if (!record.base_sha || !isAncestor(record.path, record.base_sha, snapshot.head)) {
+    die('record.base_sha 不是 live HEAD 的祖先；历史已在 manager 外改写，拒绝继续。', 2);
+  }
+  const base = resolveManagedBase(records, ontoRef, record.path);
+  assertStackParentAcyclic(records, record, base.parent, 'rebase');
+  if (base.sha === record.base_sha) die('onto SHA 与当前 base_sha 相同，无需 rebase。', 2);
+  let operation = pending;
+  if (!operation) {
+    operation = {
+      kind: 'rebase',
+      state: 'prepared',
+      token: randomUUID(),
+      old_base_ref: record.base_ref,
+      old_base_sha: record.base_sha,
+      old_head: snapshot.head,
+      old_commits: revisionList(record.path, record.base_sha, snapshot.head),
+      onto_ref: base.ref,
+      onto_sha: base.sha,
+      stack_parent: base.parent,
+      reason,
+      prepared_at: new Date().toISOString(),
+    };
+    const oldWatch = record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
+      ? structuredClone(record.auto_reclaim)
+      : null;
+    record = updateRecord(record, 'history_rebase_prepared', (next) => {
+      const live = liveGitSnapshot(next);
+      if (live.head !== expectedHead || live.dirty !== false) throw new WorktreeTraceError('REBASE_PREPARE_DRIFT', 'rebase prepare 前 Git 状态已变化。');
+      disarmHistoryWatcher(next, 'history_rebase_prepared');
+      next.history_operation = operation;
+      next.last_head = live.head;
+      next.last_seen_at = new Date().toISOString();
+    }, { ...operation, old_commits: operation.old_commits.length }, loaded.context.common_dir);
+    if (oldWatch?.token) removeWatcherHeartbeat(loaded.context.common_dir, record.worktree_id, oldWatch.token);
+  }
+
+  const rebased = gitTry(['rebase', '--onto', operation.onto_sha, operation.old_base_sha, record.branch], record.path, { timeoutMs: SUBMIT_PUSH_TIMEOUT_MS });
+  if (!rebased.ok) {
+    const state = gitOperationState(record.path);
+    if (state?.startsWith('rebase')) {
+      updateRecord(record, 'history_rebase_conflicted', (next) => {
+        if (next.history_operation?.token !== operation.token) throw new WorktreeTraceError('REBASE_OPERATION_CHANGED', 'conflict 记录时 token 已变化。');
+        next.history_operation.state = 'conflicted';
+        next.history_operation.last_error = commandFailureReason(rebased, 'rebase conflict');
+      }, { token: operation.token, git_state: state }, loaded.context.common_dir);
+      die('managed rebase 发生冲突；解决文件并 git add 后，用相同 manager 命令加 --continue，或使用 rebase --abort。');
+    }
+    const live = liveGitSnapshot(record);
+    if (live.head === operation.old_head && live.dirty === false) {
+      updateRecord(record, 'history_rebase_failed', (next) => {
+        if (next.history_operation?.token !== operation.token) throw new WorktreeTraceError('REBASE_OPERATION_CHANGED', 'failure 记录时 token 已变化。');
+        next.history_operation = null;
+      }, { token: operation.token, reason: commandFailureReason(rebased, 'rebase failed before applying changes') }, loaded.context.common_dir);
+    }
+    die(`managed rebase 失败: ${commandFailureReason(rebased, 'unknown error')}`);
+  }
+  const completed = finalizeManagedRebase(loaded, record, operation);
+  log(`已 rebase ${record.task}: ${operation.old_head.slice(0, 12)} -> ${completed.last_head.slice(0, 12)}，base=${operation.onto_ref}@${operation.onto_sha.slice(0, 12)}`);
+  log('旧 Artifact/MR head/watcher 已失效；push 新 HEAD 后重新登记评审边界。');
+}
+
 function cmdTouch(args) {
-  rejectUnknownFlags(args.flags, ['status', 'note', 'id', 'config', 'no-watch', 'target', 'interval-ms', 'change-ref', 'notify']);
+  rejectUnknownFlags(args.flags, ['status', 'note', 'id', 'config', 'no-watch', 'target', 'watch-target', 'change-ref', 'mr', 'interval-ms', 'notify']);
   const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
   const record = selectRecord(loadRecords(loaded.context.common_dir), args.positionals[0] ?? null, flag(args.flags, 'id'));
+  assertHistoryOperationIdle(record, 'touch');
   if (record.worktree_state === 'reclaimed') {
     die('已回收 record 是不可变历史，不能 touch；同名返工请重新 spawn。');
   }
   const requested = flag(args.flags, 'status') ?? record.task_status;
   if (!TASK_TRANSITIONS[record.task_status]?.has(requested)) die(`非法状态流转: ${record.task_status} -> ${requested}`);
   const note = flag(args.flags, 'note') ? oneLine(flag(args.flags, 'note'), 'note', 240) : null;
+  const targetRef = aliasedFlag(args.flags, 'target', 'watch-target');
+  const registeredTargetRef = targetRef ?? record.base_ref ?? null;
+  const mrUrl = flag(args.flags, 'mr') ? httpUrl(flag(args.flags, 'mr'), 'mr') : null;
+  const changeRef = aliasedFlag(args.flags, 'change-ref', 'mr');
   const snapshot = liveGitSnapshot(record);
   const activeWatch = record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
     ? record.auto_reclaim
@@ -1323,6 +1686,20 @@ function cmdTouch(args) {
     else if (next.worktree_state === 'missing' && snapshot.present) next.worktree_state = 'present';
     next.last_seen_at = new Date().toISOString();
     next.last_head = snapshot.head;
+    if (mrUrl) {
+      const targetBranch = registeredTargetRef?.includes('/') ? registeredTargetRef.slice(registeredTargetRef.indexOf('/') + 1) : registeredTargetRef;
+      next.change_request = {
+        provider: loaded.profile.change_request?.provider ?? 'external',
+        state: 'registered',
+        change_ref: mrUrl,
+        url: mrUrl,
+        source_branch: next.branch,
+        target_branch: targetBranch,
+        target_ref: registeredTargetRef,
+        head_sha: snapshot.head,
+        registered_at: new Date().toISOString(),
+      };
+    }
   }, {
     note,
     git: snapshot,
@@ -1373,7 +1750,7 @@ function autoArmReviewWatch(loaded, record, args, snapshot) {
     return;
   }
   const skip = (reason) => log(`watch 未武装：${reason}；自动回收保持关闭，可补齐前提后重新 touch。`);
-  const targetRef = flag(args.flags, 'target') ?? previous?.target_ref ?? loaded.profile.default_base ?? record.base_ref;
+  const targetRef = aliasedFlag(args.flags, 'target', 'watch-target') ?? previous?.target_ref ?? loaded.profile.default_base ?? record.base_ref;
   if (!targetRef || !targetRef.includes('/')) {
     skip(`无法确定远端主干 target（Profile default_base=${loaded.profile.default_base ?? 'null'}）`);
     return;
@@ -1410,8 +1787,8 @@ function autoArmReviewWatch(loaded, record, args, snapshot) {
       targetRef,
       headSha: snapshot.head,
       intervalMs: parseWatchInterval(flag(args.flags, 'interval-ms') ?? previous?.interval_ms),
-      changeRef: flag(args.flags, 'change-ref')
-        ? oneLine(flag(args.flags, 'change-ref'), 'change-ref', 240)
+      changeRef: aliasedFlag(args.flags, 'change-ref', 'mr')
+        ? oneLine(aliasedFlag(args.flags, 'change-ref', 'mr'), 'change-ref', 1000)
         : previous?.change_ref ?? null,
       notifyMode: parseNotifyMode(flag(args.flags, 'notify') ?? previous?.notify),
       explicitConfig: flag(args.flags, 'config') ? loaded.profile_path : null,
@@ -1435,6 +1812,7 @@ function cmdHandoff(args) {
   rejectUnknownFlags(args.flags, ['to-agent', 'to-agent-id', 'note', 'id', 'config']);
   const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
   const record = selectRecord(loadRecords(loaded.context.common_dir), args.positionals[0] ?? null, flag(args.flags, 'id'));
+  assertHistoryOperationIdle(record, 'handoff');
   const target = resolveIdentity(args.flags, { target: true });
   const note = oneLine(flag(args.flags, 'note') ?? '', 'note', 240);
   const snapshot = liveGitSnapshot(record);
@@ -1508,6 +1886,96 @@ function normalizedProfileContent(content) {
   } catch {
     return content.trim();
   }
+}
+
+/** @param {string} cwd @param {string} value @param {string} label */
+function exactCommitOid(cwd, value, label) {
+  const normalized = oneLine(value, label, 128).toLowerCase();
+  const resolved = gitTry(['rev-parse', '--verify', `${normalized}^{commit}`], cwd);
+  if (!resolved.ok || resolved.out.toLowerCase() !== normalized) {
+    die(`${label} 必须是当前仓库可解析的完整 commit object ID。`, 2);
+  }
+  return resolved.out.toLowerCase();
+}
+
+/** @param {unknown} value @param {string} label */
+function plainObject(value, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) die(`${label} 必须是 JSON object。`, 2);
+  return /** @type {Record<string,any>} */ (value);
+}
+
+/** @param {Record<string,any>} value @param {string[]} allowed @param {string} label */
+function rejectUnknownJsonKeys(value, allowed, label) {
+  const allow = new Set(allowed);
+  const unknown = Object.keys(value).filter((key) => !allow.has(key));
+  if (unknown.length) die(`${label} 包含未知字段: ${unknown.join(', ')}。`, 2);
+}
+
+/**
+ * 批次证据只冻结可审计摘要，不接收原始日志、环境变量或凭证。
+ * @param {string} path
+ */
+function readBatchEvidenceFile(path) {
+  if (!existsSync(path)) die(`--evidence 文件不存在: ${path}`, 2);
+  const bytes = readFileSync(path);
+  if (bytes.length > 128 * 1024) die('--evidence 最大 128 KiB；原始日志应放在外部证据存储。', 2);
+  let parsed;
+  try { parsed = JSON.parse(bytes.toString('utf8')); } catch (error) {
+    die(`--evidence 文件不是合法 JSON: ${error instanceof Error ? error.message : String(error)}`, 2);
+  }
+  const root = plainObject(parsed, '--evidence 根节点');
+  rejectUnknownJsonKeys(root, ['schema_version', 'contract_digest', 'checks'], '--evidence');
+  if (root.schema_version !== 1) die('--evidence schema_version 必须是 1。', 2);
+  if (root.contract_digest !== undefined && root.contract_digest !== null && !DIGEST_PATTERN.test(root.contract_digest)) {
+    die('--evidence contract_digest 必须是 sha256 digest 或 null。', 2);
+  }
+  if (!Array.isArray(root.checks) || root.checks.length === 0 || root.checks.length > 100) {
+    die('--evidence checks 必须包含 1-100 项。', 2);
+  }
+  const names = new Set();
+  const checks = root.checks.map((raw, index) => {
+    const check = plainObject(raw, `checks[${index}]`);
+    rejectUnknownJsonKeys(check, ['name', 'environment', 'argv', 'outcome', 'exit_code', 'evidence_refs'], `checks[${index}]`);
+    const name = oneLine(String(check.name ?? ''), `checks[${index}].name`, 120);
+    if (names.has(name)) die(`--evidence check name 重复: ${name}`, 2);
+    names.add(name);
+    const environment = plainObject(check.environment, `checks[${index}].environment`);
+    const environmentEntries = Object.entries(environment);
+    if (environmentEntries.length > 50 || environmentEntries.some(([key, value]) => (
+      !/^[a-z][a-z0-9_.-]{0,63}$/u.test(key) ||
+      /(?:secret|token|password|credential|private[_-]?key|api[_-]?key)/u.test(key) ||
+      !['string', 'number', 'boolean'].includes(typeof value) ||
+      (typeof value === 'number' && !Number.isFinite(value)) ||
+      (typeof value === 'string' && (value.length > 500 || /[\u0000\r\n]/u.test(value)))
+    ))) {
+      die(`checks[${index}].environment 只接受不含敏感键的有界标量元数据。`, 2);
+    }
+    if (!Array.isArray(check.argv) || check.argv.length === 0 || check.argv.length > 100 || check.argv.some((item) => typeof item !== 'string' || !item || item.length > 1000 || /[\u0000\r\n]/u.test(item))) {
+      die(`checks[${index}].argv 必须是 1-100 个安全字符串组成的 argv。`, 2);
+    }
+    if (!['passed', 'failed', 'undecidable'].includes(check.outcome)) {
+      die(`checks[${index}].outcome 只接受 passed / failed / undecidable。`, 2);
+    }
+    if (!Number.isInteger(check.exit_code) || check.exit_code < 0 || check.exit_code > 255) {
+      die(`checks[${index}].exit_code 必须是 0-255 整数。`, 2);
+    }
+    if (check.outcome === 'passed' && check.exit_code !== 0) die(`checks[${index}] passed 时 exit_code 必须为 0。`, 2);
+    if (check.outcome === 'failed' && check.exit_code === 0) die(`checks[${index}] failed 时 exit_code 不能为 0。`, 2);
+    if (!Array.isArray(check.evidence_refs) || check.evidence_refs.length === 0 || check.evidence_refs.length > 20) {
+      die(`checks[${index}].evidence_refs 必须包含 1-20 项。`, 2);
+    }
+    const evidenceRefs = check.evidence_refs.map((rawRef, refIndex) => {
+      const ref = plainObject(rawRef, `checks[${index}].evidence_refs[${refIndex}]`);
+      rejectUnknownJsonKeys(ref, ['kind', 'id', 'digest'], `checks[${index}].evidence_refs[${refIndex}]`);
+      const kind = oneLine(String(ref.kind ?? ''), 'evidence kind', 40);
+      const id = oneLine(String(ref.id ?? ''), 'evidence id', 1000);
+      if (!DIGEST_PATTERN.test(ref.digest ?? '')) die(`checks[${index}].evidence_refs[${refIndex}].digest 必须是 sha256 digest。`, 2);
+      return { kind, id, digest: ref.digest };
+    });
+    return { name, environment: canonicalJson(environment), argv: check.argv, outcome: check.outcome, exit_code: check.exit_code, evidence_refs: evidenceRefs };
+  });
+  const manifest = canonicalJson({ schema_version: 1, contract_digest: root.contract_digest ?? null, checks });
+  return { manifest, digest: contentDigest(Buffer.from(JSON.stringify(manifest))) };
 }
 
 /** @param {string} cwd */
@@ -2361,7 +2829,13 @@ function cmdBatchIntegrate(args) {
 
   const records = loadRecords(loaded.context.common_dir);
   const liveCandidates = records.filter((record) => record.batch_integration && isActiveRecord(record));
-  const reusable = liveCandidates.find((record) => record.batch_integration.fingerprint === plan.fingerprint);
+  // 已冻结 batch_result 的候选 task_status=done，不再属于普通 active record，但同指纹仍必须作为
+  // read-only already_composed 命中；否则重跑会误以为候选不存在，甚至尝试新建同身份候选。
+  const reusable = records.find((record) => (
+    record.batch_integration?.fingerprint === plan.fingerprint &&
+    record.worktree_state !== 'reclaimed' &&
+    record.task_status !== 'abandoned'
+  ));
   const superseded = liveCandidates.filter((record) => record.batch_integration.fingerprint !== plan.fingerprint);
 
   const recompose = Boolean(args.flags.get('recompose'));
@@ -2377,6 +2851,7 @@ function cmdBatchIntegrate(args) {
     if (!snapshot.present) die(`同指纹候选 record 存在但 worktree missing: ${candidate.path}；请先 doctor/reclaim。`);
     const batch = candidate.batch_integration;
     const composedBefore = batch.state === 'composed' && Boolean(batch.composed_sha);
+    if (candidate.batch_result && recompose) die('batch_result 已冻结，禁止重合成；输入或合同变化必须另起候选。', 2);
     const ownedByController = candidate.agent?.host === identity.actor.host && candidate.agent?.id === identity.actor.id;
     // 跨会话可只读查询一棵已完成候选，但任何会移动 HEAD、续合冲突或改写台账的路径都必须
     // 先显式 handoff。否则另一个 controller 仅凭同一 fingerprint 就能重置原 owner 的提交。
@@ -2683,6 +3158,7 @@ function cmdBatchStep(args) {
   if (!['done', 'skipped', 'failed'].includes(state ?? '')) die('--state 只接受 done / skipped / failed。', 2);
   const batch = record.batch_integration;
   if (!batch || batch.state !== 'composed') die(`${record.task} 不是已合成的集成候选，无法登记合成后步骤。`);
+  if (record.batch_result) die('batch_result 已冻结，不能再修改合成后步骤。', 2);
   const steps = batch.post_integrate_steps ?? [];
   const target = steps.find((step) => step.name === stepName);
   if (!target) {
@@ -2713,6 +3189,87 @@ function cmdBatchStep(args) {
     : `  仍待登记: ${pending.map((step) => step.name).join(', ')}`);
 }
 
+/**
+ * 冻结一次性集成候选的终态验收结果。结果不可覆盖；新 target/input/contract 必须另起候选。
+ * @param {{positionals:string[],flags:Map<string,unknown>}} args
+ */
+function cmdBatchResult(args) {
+  rejectUnknownFlags(args.flags, ['state', 'candidate', 'evidence', 'reason', 'id', 'json', 'config']);
+  const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
+  let record = selectRecord(loadRecords(loaded.context.common_dir), args.positionals[0] ?? null, flag(args.flags, 'id'));
+  const outcome = flag(args.flags, 'state');
+  if (!['passed', 'failed', 'stale'].includes(outcome ?? '')) die('--state 只接受 passed / failed / stale。', 2);
+  const candidateInput = flag(args.flags, 'candidate');
+  if (!candidateInput) die('batch-result 需要 --candidate <exact-object-id>。', 2);
+  const candidateSha = exactCommitOid(loaded.context.current_worktree, candidateInput, '--candidate');
+  const evidencePath = flag(args.flags, 'evidence');
+  if (outcome !== 'stale' && !evidencePath) die(`${outcome} 结果需要 --evidence <json>。`, 2);
+  const evidence = evidencePath ? readBatchEvidenceFile(resolve(evidencePath)) : null;
+  const reason = flag(args.flags, 'reason') ? oneLine(flag(args.flags, 'reason'), '--reason', 500) : null;
+  if (outcome === 'stale' && !reason) die('stale 结果需要 --reason <原因>。', 2);
+  if (outcome !== 'stale' && !evidence.manifest.contract_digest) {
+    die(`${outcome} 结果的 Evidence 必须提供非空 contract_digest；合同变化必须另起候选。`, 2);
+  }
+  if (outcome === 'passed' && evidence.manifest.checks.some((check) => check.outcome !== 'passed')) {
+    die('passed 结果要求所有 evidence checks 都为 passed。', 2);
+  }
+  if (outcome === 'failed' && !evidence.manifest.checks.some((check) => check.outcome === 'failed')) {
+    die('failed 结果至少需要一个 failed evidence check。', 2);
+  }
+  const batch = record.batch_integration;
+  if (!batch || batch.state !== 'composed') die(`${record.task} 不是已合成的集成候选。`, 2);
+  if (!['integrating', 'done'].includes(record.task_status)) die(`batch-result 不接受 ${record.task_status} 候选。`, 2);
+  const requested = canonicalJson({
+    schema_version: 1,
+    outcome,
+    candidate_sha: candidateSha,
+    fingerprint: batch.fingerprint,
+    target_ref: batch.target_ref,
+    target_sha: batch.target_sha,
+    ordered_input_shas: (batch.ordered_inputs ?? []).map((item) => item.head),
+    evidence_manifest_digest: evidence?.digest ?? null,
+    evidence_manifest: evidence?.manifest ?? null,
+    reason,
+  });
+  const requestedDigest = contentDigest(Buffer.from(JSON.stringify(requested)));
+  if (record.batch_result) {
+    if (record.batch_result.result_digest !== requestedDigest) die('batch_result 已冻结且与本次输入不同；不得覆盖终态结果。', 2);
+    if (args.flags.get('json')) console.log(JSON.stringify(record.batch_result, null, 2));
+    else log(`批次结果已冻结（幂等） ${record.task} ${outcome} ${candidateSha.slice(0, 12)}`);
+    return;
+  }
+  if (record.worktree_state !== 'present') die(`batch-result 只接受 present 候选；当前 ${record.worktree_state}。`, 2);
+  const live = liveGitSnapshot(record);
+  if (!live.present) die(`候选 worktree missing: ${record.path}`, 2);
+  if (live.dirty !== false) die(`候选 worktree 必须干净：${record.path}`, 2);
+  const operation = gitOperationState(record.path);
+  if (operation) die(`候选仍处于 ${operation} 中间态，拒绝冻结结果。`, 2);
+  if (live.head?.toLowerCase() !== candidateSha) die(`--candidate 与 live HEAD 不一致：expected ${live.head}`, 2);
+  if (!isAncestor(record.path, batch.composed_sha, candidateSha)) {
+    die(`candidate SHA 不是 composed_sha ${batch.composed_sha} 的后继，拒绝冻结。`, 2);
+  }
+  if (outcome === 'passed') {
+    const incomplete = (batch.post_integrate_steps ?? []).filter((step) => !['done', 'skipped'].includes(step.state));
+    if (incomplete.length) die(`passed 前仍有未通过的合成后步骤: ${incomplete.map((step) => `${step.name}=${step.state}`).join(', ')}`, 2);
+  }
+  const recordedAt = new Date().toISOString();
+  record = updateRecord(record, 'batch_result_recorded', (next) => {
+    next.batch_result = { ...requested, result_digest: requestedDigest, recorded_at: recordedAt };
+    next.task_status = 'done';
+    next.last_head = candidateSha;
+    next.last_seen_at = recordedAt;
+  }, {
+    outcome,
+    candidate_sha: candidateSha,
+    fingerprint: batch.fingerprint,
+    result_digest: requestedDigest,
+    evidence_manifest_digest: evidence?.digest ?? null,
+    reason,
+  }, loaded.context.common_dir);
+  if (args.flags.get('json')) console.log(JSON.stringify(record.batch_result, null, 2));
+  else log(`已冻结批次结果 ${record.task} ${outcome} sha=${candidateSha.slice(0, 12)} evidence=${evidence?.digest ?? 'none'}`);
+}
+
 /** @param {ReturnType<typeof loadRepositoryProfile>} loaded */
 function primaryProfileDriftFinding(loaded) {
   const defaultBase = loaded.profile.default_base;
@@ -2738,6 +3295,7 @@ function cmdDoctor(args) {
   const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
   const findings = [];
   const listing = buildListing(true, loaded);
+  const recordsById = new Map(listing.records.map((record) => [record.worktree_id, record]));
   const profileDrift = primaryProfileDriftFinding(loaded);
   if (profileDrift) findings.push(profileDrift);
   for (const row of listing.rows.filter((row) => row.kind === 'UNTRACKED')) {
@@ -2765,6 +3323,54 @@ function cmdDoctor(args) {
       }
     }
     if (record.storage_class === 'ephemeral' && record.worktree_state !== 'reclaimed') findings.push({ code: 'EPHEMERAL_WORKTREE', severity: 'warning', worktree_id: record.worktree_id, path: record.path });
+    if (record.history_operation) {
+      findings.push({
+        code: 'MANAGED_HISTORY_OPERATION_PENDING',
+        severity: 'error',
+        worktree_id: record.worktree_id,
+        path: record.path,
+        operation: record.history_operation.kind ?? 'unknown',
+        state: record.history_operation.state ?? 'unknown',
+        token: record.history_operation.token ?? null,
+        detail: '受控历史操作尚未 finalize；按原参数重跑 rebase、使用 --continue，或显式 --abort。',
+      });
+    }
+    if (record.stack_parent) {
+      const parent = recordsById.get(record.stack_parent.worktree_id);
+      if (!parent) {
+        findings.push({
+          code: 'STACK_PARENT_MISSING',
+          severity: 'error',
+          worktree_id: record.worktree_id,
+          parent_worktree_id: record.stack_parent.worktree_id,
+          detail: '堆叠父记录不存在，无法证明 base attribution。',
+        });
+      } else {
+        if (parent.branch !== record.stack_parent.branch) {
+          findings.push({
+            code: 'STACK_PARENT_BRANCH_MISMATCH',
+            severity: 'error',
+            worktree_id: record.worktree_id,
+            parent_worktree_id: parent.worktree_id,
+            recorded_branch: record.stack_parent.branch,
+            current_branch: parent.branch,
+          });
+        }
+        const parentRow = listing.rows.find((row) => row.record?.worktree_id === parent.worktree_id);
+        const parentHead = parentRow?.head ?? parent.last_head ?? null;
+        if (parentHead && parentHead !== record.stack_parent.parent_head_sha) {
+          findings.push({
+            code: 'STACK_PARENT_ADVANCED',
+            severity: 'warning',
+            worktree_id: record.worktree_id,
+            parent_worktree_id: parent.worktree_id,
+            recorded_parent_head: record.stack_parent.parent_head_sha,
+            current_parent_head: parentHead,
+            detail: '父任务 HEAD 已前进；根据新目标选择 managed rebase 或 retarget。',
+          });
+        }
+      }
+    }
     if (
       record.worktree_state !== 'reclaimed' &&
       loaded.profile.default_base &&
@@ -2784,6 +3390,28 @@ function cmdDoctor(args) {
     }
     const present = listing.rows.some((row) => row.path === canonicalSelectorPath(record.path));
     const liveRow = listing.rows.find((row) => row.path === canonicalSelectorPath(record.path));
+    if (present && record.batch_integration?.state === 'composed' && record.task_status === 'done' && !record.batch_result) {
+      findings.push({
+        code: 'DONE_BATCH_CANDIDATE_RESULT_UNRECORDED',
+        severity: 'warning',
+        worktree_id: record.worktree_id,
+        path: record.path,
+        candidate_sha: liveRow?.head ?? record.last_head ?? null,
+        detail: `候选已标记 done，但 passed/failed/stale 尚未冻结；运行 batch-result ${record.task} --state <state> --candidate <exact-sha>。`,
+      });
+    }
+    if (present && record.task_status === 'done' && ['passed', 'failed', 'stale'].includes(record.batch_result?.outcome)) {
+      const candidateSha = record.batch_result.candidate_sha;
+      findings.push({
+        code: 'DONE_EVIDENCE_WORKTREE_RECLAIM_PENDING',
+        severity: 'warning',
+        worktree_id: record.worktree_id,
+        path: record.path,
+        candidate_sha: candidateSha,
+        archive_ref: record.evidence_archive?.archive_ref ?? null,
+        detail: `固定验收候选仍占用 worktree；运行 reclaim ${record.task} --archive-evidence ${candidateSha} --reason <原因>。`,
+      });
+    }
     if (present && record.worktree_state !== 'reclaimed' && record.task_status === 'abandoned') {
       findings.push({
         code: record.superseded_by ? 'SUPERSEDED_WORKTREE_RECLAIM_PENDING' : 'ABANDONED_WORKTREE_RECLAIM_PENDING',
@@ -3070,6 +3698,71 @@ function supersededArchiveRef(record) {
   return `refs/worktree-archive/superseded/${record.worktree_id}`;
 }
 
+/** @param {Record<string,any>} record */
+function evidenceArchiveRef(record) {
+  return `refs/worktree-archive/evidence/${record.worktree_id}`;
+}
+
+/**
+ * 归档只用于已冻结终态的本地批次证据候选；它保存精确 Git object，不伪装成已推送或已合入。
+ * @param {ReturnType<typeof loadRepositoryProfile>} loaded
+ * @param {Record<string,any>} candidate
+ * @param {string} candidateInput
+ * @param {string} reasonInput
+ */
+function prepareEvidenceArchiveReclaim(loaded, candidate, candidateInput, reasonInput) {
+  const batch = candidate.batch_integration;
+  const result = candidate.batch_result;
+  if (!batch || batch.state !== 'composed') die('reclaim --archive-evidence 只接受已合成的 batch integration candidate。', 2);
+  if (!result || !['passed', 'failed', 'stale'].includes(result.outcome)) {
+    die('候选尚未通过 batch-result 冻结 passed/failed/stale，拒绝归档回收。', 2);
+  }
+  if (candidate.task_status !== 'done') die(`证据候选必须处于 done；当前 ${candidate.task_status}。`, 2);
+  const sourceSha = exactCommitOid(loaded.context.current_worktree, candidateInput, '--archive-evidence');
+  const reason = oneLine(reasonInput, '--reason', 500);
+  const snapshot = liveGitSnapshot(candidate);
+  const liveHead = snapshot.head ?? candidate.last_head ?? candidate.reclaim_summary?.source_sha ?? null;
+  if (!liveHead || liveHead.toLowerCase() !== sourceSha) die(`--archive-evidence 与候选 HEAD 不一致：expected ${liveHead ?? 'unknown'}`, 2);
+  if (result.candidate_sha !== sourceSha) die(`--archive-evidence 与 batch_result.candidate_sha 不一致：expected ${result.candidate_sha}`, 2);
+  const preflight = reclaimPreflight(loaded, candidate, sourceSha);
+  if (preflight.reason) die(`证据候选尚未达到归档前置条件：${preflight.reason}`, 2);
+
+  const archiveRef = evidenceArchiveRef(candidate);
+  if (candidate.evidence_archive && (
+    candidate.evidence_archive.source_sha !== sourceSha ||
+    candidate.evidence_archive.archive_ref !== archiveRef ||
+    candidate.evidence_archive.batch_result_digest !== result.result_digest ||
+    candidate.evidence_archive.reason !== reason
+  )) die('该候选已经登记不同的证据归档，拒绝改写。', 2);
+  const existing = gitTry(['rev-parse', '--verify', archiveRef], loaded.context.current_worktree);
+  if (existing.ok && existing.out.toLowerCase() !== sourceSha) die(`归档 ref 已指向其他提交：${archiveRef} -> ${existing.out}`, 2);
+  if (!existing.ok) {
+    const archived = gitTry(['update-ref', archiveRef, sourceSha, '0'.repeat(sourceSha.length)], loaded.context.current_worktree);
+    if (!archived.ok) die(commandFailureReason(archived, `无法创建归档 ref ${archiveRef}`));
+  }
+  const verified = gitTry(['rev-parse', '--verify', archiveRef], loaded.context.current_worktree);
+  if (!verified.ok || verified.out.toLowerCase() !== sourceSha) die(`归档 ref 校验失败：${archiveRef}`, 2);
+  const evidence = {
+    kind: 'batch_evidence_archive',
+    source_sha: sourceSha,
+    archive_ref: archiveRef,
+    outcome: result.outcome,
+    fingerprint: batch.fingerprint,
+    target_sha: batch.target_sha,
+    ordered_input_shas: (batch.ordered_inputs ?? []).map((item) => item.head),
+    batch_result_digest: result.result_digest,
+    evidence_manifest_digest: result.evidence_manifest_digest,
+    reason,
+  };
+  let record = candidate;
+  if (!record.evidence_archive) {
+    record = appendReclaimEvent(loaded.context.common_dir, record, 'batch_evidence_head_archived', (next) => {
+      next.evidence_archive = { ...evidence, archived_at: new Date().toISOString() };
+    }, evidence);
+  }
+  return { record, sourceSha, evidence };
+}
+
 /**
  * superseded reclaim 比普通 pushed reclaim 多两层证据：双向替代关系必须完整，且替代树不能脏。
  * 旧树的普通干净/stash/submodule 检查仍统一交给 reclaimPreflight。
@@ -3101,7 +3794,8 @@ function prepareSupersededReclaim(loaded, superseded, replacement, discardSha) {
   }
   const supersededSnapshot = liveGitSnapshot(superseded);
   const sourceSha = supersededSnapshot.head ?? superseded.last_head ?? superseded.reclaim_summary?.source_sha ?? null;
-  if (!sourceSha || !/^[0-9a-f]{40}$/i.test(sourceSha)) die('无法确定被替代树的精确 HEAD，拒绝回收。', 2);
+  if (!sourceSha) die('无法确定被替代树的精确 HEAD，拒绝回收。', 2);
+  exactCommitOid(loaded.context.current_worktree, sourceSha, '旧树 HEAD');
   const preflight = reclaimPreflight(loaded, superseded, sourceSha);
   if (preflight.reason) {
     die(`被替代树尚未达到归档/丢弃前置条件：${preflight.reason}`, 2);
@@ -3110,7 +3804,9 @@ function prepareSupersededReclaim(loaded, superseded, replacement, discardSha) {
   let record = superseded;
   let evidence;
   if (discardSha) {
-    if (!/^[0-9a-f]{40}$/i.test(discardSha)) die('--discard 必须填写 40 位旧树精确 HEAD。', 2);
+    if (!new RegExp(`^[0-9a-f]{${sourceSha.length}}$`, 'i').test(discardSha)) {
+      die(`--discard 必须填写 ${sourceSha.length} 位旧树精确 HEAD。`, 2);
+    }
     if (discardSha.toLowerCase() !== sourceSha.toLowerCase()) {
       die(`--discard SHA 与旧树 HEAD 不一致：expected ${sourceSha}`, 2);
     }
@@ -3140,15 +3836,15 @@ function prepareSupersededReclaim(loaded, superseded, replacement, discardSha) {
     )) {
       die('该旧树已经登记不同的恢复策略，拒绝改写。', 2);
     }
-    const existing = gitTry(['rev-parse', '--verify', `${archiveRef}^{commit}`], loaded.context.current_worktree);
+    const existing = gitTry(['rev-parse', '--verify', archiveRef], loaded.context.current_worktree);
     if (existing.ok && existing.out !== sourceSha) {
       die(`归档 ref 已指向其他提交：${archiveRef} -> ${existing.out}`, 2);
     }
     if (!existing.ok) {
-      const archived = gitTry(['update-ref', archiveRef, sourceSha, '0'.repeat(40)], loaded.context.current_worktree);
+      const archived = gitTry(['update-ref', archiveRef, sourceSha, '0'.repeat(sourceSha.length)], loaded.context.current_worktree);
       if (!archived.ok) die(commandFailureReason(archived, `无法创建归档 ref ${archiveRef}`));
     }
-    const verified = gitTry(['rev-parse', '--verify', `${archiveRef}^{commit}`], loaded.context.current_worktree);
+    const verified = gitTry(['rev-parse', '--verify', archiveRef], loaded.context.current_worktree);
     if (!verified.ok || verified.out !== sourceSha) die(`归档 ref 校验失败：${archiveRef}`, 2);
     evidence = {
       kind: 'superseded_archive',
@@ -3172,6 +3868,7 @@ function reclaimPreflight(loaded, record, pushed) {
   const live = parseWorktrees(loaded.context.current_worktree).find((worktree) => worktree.path === canonicalSelectorPath(record.path));
   const dangling = live ? inspectDanglingSubmodulePointers(live.path) : { reason: null };
   const status = live ? gitTry(['status', '--porcelain'], live.path) : { ok: true, out: '' };
+  const operation = live ? gitOperationState(live.path) : null;
   const commit = record.branch && gitTry(['show-ref', '--verify', '--quiet', `refs/heads/${record.branch}`], loaded.context.current_worktree).ok
     ? record.branch
     : record.last_head;
@@ -3180,12 +3877,30 @@ function reclaimPreflight(loaded, record, pushed) {
     ? dangling.reason
     : stash.ok && stash.out
     ? 'repository has stash entries'
+    : operation
+      ? `git operation in progress: ${operation}`
     : !status.ok || status.out
       ? 'worktree dirty/unreadable'
       : !merged
         ? 'branch/head not merged into pushed sha'
         : null;
   return { reason, live };
+}
+
+/**
+ * `--pushed` 必须由候选自身分支之外的持久 ref 保护，否则传入 HEAD 自己会在删分支后丢失证据。
+ * @param {ReturnType<typeof loadRepositoryProfile>} loaded
+ * @param {Record<string,any>} record
+ * @param {string} pushed
+ */
+function protectingRefsForPushed(loaded, record, pushed) {
+  const refs = gitTry([
+    'for-each-ref', '--format=%(refname)', '--contains', pushed,
+    'refs/heads', 'refs/remotes', 'refs/tags', 'refs/worktree-archive',
+  ], loaded.context.current_worktree);
+  if (!refs.ok) die(commandFailureReason(refs, '无法枚举保护 --pushed SHA 的 refs。'));
+  const ownBranch = record.branch ? `refs/heads/${record.branch}` : null;
+  return refs.out.split('\n').filter(Boolean).filter((ref) => ref !== ownBranch).sort();
 }
 
 /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} record */
@@ -3654,6 +4369,7 @@ function cmdSubmit(args) {
     die('当前 Profile 未启用 GitLab change_request provider；请配置 provider=gitlab 或继续人工创建 MR。');
   }
   let record = selectRecord(loadRecords(loaded.context.common_dir), args.positionals[0] ?? null, flag(args.flags, 'id'));
+  assertHistoryOperationIdle(record, 'submit');
   if (!['active', 'ready_for_review'].includes(record.task_status)) {
     die(`submit 只接受 active/ready_for_review，当前为 ${record.task_status}。`);
   }
@@ -3783,6 +4499,7 @@ function cmdWatch(args) {
   rejectUnknownFlags(args.flags, ['target', 'interval-ms', 'change-ref', 'notify', 'id', 'config']);
   const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
   let record = selectRecord(loadRecords(loaded.context.common_dir), args.positionals[0] ?? null, flag(args.flags, 'id'));
+  assertHistoryOperationIdle(record, 'watch');
   if (record.worktree_state === 'reclaimed') { log(`已回收，无需 watch: ${record.worktree_id}`); return; }
   const existing = record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
     ? record.auto_reclaim
@@ -4000,17 +4717,17 @@ function cmdWatchWorker(args) {
 }
 
 function cmdReclaim(args) {
-  rejectUnknownFlags(args.flags, ['pushed', 'superseded-by', 'replacement-id', 'discard', 'id', 'config']);
+  rejectUnknownFlags(args.flags, ['pushed', 'superseded-by', 'replacement-id', 'discard', 'archive-evidence', 'reason', 'id', 'config']);
   const pushed = flag(args.flags, 'pushed');
   const supersededBy = flag(args.flags, 'superseded-by');
   const discardSha = flag(args.flags, 'discard');
-  if (pushed && (supersededBy || discardSha)) {
-    die('--pushed 与 --superseded-by/--discard 互斥。', 2);
-  }
-  if (!pushed && !supersededBy) {
-    die('reclaim 需要 --pushed <sha>，或 --superseded-by <replacement-selector>。', 2);
-  }
+  const archiveEvidence = flag(args.flags, 'archive-evidence');
+  const reason = flag(args.flags, 'reason');
+  const modes = [Boolean(pushed), Boolean(supersededBy), Boolean(archiveEvidence)].filter(Boolean).length;
+  if (modes !== 1) die('reclaim 必须且只能选择 --pushed、--superseded-by 或 --archive-evidence 之一。', 2);
   if (discardSha && !supersededBy) die('--discard 只能与 --superseded-by 一起使用。', 2);
+  if (reason && !archiveEvidence) die('--reason 仅用于 --archive-evidence。', 2);
+  if (archiveEvidence && !reason) die('--archive-evidence 需要 --reason <归档原因>。', 2);
   const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
   const records = loadRecords(loaded.context.common_dir);
   let record = selectRecord(records, args.positionals[0] ?? null, flag(args.flags, 'id'));
@@ -4022,6 +4739,18 @@ function cmdReclaim(args) {
     record = prepared.record;
     evidenceSha = prepared.sourceSha;
     evidence = prepared.evidence;
+  } else if (archiveEvidence) {
+    const prepared = prepareEvidenceArchiveReclaim(loaded, record, archiveEvidence, reason);
+    record = prepared.record;
+    evidenceSha = prepared.sourceSha;
+    evidence = prepared.evidence;
+  } else {
+    evidenceSha = exactCommitOid(loaded.context.current_worktree, pushed, '--pushed');
+    const protectingRefs = protectingRefsForPushed(loaded, record, evidenceSha);
+    if (protectingRefs.length === 0) {
+      die('--pushed SHA 只由待删除候选分支保护；请先推送/合入到其他持久 ref，或对已冻结批次结果使用 --archive-evidence。', 2);
+    }
+    evidence = { kind: 'pushed', target_sha: evidenceSha, protecting_refs: protectingRefs };
   }
   const result = reclaimRecord(loaded, record, evidenceSha, { evidence });
   if (!result.reclaimed) {
@@ -4033,7 +4762,9 @@ function cmdReclaim(args) {
     log(`目录已回收 ${result.record.worktree_id.slice(0, 8)}；本地分支 ${result.record.branch} 清理待重试: ${result.branch_cleanup.reason}`);
     return;
   }
-  const recovery = result.record.superseded_recovery?.mode === 'archive_ref'
+  const recovery = result.record.evidence_archive?.archive_ref
+    ? `，证据归档=${result.record.evidence_archive.archive_ref}`
+    : result.record.superseded_recovery?.mode === 'archive_ref'
     ? `，归档=${result.record.superseded_recovery.archive_ref}`
     : result.record.superseded_recovery?.mode === 'discard'
       ? '，旧 HEAD 已按精确 SHA 授权丢弃'
@@ -4092,6 +4823,7 @@ function cmdBinding(args) {
 function cmdArtifact(args) {
   rejectUnknownFlags(args.flags, ['json', 'id', 'config']);
   const { loaded, record, identity, snapshot } = worktreeEnvelopeContext(args);
+  assertHistoryOperationIdle(record, 'artifact');
   console.log(JSON.stringify(buildArtifact(record, identity, snapshot, loaded.context.current_worktree), null, 2));
 }
 
@@ -4204,7 +4936,7 @@ function cmdProposeImprovement(args) {
 
 function cmdCapabilities(args) {
   rejectUnknownFlags(args.flags, ['json']);
-  console.log(JSON.stringify({ skill: 'manage-worktrees', runtime_version: '1.0.0', contracts: { worktree_binding: [1], artifact_ref: [1], reflection_record: [1], improvement_proposal: [1] }, features: ['git-common-dir-ledger', 'ownership-epochs', 'artifact-verification', 'incident-reflection', 'proposed-only-improvement', 'batch-integrate', 'batch-conflict-scan', 'declared-post-integrate-steps', 'auto-armed-review-watch'], content_digest: worktreeSkillDigest() }, null, 2));
+  console.log(JSON.stringify({ skill: 'manage-worktrees', runtime_version: '1.2.0', contracts: { worktree_binding: [1], artifact_ref: [1], reflection_record: [1], improvement_proposal: [1], batch_result: [1] }, features: ['git-common-dir-ledger', 'ownership-epochs', 'artifact-verification', 'incident-reflection', 'proposed-only-improvement', 'batch-integrate', 'batch-conflict-scan', 'declared-post-integrate-steps', 'batch-result', 'evidence-archive-reclaim', 'durable-pushed-ref-proof', 'auto-armed-review-watch', 'managed-history-rewrite', 'stack-parent-attribution', 'structured-change-registration'], content_digest: worktreeSkillDigest() }, null, 2));
 }
 
 function usage() {
@@ -4221,8 +4953,15 @@ batch-integrate --plan <plan.json> | <selector> <selector> [...] --agent <host> 
   [--recompose --recompose-head <exact-current-head>] [--json]
   按冻结顺序合成精确 SHA；冲突 fail-closed 停在冲突处；不执行任何门禁命令
 batch-step <candidate-selector> --step <name> --state done|skipped|failed [--note <text>] [--json]
-touch <selector> [--status <status>] [--note <text>] [--id <uuid>]
+batch-result <candidate-selector> --state passed|failed|stale --candidate <exact-object-id>
+  [--evidence <json>] [--reason <text>] [--json]
+  passed/failed 必须给结构化 evidence；stale 必须给 reason；终态结果不可覆盖
+touch <selector> [--status <status>] [--note <text>] [--mr <http-url>] [--watch-target <ref>] [--id <uuid>]
   --status ready_for_review 默认自动武装 watch；退出用 --no-watch
+rebase <selector> --onto <ref> --expected-head <sha> --reason <text> [--continue|--abort] [--id <uuid>]
+  manager 原子登记 intent、撤防旧 watcher、执行/恢复 rebase，并刷新 base、父分支和 ownership epoch
+retarget <selector> --base <ref> --expected-head <sha> --reason <text> [--id <uuid>]
+  仅当新 base 已是 HEAD 祖先时更新验证/MR 目标；不会改写 Git 历史
 supersede <old-selector> --by <replacement-selector> --reason <text> [--id <uuid>] [--by-id <uuid>]
 handoff <selector> --to-agent <host> --to-agent-id <id> --note <text> [--id <uuid>]
 audit <selector> [--json] [--id <uuid>]
@@ -4234,6 +4973,7 @@ resume-all [--json]
 unwatch <selector> [--id <uuid>]
 reclaim <selector> --pushed <sha> [--id <uuid>]
 reclaim <selector> --superseded-by <replacement-selector> [--discard <exact-old-head>] [--id <uuid>] [--replacement-id <uuid>]
+reclaim <selector> --archive-evidence <exact-candidate-head> --reason <text> [--id <uuid>]
 binding <selector> [--id <uuid>] [--json]
 artifact <selector> [--id <uuid>] [--json]
 verify-artifact <artifact.json> [--json]
@@ -4256,7 +4996,10 @@ function main() {
     'plan-batch': cmdPlanBatch,
     'batch-integrate': cmdBatchIntegrate,
     'batch-step': cmdBatchStep,
+    'batch-result': cmdBatchResult,
     touch: cmdTouch,
+    rebase: cmdRebase,
+    retarget: cmdRetarget,
     supersede: cmdSupersede,
     handoff: cmdHandoff,
     audit: cmdAudit,

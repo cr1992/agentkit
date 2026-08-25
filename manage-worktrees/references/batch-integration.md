@@ -140,6 +140,35 @@ collecting -> planned -> composing -> verifying -> passed / failed / stale -> re
 - 验收契约/环境指纹、每项命令、退出码、证据地址。
 - 结论 `passed` / `failed` / `stale` 及失败归因。
 
+完成门禁后，用 runtime 冻结终态，而不是只把 task 标成 `done`：
+
+```bash
+node "$SKILL_DIR/scripts/worktree-mgr.mjs" batch-result <candidate> \
+  --state passed \
+  --candidate <exact-live-head> \
+  --evidence <evidence.json>
+```
+
+`passed` / `failed` 必须提供结构化 Evidence，且 `contract_digest` 必须非空；`stale` 必须提供
+`--reason`，Evidence 可选，缺少独立合同文件时其 digest 可以为 null。这里的 null 只表达“候选在形成
+可判定验收结论前已失效”，不能用于通过/失败证明。结果一旦写入
+不可覆盖：target、输入、顺序、候选 SHA 或验收合同变化都另起候选。`passed` 还要求 Profile 声明的
+`post_integrate_steps` 已全部 `done` 或 `skipped`；任何 `pending` / `failed` 都 fail-closed。
+
+[`Batch Result schema v1`](schemas/batch-result-v1.schema.json) 的 Evidence manifest 只保存有界摘要：
+顶层 `contract_digest` 与 `checks[]`；每项 check 保存稳定 `name`、
+结构化 `environment`、argv 数组、`outcome`、`exit_code` 和带 SHA-256 digest 的 `evidence_refs[]`。不要把
+原始日志、环境变量值、凭证或大块设备输出放入 trace；把它们放在项目认可的证据存储，只登记稳定 ref
+和 digest。environment 键必须是 lowercase 标识符并拒绝 secret/token/password/credential/key 类名称，
+值只接受最长 500 字符的无换行字符串、有限数字或布尔值；这些限制同时写入 schema 与 runtime。
+runtime 绑定 live candidate HEAD、batch fingerprint、target SHA、有序输入 SHA、Evidence
+manifest digest，并把工作完成态收敛为 `task_status=done`；真实验收语义仍只由 `batch_result.outcome`
+表达，`done` 本身不代表通过。
+
+已冻结 `passed` / `failed` / `stale` 的候选如不作为 MR 载体，可按
+[reclaim-and-watch.md](reclaim-and-watch.md) 的证据归档通道回收。归档 ref 只保护当前仓库免受 Git GC，
+不提供跨机器、跨 clone 或远端灾备保证；需要长期/跨机保留时再按项目政策推送专用 ref 或保存 bundle。
+
 Git worktree 只隔离工作目录和 index，不隔离端口、模拟器/设备、Docker 名、外部数据库、用户级 cache 或凭证。项目 wrapper/Profile 必须为并行候选分配独立运行时资源，或显式串行。
 
 ## 多仓项目

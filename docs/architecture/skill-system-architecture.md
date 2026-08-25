@@ -183,6 +183,25 @@ Agent 必须执行当前冻结协议，同时持续审计以下冲突：
 根据影响选择继续执行不受影响部分、`undecidable`、`abort / re-contract` 或 H gate，并形成独立的
 改进候选。改进只对后续发布版本生效，不能反向改写当前合同、旧 Evidence 或历史结论。
 
+### 3.8 渐进式披露与上下文预算
+
+四个 Skill 使用三层披露：frontmatter description 只负责准确触发；`SKILL.md` 只保留组合路由、正常
+流程、授权/安全边界和停止条件；低频模式、完整 envelope、异常恢复与命令诊断放进按场景读取的
+reference。reference 必须从入口说明“何时读取”，不得要求所有任务预加载，也不得与入口重复维护同一
+规则。脚本实现无需进入模型上下文即可执行，只有修改或诊断 runtime 时才读取源码。
+
+| Skill | 按需加载边界 |
+| --- | --- |
+| `orchestrate-subagents` | 写派发/完整档读 `dispatch-contract`；专项 Skill 缺失读 `isolation-fallback`；失败、中断、重派或接手读 `failure-routing-and-recovery`；reviewer 决策读 `review-budget` |
+| `manage-worktrees` | 多树关系读 `delivery-identity`；创建/堆叠历史读 `spawn-and-stack`；评审/交接/watcher 读 `review-lifecycle`；批量集成和回收分别读取现有专项 reference |
+| `verify-agent-output` | 输入未准备、preflight 失败或完整诊断时读 `input-preparation`；进入 L1 才读 verification protocol |
+| `run-agent-verify-loop` | embedded、状态迁移、恢复/熔断分别读取已有专项 reference；正常 happy path 不加载恢复细节 |
+
+字符数是稳定、tokenizer-independent 的固定上下文代理，不冒充实际计费 Token。当前入口预算为：
+`orchestrate-subagents <= 10000`、`manage-worktrees <= 9000`、`verify-agent-output <= 5200`、
+`run-agent-verify-loop <= 5300`，合计 `<= 29500`；每个 description `<= 140` 字符且合计 `<= 500`。
+预算是回归上限，不是填充目标；超限时优先下沉真正条件化的细节，不能删除安全不变量来过测试。
+
 ## 4. 四个 Skill 的职责边界
 
 | Skill | 核心职责 | 独立交付 | 组合时提供 | 明确不拥有 |
@@ -252,6 +271,8 @@ Agent 必须执行当前冻结协议，同时持续审计以下冲突：
 - 扫描碰撞；
 - 创建或接管 worktree；
 - 更新 owner 与状态；
+- 以 CAS 约束执行 manager-owned rebase，或在不改历史时 retarget；
+- 记录堆叠父 worktree、base SHA 与结构化 change request；
 - 固定 feature / target SHA；
 - 生成批次集成计划；
 - 按冻结计划合成一次性集成候选；
@@ -272,6 +293,14 @@ Agent 必须执行当前冻结协议，同时持续审计以下冲突：
 做 CAS；随后才能尝试重冻结。这样旧 SHA 不会在状态更新与撤防之间抢先把任务推进到不可逆终态，
 陈旧 controller 也不能覆盖并发 rearm 或已进入 `merge_detected` 的 watcher。
 
+堆叠交付的历史改写必须由 manager 事务拥有：先写 `history_operation` intent 并撤防旧 watcher，再
+执行 rebase；成功后原子更新 `base_ref/base_sha/stack_parent`、闭合旧 ownership epoch、新开
+`managed_rebase` epoch 并保存 old/new commit lineage。冲突或进程中断时 record 保持 pending，Artifact、
+评审登记、交接和提交命令 fail-closed，只允许按原参数 `--continue` 或显式 `--abort` 恢复。`retarget`
+不改 Git 历史，仅当新 base 已是 live HEAD 祖先时更新验证/MR attribution。已有 MR 的 fallback 由
+一次 `touch --status ready_for_review --mr <url> --watch-target <ref>` 同时写入状态、结构化 URL 与 watcher；
+未显式 target 时使用 record 的 managed base 推断堆叠目标，portable core 不声称已修改远端 MR。
+
 ### 5.3 verify-agent-output
 
 独立触发场景：
@@ -290,6 +319,11 @@ Agent 必须执行当前冻结协议，同时持续审计以下冲突：
 5. 脚本在同一 Artifact 上运行 final L0。
 6. 输出 Evidence Package。
 
+已填写的三份输入优先通过 `prepare-run` 一次完成 digest 规范化、readiness、preflight 与 init；源文件
+保持只读，任何前置失败都不得留下半初始化 run。reviewer 结构化结果可通过 `record-review --stdin`
+直接进入 runtime，避免人工中间文件；stdin 与文件输入互斥并受严格 JSON、大小和 TTY 门禁。状态变更
+CLI 默认输出 compact 摘要，完整 snapshot 通过 `--verbose` 或 `inspect` 获取。
+
 如果宿主不能提供新上下文，Skill 可以导出只读 review bundle，等待用户转交给第二会话。
 第二会话返回结果时记录 `isolation_assurance: user_relayed`。如果宿主不能派生、用户也不
 中继第二会话，运行以 `independent_context_unavailable` abort，不产生标准 Evidence。
@@ -302,6 +336,7 @@ Agent 必须执行当前冻结协议，同时持续审计以下冲突：
 
 - 用户明确要求“一个 Agent 实现、另一个持续验收，直到通过或触发停止条件”；
 - 高风险工作需要有界修复—证伪；
+- controller 在 freeze 前已有证据表明同一收敛对象很可能连续产生多轮新 Artifact，且修复范围与有界重试已获授权；
 - 需要 max iterations、failure fuse、恢复和人工门。
 
 它不应该因为没有 `verify-agent-output` 就完全不可用。独立模式使用内置 adapter：
@@ -343,6 +378,9 @@ Evidence Package；如果无法获得独立 reviewer，同样停止而不是用 
 Goal、持续追踪这个目标”时，controller 才创建外部 Goal，并把不透明的 `goal_ref` 绑定到 Loop。
 Loop completed 只是 Goal 的完成证据之一；外层 controller 仍需检查全局 completion 与 H gate，
 再决定是否把 Goal 标记完成。
+
+一次性 verification 已经 terminal 后才获得循环授权时，旧 Evidence 保持不可变；controller 新建
+Loop、冻结 limits，并从修复后的新 Artifact 开始正式 iteration，不在旧 run 上覆盖或补写 verdict。
 
 controller 的 provider 选择是按需的，Loop 只消费冻结结果：
 
@@ -394,7 +432,7 @@ controller 根据任务事实选择能力：
 | 多 Agent 但只有一个写入者 | `orchestrate-subagents` |
 | 单 Agent 需要隔离 Git 工作区 | `manage-worktrees` |
 | 固定 commit 独立 review 一次 | `verify-agent-output` |
-| 明确要求反复修复和独立验收 | `run-agent-verify-loop` |
+| 明确要求反复修复，或 freeze 前已合理预期同一目标会经历多轮新 Artifact 且修复已获授权 | `run-agent-verify-loop` |
 | 多写入者 + 一次性验收 | orchestrator + worktrees + verifier |
 | 多写入者 + 有界修复循环 | 四者组合 |
 
@@ -463,8 +501,12 @@ Loop 的独立 L1 条件。
 - 固定 Artifact、单个只读 reviewer、只验一次：只触发 `verify-agent-output`；
 - reviewer 是多节点任务图的一部分，或需要并发、不同权限、多个 critic：触发
   `orchestrate-subagents`；
-- 明确要求实现—验收反复收敛：触发 `run-agent-verify-loop`；
+- 明确要求实现—验收反复收敛，或 freeze 前已合理预期同一目标会连续产生多轮新 Artifact 且有修复授权：触发 `run-agent-verify-loop`；
 - Loop 内的一次性验证是 provider 调用，不再次创建全局 orchestrator。
+
+固定 SHA 的一次性 terminal Evidence 不会自动升级成 Loop，也不能被后续修复覆盖；模式变化时保留旧
+Evidence，显式冻结新的 Loop state。多个彼此独立的收敛对象仍由 orchestrator 各自建节点/Loop，不能
+塞进一个 Loop。
 
 `orchestrate-subagents` 的 description 必须显式排除“单 Artifact、单 reviewer 的一次性验收”；
 `verify-agent-output` 的 description 必须显式排除多节点编排与自动修复。
@@ -506,6 +548,13 @@ stop_conditions: []
 extensions:
   verification:
     provider: none | verify-agent-output | run-agent-verify-loop
+  review_policy:
+    schema_version: 1
+    max_primary_reviews_per_artifact: 1
+    max_escalation_reviews_per_artifact: 1
+    require_distinct_lens: true
+    review_only_after_smoke_pass: true
+    max_review_input_tokens: 12000
 contract_digest: "sha256:..."
 ~~~
 
@@ -520,6 +569,8 @@ contract_digest: "sha256:..."
   `[{path, size, sha256}]` manifest 使用 RFC 8785 + SHA-256；不包含绝对路径、缓存和运行状态；
 - 合同冻结后任何变化都创建新版本；
 - extension 不得覆盖公共字段；
+- `review_policy` 在 reviewer 派发前冻结每个 Artifact 的 primary/escalation 上限、lens 去重、smoke
+  前置条件和输入 Token 上限；默认不把 reviewer 与 worker 1:1 配对；
 - 实现者不能修改 verification extension；需要 `independent_evidence` 的节点只能在此处已声明
   `verify-agent-output` 且 `skill_set` 已冻结同名 Skill 时创建。
 - freeze 后 provider 缺失或不兼容必须 abort / re-contract，不得修改原合同。
@@ -607,6 +658,44 @@ batch_fingerprint: "<optional>"
 ~~~
 
 `branch_hint` 不是身份。验证期间 `HEAD` 必须始终等于 `artifact_sha`。
+
+#### 7.3.1 Batch Result
+
+一次性集成候选的终态结论由 `manage-worktrees` 记录为独立 envelope，不能借用
+`Worktree Binding.task_status=done` 表达：
+
+~~~yaml
+schema_version: 1
+outcome: passed | failed | stale
+candidate_sha: "<full commit object id>"
+fingerprint: "sha256:..."
+target_ref: "<ref>"
+target_sha: "<full commit object id>"
+ordered_input_shas: []
+evidence_manifest_digest: "sha256:... | null"
+evidence_manifest:
+  schema_version: 1
+  contract_digest: "sha256:...（passed/failed 必填；仅 stale 可为 null）"
+  checks:
+    - name: "<stable check>"
+      environment: {}
+      argv: ["tool", "arg"]
+      outcome: passed | failed | undecidable
+      exit_code: 0
+      evidence_refs:
+        - kind: "<opaque kind>"
+          id: "<stable opaque ref>"
+          digest: "sha256:..."
+reason: "<required for stale> | null"
+result_digest: "sha256:..."
+recorded_at: "RFC3339"
+~~~
+
+manager 不执行这些 checks，也不自行判断 verdict；它只校验 controller 提供的结构化结果与 live candidate
+HEAD、batch fingerprint、target 和有序输入绑定，并冻结不可覆盖的终态。`passed/failed` 必须有 Evidence；
+其 `contract_digest` 必须非空，使合同变化机械地要求新候选。`stale` 必须有 reason，且只有它可以用
+null contract digest 表达“尚未形成独立合同即已失效”。environment 键使用 lowercase 标识符，schema
+与 runtime 同时拒绝敏感键名、换行/超长字符串和非有限数字。原始日志、环境变量值和凭证不进入 envelope。
 
 ### 7.4 Verification Profile
 
@@ -963,6 +1052,7 @@ orchestrate-subagents/
     ├── resolve_model_policy.mjs
     ├── worker-capability-preflight.mjs
     ├── orchestration-reflection.mjs
+    ├── review-budget.mjs
     ├── orchestration-ledger.mjs
     ├── contract-tool.mjs
     └── *.test.mjs
@@ -972,6 +1062,12 @@ orchestrate-subagents/
 requirements；把策略拒绝、未证明、审批通道故障和执行故障分开处置，不把易变错误串写成判据。
 无运行时工具需求的节点可以使用空 requirements，不固定花一个 worker 探针。有效记录绑定 host、
 worker profile、接口指纹和 session / 配置摘要，过期或 binding 漂移 fail closed。
+
+`review-budget.mjs` 是 reviewer 派发前的纯门禁，不派发、不修改历史。它按 Artifact digest 统计已执行
+review：默认最多一次 primary；只有 primary 不可判定、证据冲突或协议歧义时允许一次不同 lens 的
+escalation。smoke 未通过、相同 lens、输入 Token 超限或 safety stop 均 fail closed。预算通过只说明
+“允许派发”，不等于验收通过。不能取得宿主精确 Token 计数时，controller 使用 UTF-8 字符数作明确标记
+的稳定代理，不能把估算写成精确计费值。
 
 在必要能力已证明的前提下，`≤3` 个独立只读 worker、单 stage、无副作用/资源/Loop/barrier 时使用
 `orchestration_mode: lightweight`，写仓库外状态快照，不运行完整 capability cache、模型路由解析器或
@@ -1040,7 +1136,7 @@ environment_fault / contract_gap / safety / undecidable`。前四类可以由最
 | `doctor` | 检查孤儿节点、revision 冲突和未闭环资源 |
 
 脚本不直接派发 Agent。派发 API 属于宿主，Skill 负责把宿主回执写入 ledger。
-protocol `1.1.0` 与 runtime `1.5.0` 分别标识兼容语义和脚本实现；capabilities 另给精确 Skill
+protocol `1.1.0` 与 runtime `1.6.0` 分别标识兼容语义和脚本实现；capabilities 另给精确 Skill
 content digest。dispatch schema v2 以 `attempt_id / attempt / previous_attempt_id / adjustment_action /
 failure_kind / failure_ref` 保存动态重路由 lineage。首次派发使用 `initial`；重派必须创建新节点，前序
 节点已进入 `failed`，且 `failure_ref` 指向前序节点已附的 report / Evidence。完整档必须绑定实时
@@ -1078,9 +1174,21 @@ adapter 的 app 相对路径允许 suffix-relative 低置信度兜底。低置�
 | `capabilities --json` | 声明 schema 与 provider 能力 |
 | `batch-integrate --plan <json>` | 校验冻结计划新鲜度，建/复用一次性候选树并按冻结顺序合成精确 SHA |
 | `batch-step <candidate> --step --state` | 登记 Profile 声明的合成后再生成步骤的执行结果 |
+| `batch-result <candidate> --state --candidate --evidence` | 把 controller 已完成的 `passed/failed/stale` 与精确候选和 Evidence digest 冻结为不可覆盖终态 |
 | `plan-batch --scan-conflicts` | 冻结前对 included 输入两两写树式干跑，输出冲突矩阵 |
+| `reclaim <candidate> --archive-evidence <sha> --reason <text>` | 创建本地 evidence archive ref，回读精确 SHA 后回收不作为 MR 载体的终态批次候选 |
+| `rebase <selector> --onto <ref> --expected-head <sha>` | manager-owned 历史事务，刷新 base、stack parent、ownership 与 lineage；支持 `--continue/--abort` 恢复 |
+| `retarget <selector> --base <ref> --expected-head <sha>` | 不改历史地更新验证/MR target attribution，新 base 必须已是 HEAD 祖先 |
+| `touch ... --mr <url> --watch-target <ref>` | 一次 event 登记结构化 MR、评审状态、冻结 HEAD 与 watcher target |
 
-它继续只拥有 Git 隔离与生命周期，不读取 Verification verdict，不推进 Loop iteration。
+它继续只拥有 Git 隔离与生命周期：可以保存 controller 报告的 batch outcome，但不执行验证、不解释
+`verify-agent-output` verdict，也不推进 Loop iteration。
+
+`history_operation` 是 recoverable transaction marker，不是普通状态备注。pending 时 `doctor` 必须
+报 error，所有会导出或推进交付边界的命令都拒绝运行；成功 finalize 才允许导出新 Artifact。旧
+Artifact 通过 base/epoch/live HEAD 任一绑定机械失效。`stack_parent` 保存父 worktree ID、branch 与
+当时 parent HEAD，使 `doctor` 能区分正常父分支前进与 manager 外部 history rewrite；父记录缺失或
+branch 不匹配为 error，父 HEAD 前进为需要 rebase/retarget 的 warning。
 
 `--scan-conflicts` 是 `plan-batch` 的**附加输出**，产生 `conflict_scan`（`schema_version: 1`）：
 `pairs[]` / `against_target[]` 各给 `state`、`conflict_files`、`adjacent_files`、`files[]`、
@@ -1100,6 +1208,19 @@ MISTAKES TO AVOID 明确禁止把空的 Conflicted file info 当成干净合并�
 任何内容。Profile 的 `post_integrate_steps` 是纯声明（只有 `name` / `hint`，未知键 fail-closed），
 合成后只回显给 controller，执行结果经 `batch-step` 回写 event。这保持了 §8.2 的通用脚本约束：
 Profile 是数据，不是命令执行入口。
+
+`batch-result` 实现候选状态图的 `verifying -> passed/failed/stale` 边。它要求 clean、无 Git 中间态、
+live HEAD 与完整 candidate object ID 一致，且 candidate 是 `composed_sha` 的后继；`passed` 还要求所有
+声明的 post-integrate step 为 `done/skipped`。结果按 canonical JSON 计算 digest，并作为 terminal
+append-only 记录；不同输入重跑拒绝覆盖。同一结论可幂等读取。
+
+终态候选通过 `reclaim --archive-evidence` 进入 `reclaimed`：先 CAS 创建
+`refs/worktree-archive/evidence/<worktree-id>` 并回读精确 candidate SHA，再复用通用 dirty、stash、
+Git operation、submodule、worktree remove 和 branch cleanup 状态机。归档保存 batch fingerprint、target、
+有序输入和 result/Evidence digest，保留 `task_status=done` 与真实 outcome，不借道 `abandoned`。归档 ref
+只给当前仓库提供 GC 可达性，不宣称跨 clone/机器持久性。普通 `reclaim --pushed` 也必须找到候选自身
+branch 之外包含目标 SHA 的 local/remote branch、tag 或 archive ref，堵住“用当前 HEAD 自证后删掉最后
+一个 ref”的证据丢失路径。
 
 合成期间的写动作限于候选树自身：按冻结顺序 merge、把候选重置回冻结 target 以重新合成、
 `git merge --abort`。候选树是一次性产物、内容可从计划完整复现，因此重置不损失唯一成果；但命令
@@ -1145,10 +1266,11 @@ verify-agent-output/
 | `readiness` | 只检查环境前提（Git 根、可执行、L0 cwd 与已存在的 argv 文件、state root 可写），失败归 blocked/precondition |
 | `preflight` | 一次汇总 envelope、枚举、摘要、Skill 绑定与隔离 assurance 错误 |
 | `init` | 冻结 Contract、Profile 与 Artifact |
+| `prepare-run` | 只读规范化三份输入并依次运行 readiness、preflight、init；失败不创建半 run |
 | `run-smoke` | 执行便宜 L0，失败时快速终止 |
 | `review-input` | 生成携带 Contract/Profile digest、Artifact 与 nonce 的隔离 reviewer 输入 |
 | `review-bundle` | 把提示词、review-input、Review Result schema、权限与停止条件打成可直投 reviewer 的自包含 JSON，并标注 `contract_kind` |
-| `record-review` | 校验并登记 L1 输出 |
+| `record-review` | 校验并登记 L1 输出；支持 `--stdin` 直接接收结构化 reviewer JSON |
 | `run-final` | 在同一 Artifact 上执行完整 L0 |
 | `record-reflection` | 记录漏检、误报、不可判定、Profile 或 Skill 缺口 |
 | `propose-improvement` | 从有证据 reflection 生成 proposed 候选 |
@@ -1157,6 +1279,11 @@ verify-agent-output/
 | `doctor` | 检查事件、锁、漂移和不一致 |
 
 该 runtime 是 L0 与 Evidence 的权威；L1 判断仍由独立 Agent 提供。
+
+CLI 命令统一支持 `--help`。`run-smoke / record-review / run-final` 默认 compact 输出
+`run_id/revision/status/failed_checks/evidence_digest`，`--verbose` 恢复完整 snapshot；程序化 API 不被
+CLI 渲染策略截断。terminal 非 pass 的 compact 输出可给非权威 `next_mode_hint`，提醒 controller 保留
+Evidence，并在已授权多轮修复时新建 Loop；该提示不能自行改变 provider 或启动循环。
 
 ### 8.6 run-agent-verify-loop 的脚本工具
 
@@ -1349,8 +1476,9 @@ Loop 收到 verification abort 时：
 plan-batch（冻结 target 与有序输入；可选 --scan-conflicts 出冲突矩阵定合并顺序）
 → batch-integrate（建/复用一次性候选树并合成）
 → controller 跑门禁 + batch-step 登记合成后再生成步骤
+→ batch-result 冻结 candidate SHA、环境检查摘要与 Evidence digest
 → 各输入按可独立评审的交付单元分别合入
-→ reclaim（候选树与各 feature 树）
+→ reclaim --archive-evidence（候选）/ reclaim --pushed（各 feature）
 ~~~
 
 不需要多 Agent，也不产生验证 verdict。
@@ -1507,6 +1635,10 @@ assurance:
 - worker effective capability binding / expiry、拒绝与审批通道故障分类、无需能力时不强制探针；
 - 轻量 Reflection 不依赖 ledger，仍校验证据摘要并只生成 proposed Proposal；
 - 模型发现不可用、用户显式不可验证与宿主默认未暴露三种状态不混写。
+- reviewer 预算按 Artifact 限制 primary/escalation 数量，拒绝重复 lens、smoke 前 review、超预算输入和
+  safety stop；escalation 必须有可验证触发原因；
+- 四个 `SKILL.md` 与 frontmatter description 的单项/总字符预算使用 tokenizer-independent 测试守住；
+  reference 路由按真实操作场景加载，避免每次触发支付异常恢复与其他模式的上下文成本；
 
 `manage-worktrees`：
 
@@ -1515,7 +1647,13 @@ assurance:
 - 保证 `task_status` / `worktree_state` 双状态无损 round-trip；
 - SHA-1 / SHA-256 repository；
 - owner epoch、drift 和回收边界。
+- manager-owned rebase 的成功、冲突 continue、abort 与 crash recovery；pending 时交付命令 fail-closed；
+- retarget 祖先门禁、stack parent drift 诊断、旧 Artifact 失效；
+- `touch --mr --watch-target` 的原子结构化登记与 URL 校验；
 - incident reflection 不泄露凭证、原始日志或未授权路径；
+- batch-result 的 SHA/指纹/target/有序输入/Evidence 绑定、终态不可覆盖、passed step 门禁；
+- evidence archive 的 HEAD CAS、ref collision/readback、dirty/stash/Git 中间态/submodule、幂等恢复与精确恢复；
+- `--pushed` 必须有候选 branch 外的持久 ref，原有 pushed/superseded 回收路径保持兼容；
 
 `verify-agent-output`：
 
@@ -1530,6 +1668,9 @@ assurance:
 - 未知 `contract_item_id` 与非法 path grammar 拒绝；
 - aborted / stale_precondition；
 - crash recovery。
+- `prepare-run` 对源输入只读、自动摘要、前置失败不创建 run；
+- `record-review --stdin` 的 digest 回填、严格 JSON、互斥与大小门禁；
+- compact / verbose CLI 输出与每个子命令 `--help`；
 
 `run-agent-verify-loop`：
 
@@ -1831,8 +1972,8 @@ v1 只做四件为未来铺路的事：
 
 1. 四个 Skill 均可独立使用。
 2. `verify-agent-output` 是独立的一次性验证 Skill。
-3. `run-agent-verify-loop` 继续保留，服务明确要求循环收敛的用户。
-4. 仅在用户明确要求循环收敛或显式调用时，`/run-agent-verify-loop + 目标` 才按第 5.5 节先冻结
+3. `run-agent-verify-loop` 继续保留，服务明确要求循环收敛，或在 freeze 前已合理预期同一目标会连续产生多轮新 Artifact 且修复已获授权的任务。
+4. 仅在第 5.4 节循环触发条件成立或显式调用时，`/run-agent-verify-loop + 目标` 才按第 5.5 节先冻结
    合同再启动循环；普通任务与一次性验收不经过 Loop，普通 Loop 也不自动创建外部 Goal。
 5. Loop 可以 standalone embedded 运行，也可以消费 verifier provider。
 6. Verification Profile 是独立冻结 envelope，并承接现有验证 extension。

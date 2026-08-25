@@ -2109,6 +2109,26 @@ function freezePlan(fixture, tasks) {
   return { plan, planPath };
 }
 
+function batchEvidence(fixture, name = 'device-suite', outcome = 'passed', options = {}) {
+  const path = join(fixture.sandbox, `evidence-${name}-${outcome}.json`);
+  const manifest = {
+    schema_version: 1,
+    checks: [{
+      name,
+      environment: options.environment ?? { platform: 'ios', device: 'simulator', os_version: 'test' },
+      argv: ['dart', 'test'],
+      outcome,
+      exit_code: outcome === 'passed' ? 0 : 1,
+      evidence_refs: [{ kind: 'report', id: `MR !fixture/${name}`, digest: `sha256:${'b'.repeat(64)}` }],
+    }],
+  };
+  if (!options.omitContract) {
+    manifest.contract_digest = Object.hasOwn(options, 'contractDigest') ? options.contractDigest : `sha256:${'a'.repeat(64)}`;
+  }
+  writeFileSync(path, JSON.stringify(manifest));
+  return path;
+}
+
 test('batch-integrate 按冻结顺序合成多分支，指纹与每步 merge commit 落账', (t) => {
   const fixture = makeRemoteRepo();
   t.after(fixture.cleanup);
@@ -2154,6 +2174,181 @@ test('batch-integrate 按冻结顺序合成多分支，指纹与每步 merge com
   assert.equal(again.outcome, 'already_composed');
   assert.equal(again.composed_sha, result.composed_sha);
   assert.equal(again.candidate.worktree_id, result.candidate.worktree_id);
+});
+
+test('batch-result 冻结终态证据，archive-evidence 保留精确候选后回收 done worktree', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+  prepareBatchInput(fixture, 'evidence-alpha', 'alpha.txt', 'alpha\n');
+  prepareBatchInput(fixture, 'evidence-beta', 'beta.txt', 'beta\n');
+  const { plan, planPath } = freezePlan(fixture, ['evidence-alpha', 'evidence-beta']);
+  const composed = JSON.parse(manager(fixture.repo, [
+    'batch-integrate', '--plan', planPath,
+    '--agent', 'codex', '--agent-id', 'evidence-integrator', '--json',
+  ]));
+  manager(fixture.repo, ['touch', composed.candidate.task, '--status', 'done', '--note', '设备验收已结束，待冻结证据']);
+  const unrecorded = JSON.parse(manager(fixture.repo, ['doctor', '--json'])).findings
+    .find((item) => item.code === 'DONE_BATCH_CANDIDATE_RESULT_UNRECORDED' && item.worktree_id === composed.candidate.worktree_id);
+  assert.equal(unrecorded.candidate_sha, composed.composed_sha);
+  assert.match(managerStderr(fixture.repo, [
+    'reclaim', composed.candidate.task, '--archive-evidence', composed.composed_sha, '--reason', '尚未冻结结果',
+  ]), /尚未通过 batch-result/);
+  const evidencePath = batchEvidence(fixture);
+  const frozen = JSON.parse(manager(fixture.repo, [
+    'batch-result', composed.candidate.task, '--state', 'passed',
+    '--candidate', composed.composed_sha, '--evidence', evidencePath, '--json',
+  ]));
+  assert.equal(frozen.outcome, 'passed');
+  assert.equal(frozen.candidate_sha, composed.composed_sha);
+  assert.match(frozen.result_digest, /^sha256:/);
+  assert.equal(recordFor(fixture, composed.candidate.task).task_status, 'done');
+  const frozenAgain = JSON.parse(manager(fixture.repo, [
+    'batch-result', composed.candidate.task, '--state', 'passed',
+    '--candidate', composed.composed_sha, '--evidence', evidencePath, '--json',
+  ]));
+  assert.equal(frozenAgain.result_digest, frozen.result_digest);
+
+  const pendingFinding = JSON.parse(manager(fixture.repo, ['doctor', '--json'])).findings
+    .find((item) => item.code === 'DONE_EVIDENCE_WORKTREE_RECLAIM_PENDING' && item.worktree_id === composed.candidate.worktree_id);
+  assert.equal(pendingFinding.candidate_sha, composed.composed_sha);
+
+  // dirty、错误 SHA 都不得提前创建 archive ref。
+  const archiveRef = `refs/worktree-archive/evidence/${composed.candidate.worktree_id}`;
+  const candidateTree = git(composed.candidate.path, ['rev-parse', 'HEAD^{tree}']);
+  const mergeSide = git(composed.candidate.path, ['commit-tree', candidateTree, '-p', composed.composed_sha, '-m', 'test: pending merge']);
+  git(composed.candidate.path, ['merge', '--no-commit', '--no-ff', mergeSide]);
+  assert.match(managerStderr(fixture.repo, [
+    'reclaim', composed.candidate.task, '--archive-evidence', composed.composed_sha, '--reason', '固定设备候选已验收',
+  ]), /git operation in progress/);
+  git(composed.candidate.path, ['merge', '--abort']);
+  git(fixture.repo, ['update-ref', archiveRef, plan.target.sha]);
+  assert.match(managerStderr(fixture.repo, [
+    'reclaim', composed.candidate.task, '--archive-evidence', composed.composed_sha, '--reason', '固定设备候选已验收',
+  ]), /归档 ref 已指向其他提交/);
+  assert.equal(git(fixture.repo, ['rev-parse', `${archiveRef}^{commit}`]), plan.target.sha);
+  git(fixture.repo, ['update-ref', '-d', archiveRef]);
+  writeFileSync(join(composed.candidate.path, 'dirty.txt'), 'dirty\n');
+  assert.match(managerStderr(fixture.repo, [
+    'reclaim', composed.candidate.task, '--archive-evidence', composed.composed_sha, '--reason', '固定设备候选已验收',
+  ]), /必须干净|归档前置条件/);
+  assert.equal(gitOk(fixture.repo, ['show-ref', '--verify', archiveRef]), false);
+  rmSync(join(composed.candidate.path, 'dirty.txt'));
+  assert.match(managerStderr(fixture.repo, [
+    'reclaim', composed.candidate.task, '--archive-evidence', planPath.length.toString(16).padStart(composed.composed_sha.length, '0'), '--reason', '固定设备候选已验收',
+  ]), /完整 commit object ID/);
+
+  const output = manager(fixture.repo, [
+    'reclaim', composed.candidate.task, '--archive-evidence', composed.composed_sha,
+    '--reason', '固定设备候选已完成验收，功能输入另行合入目标分支',
+  ]);
+  assert.match(output, /证据归档=refs\/worktree-archive\/evidence/);
+  assert.equal(git(fixture.repo, ['rev-parse', `${archiveRef}^{commit}`]), composed.composed_sha);
+  assert.equal(git(fixture.repo, ['show', `${archiveRef}:alpha.txt`]), 'alpha');
+  assert.equal(existsSync(composed.candidate.path), false);
+  const reclaimed = recordFor(fixture, composed.candidate.task, true);
+  assert.equal(reclaimed.worktree_state, 'reclaimed');
+  assert.equal(reclaimed.task_status, 'done');
+  assert.equal(reclaimed.batch_result.outcome, 'passed');
+  assert.equal(reclaimed.evidence_archive.batch_result_digest, frozen.result_digest);
+  assert.equal(reclaimed.reclaim_summary.reclaim_evidence.kind, 'batch_evidence_archive');
+
+  // 重跑同一归档回收保持幂等，恢复 ref 仍精确指向候选 SHA。
+  manager(fixture.repo, [
+    'reclaim', composed.candidate.task, '--archive-evidence', composed.composed_sha,
+    '--reason', '固定设备候选已完成验收，功能输入另行合入目标分支',
+  ]);
+  assert.equal(git(fixture.repo, ['rev-parse', `${archiveRef}^{commit}`]), composed.composed_sha);
+  assert.match(managerStderr(fixture.repo, [
+    'reclaim', composed.candidate.task, '--archive-evidence', composed.composed_sha,
+    '--reason', '试图改写已经冻结的归档原因',
+  ]), /不同的证据归档/);
+});
+
+test('batch-result 拒绝覆盖终态，并在 passed 前要求合成后步骤全部成功或跳过', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+  writeFileSync(join(fixture.repo, '.worktree-trace.json'), `${JSON.stringify({
+    schema_version: 1,
+    default_base: 'origin/main',
+    post_integrate_steps: [{ name: 'regenerate', hint: '重生成产物' }],
+  }, null, 2)}\n`);
+  publishProfile(fixture);
+  prepareBatchInput(fixture, 'result-alpha', 'alpha.txt', 'alpha\n');
+  prepareBatchInput(fixture, 'result-beta', 'beta.txt', 'beta\n');
+  const { planPath } = freezePlan(fixture, ['result-alpha', 'result-beta']);
+  const composed = JSON.parse(manager(fixture.repo, [
+    'batch-integrate', '--plan', planPath,
+    '--agent', 'codex', '--agent-id', 'result-integrator', '--json',
+  ]));
+  const missingContract = batchEvidence(fixture, 'missing-contract', 'passed', { omitContract: true });
+  assert.match(managerStderr(fixture.repo, [
+    'batch-result', composed.candidate.task, '--state', 'passed', '--candidate', composed.composed_sha,
+    '--evidence', missingContract,
+  ]), /非空 contract_digest/);
+  const sensitiveEnvironment = batchEvidence(fixture, 'sensitive-environment', 'passed', { environment: { api_key: 'must-not-enter-trace' } });
+  assert.match(managerStderr(fixture.repo, [
+    'batch-result', composed.candidate.task, '--state', 'passed', '--candidate', composed.composed_sha,
+    '--evidence', sensitiveEnvironment,
+  ]), /不含敏感键/);
+  const passedEvidence = batchEvidence(fixture, 'passed-suite', 'passed');
+  assert.match(managerStderr(fixture.repo, [
+    'batch-result', composed.candidate.task, '--state', 'passed', '--candidate', composed.composed_sha,
+    '--evidence', passedEvidence,
+  ]), /合成后步骤/);
+  manager(fixture.repo, ['batch-step', composed.candidate.task, '--step', 'regenerate', '--state', 'done']);
+  manager(fixture.repo, [
+    'batch-result', composed.candidate.task, '--state', 'passed', '--candidate', composed.composed_sha,
+    '--evidence', passedEvidence,
+  ]);
+  const failedEvidence = batchEvidence(fixture, 'failed-suite', 'failed');
+  assert.match(managerStderr(fixture.repo, [
+    'batch-result', composed.candidate.task, '--state', 'failed', '--candidate', composed.composed_sha,
+    '--evidence', failedEvidence,
+  ]), /不得覆盖终态结果/);
+  assert.match(managerStderr(fixture.repo, [
+    'batch-step', composed.candidate.task, '--step', 'regenerate', '--state', 'skipped',
+  ]), /batch_result 已冻结/);
+  assert.match(managerStderr(fixture.repo, [
+    'batch-integrate', '--plan', planPath, '--agent', 'codex', '--agent-id', 'result-integrator',
+    '--recompose', '--recompose-head', composed.composed_sha,
+  ]), /batch_result 已冻结/);
+});
+
+test('batch-result stale 可用 null contract digest 表达尚未形成独立验收合同', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+  prepareBatchInput(fixture, 'stale-alpha', 'alpha.txt', 'alpha\n');
+  prepareBatchInput(fixture, 'stale-beta', 'beta.txt', 'beta\n');
+  const { planPath } = freezePlan(fixture, ['stale-alpha', 'stale-beta']);
+  const composed = JSON.parse(manager(fixture.repo, [
+    'batch-integrate', '--plan', planPath,
+    '--agent', 'codex', '--agent-id', 'stale-integrator', '--json',
+  ]));
+  const evidence = batchEvidence(fixture, 'stale-observation', 'passed', { contractDigest: null });
+  const result = JSON.parse(manager(fixture.repo, [
+    'batch-result', composed.candidate.task, '--state', 'stale', '--candidate', composed.composed_sha,
+    '--evidence', evidence, '--reason', '目标分支在验收合同冻结前已经前进', '--json',
+  ]));
+  assert.equal(result.outcome, 'stale');
+  assert.equal(result.evidence_manifest.contract_digest, null);
+  assert.equal(result.reason, '目标分支在验收合同冻结前已经前进');
+});
+
+test('reclaim --pushed 拒绝只由待删除分支引用的 SHA', (t) => {
+  const fixture = makeRepo();
+  t.after(fixture.cleanup);
+  manager(fixture.repo, ['spawn', 'unprotected-head', '--agent', 'codex', '--agent-id', 'push-proof', '--purpose', '验证持久 ref']);
+  const tree = worktreeFor(fixture, 'unprotected-head');
+  writeFileSync(join(tree, 'unique.txt'), 'unique\n');
+  git(tree, ['add', 'unique.txt']);
+  git(tree, ['commit', '-m', 'feat: unique candidate']);
+  const head = git(tree, ['rev-parse', 'HEAD']);
+  assert.match(managerStderr(fixture.repo, ['reclaim', 'unprotected-head', '--pushed', head]), /只由待删除候选分支保护/);
+  assert.equal(existsSync(tree), true);
+  git(fixture.repo, ['tag', 'durable-proof', head]);
+  manager(fixture.repo, ['reclaim', 'unprotected-head', '--pushed', head]);
+  assert.equal(git(fixture.repo, ['rev-parse', 'durable-proof^{commit}']), head);
+  assert.equal(existsSync(tree), false);
 });
 
 test('batch-integrate 拒绝已漂移的冻结计划，并要求重新 plan-batch', (t) => {
@@ -2747,4 +2942,168 @@ test('[P2-2] 自动写共享 extensions.worktreeConfig 留独立审计事件，�
     false,
     '扩展原本已启用时不得伪造写入事件',
   );
+});
+
+test('managed rebase 原子刷新堆叠父关系、base 与 ownership，并使旧 Artifact 失效', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+
+  manager(fixture.repo, [
+    'spawn', 'stack-parent-managed', '--base', 'origin/main',
+    '--agent', 'codex', '--agent-id', 'stack-parent-thread', '--purpose', '堆叠父任务',
+  ]);
+  const parent = worktreeFor(fixture, 'stack-parent-managed');
+  writeFileSync(join(parent, 'parent.txt'), 'parent v1\n');
+  git(parent, ['add', 'parent.txt']);
+  git(parent, ['commit', '-m', 'feat: parent v1']);
+  git(parent, ['push', '-u', 'origin', 'HEAD']);
+  manager(fixture.repo, ['touch', 'stack-parent-managed']);
+  const parentBranch = branchFor(fixture, 'stack-parent-managed');
+
+  manager(fixture.repo, [
+    'spawn', 'stack-child-managed', '--base', `origin/${parentBranch}`, '--base-reason', '依赖父任务',
+    '--agent', 'codex', '--agent-id', 'stack-child-thread', '--purpose', '堆叠子任务',
+  ]);
+  const child = worktreeFor(fixture, 'stack-child-managed');
+  writeFileSync(join(child, 'child.txt'), 'child v1\n');
+  git(child, ['add', 'child.txt']);
+  git(child, ['commit', '-m', 'feat: child v1']);
+  const oldHead = git(child, ['rev-parse', 'HEAD']);
+  const initialChildRecord = recordFor(fixture, 'stack-child-managed');
+  assert.equal(initialChildRecord.stack_parent.worktree_id, recordFor(fixture, 'stack-parent-managed').worktree_id);
+  assert.equal(initialChildRecord.stack_parent.parent_head_sha, initialChildRecord.base_sha);
+  const oldArtifact = JSON.parse(manager(fixture.repo, ['artifact', 'stack-child-managed', '--json']));
+  const oldArtifactPath = join(fixture.sandbox, 'old-stack-artifact.json');
+  writeFileSync(oldArtifactPath, JSON.stringify(oldArtifact));
+  assert.match(managerStderr(fixture.repo, [
+    'rebase', 'stack-child-managed', '--onto', branchFor(fixture, 'stack-child-managed'),
+    '--expected-head', oldHead, '--reason', '非法自引用',
+  ]), /stack parent 环/);
+
+  writeFileSync(join(parent, 'parent-next.txt'), 'parent v2\n');
+  git(parent, ['add', 'parent-next.txt']);
+  git(parent, ['commit', '-m', 'feat: parent v2']);
+  git(parent, ['push', 'origin', 'HEAD']);
+  manager(fixture.repo, ['touch', 'stack-parent-managed']);
+  const parentV2 = git(parent, ['rev-parse', 'HEAD']);
+
+  const output = manager(fixture.repo, [
+    'rebase', 'stack-child-managed', '--onto', `origin/${parentBranch}`,
+    '--expected-head', oldHead, '--reason', '吸收父任务 v2',
+  ]);
+  assert.match(output, /已 rebase/);
+  const childV2 = git(child, ['rev-parse', 'HEAD']);
+  assert.notEqual(childV2, oldHead);
+  assert.equal(gitOk(child, ['merge-base', '--is-ancestor', parentV2, childV2]), true);
+  assert.equal(readFileSync(join(child, 'parent-next.txt'), 'utf8'), 'parent v2\n');
+
+  const record = recordFor(fixture, 'stack-child-managed');
+  assert.equal(record.base_sha, parentV2);
+  assert.equal(record.base_ref, `origin/${parentBranch}`);
+  assert.equal(record.stack_parent.worktree_id, recordFor(fixture, 'stack-parent-managed').worktree_id);
+  assert.equal(record.stack_parent.parent_head_sha, parentV2);
+  assert.equal(record.history_rewrites.length, 1);
+  assert.equal(record.history_rewrites[0].old_head, oldHead);
+  assert.equal(record.history_rewrites[0].new_head, childV2);
+  assert.equal(record.ownership_epochs.length, 2);
+  assert.match(managerStderr(fixture.repo, ['verify-artifact', oldArtifactPath, '--json']), /Artifact/);
+  assert.match(managerStderr(fixture.repo, [
+    'rebase', 'stack-child-managed', '--onto', 'origin/main',
+    '--expected-head', oldHead, '--reason', 'stale CAS',
+  ]), /CAS/);
+
+  const retargeted = manager(fixture.repo, [
+    'retarget', 'stack-child-managed', '--base', 'origin/main',
+    '--expected-head', childV2, '--reason', 'MR 改为直接合入 main',
+  ]);
+  assert.match(retargeted, /已 retarget/);
+  const afterRetarget = recordFor(fixture, 'stack-child-managed');
+  assert.equal(afterRetarget.base_ref, 'origin/main');
+  assert.equal(afterRetarget.stack_parent, null);
+  assert.equal(afterRetarget.ownership_epochs.length, 2, 'retarget 不改历史，不应新开 ownership epoch');
+});
+
+test('managed rebase 冲突保持 pending，交付命令 fail-closed，并由 manager --continue 恢复', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+
+  manager(fixture.repo, [
+    'spawn', 'conflict-parent-managed', '--base', 'origin/main',
+    '--agent', 'codex', '--agent-id', 'conflict-parent-thread', '--purpose', '冲突父任务',
+  ]);
+  const parent = worktreeFor(fixture, 'conflict-parent-managed');
+  writeFileSync(join(parent, 'shared.txt'), 'base\n');
+  git(parent, ['add', 'shared.txt']);
+  git(parent, ['commit', '-m', 'feat: shared base']);
+  git(parent, ['push', '-u', 'origin', 'HEAD']);
+  manager(fixture.repo, ['touch', 'conflict-parent-managed']);
+  const parentBranch = branchFor(fixture, 'conflict-parent-managed');
+
+  manager(fixture.repo, [
+    'spawn', 'conflict-child-managed', '--base', `origin/${parentBranch}`, '--base-reason', '依赖父任务',
+    '--agent', 'codex', '--agent-id', 'conflict-child-thread', '--purpose', '冲突子任务',
+  ]);
+  const child = worktreeFor(fixture, 'conflict-child-managed');
+  writeFileSync(join(child, 'shared.txt'), 'child\n');
+  git(child, ['add', 'shared.txt']);
+  git(child, ['commit', '-m', 'feat: child edits shared']);
+  const oldHead = git(child, ['rev-parse', 'HEAD']);
+
+  writeFileSync(join(parent, 'shared.txt'), 'parent\n');
+  git(parent, ['add', 'shared.txt']);
+  git(parent, ['commit', '-m', 'feat: parent edits shared']);
+  git(parent, ['push', 'origin', 'HEAD']);
+  manager(fixture.repo, ['touch', 'conflict-parent-managed']);
+
+  const baseArgs = [
+    'rebase', 'conflict-child-managed', '--onto', `origin/${parentBranch}`,
+    '--expected-head', oldHead, '--reason', '吸收冲突父任务',
+  ];
+  assert.match(managerStderr(fixture.repo, baseArgs), /发生冲突/);
+  const pending = recordFor(fixture, 'conflict-child-managed');
+  assert.equal(pending.history_operation.state, 'conflicted');
+  const doctor = JSON.parse(manager(fixture.repo, ['doctor', '--json']));
+  assert.equal(doctor.findings.some((finding) => finding.code === 'MANAGED_HISTORY_OPERATION_PENDING'), true);
+  assert.match(managerStderr(fixture.repo, ['artifact', 'conflict-child-managed', '--json']), /未完成/);
+
+  writeFileSync(join(child, 'shared.txt'), 'resolved\n');
+  git(child, ['add', 'shared.txt']);
+  assert.match(manager(fixture.repo, [...baseArgs, '--continue']), /finalize rebase/);
+  const completed = recordFor(fixture, 'conflict-child-managed');
+  assert.equal(completed.history_operation, null);
+  assert.equal(completed.history_rewrites.length, 1);
+  assert.equal(readFileSync(join(child, 'shared.txt'), 'utf8'), 'resolved\n');
+});
+
+test('touch 可一次登记 MR URL、评审状态与 watcher target，并拒绝非 HTTP URL', (t) => {
+  const fixture = makeRemoteRepo();
+  const task = 'structured-mr-touch';
+  t.after(() => {
+    try { manager(fixture.repo, ['unwatch', task]); } catch {}
+    fixture.cleanup();
+  });
+  manager(fixture.repo, [
+    'spawn', task, '--base', 'origin/main',
+    '--agent', 'codex', '--agent-id', 'structured-mr-thread', '--purpose', '一次登记 MR',
+  ]);
+  const worktree = worktreeFor(fixture, task);
+  writeFileSync(join(worktree, 'mr.txt'), 'mr\n');
+  git(worktree, ['add', 'mr.txt']);
+  git(worktree, ['commit', '-m', 'feat: structured MR']);
+  git(worktree, ['push', '-u', 'origin', 'HEAD']);
+  const mrUrl = 'https://gitlab.example.invalid/group/project/-/merge_requests/42';
+  const output = manager(fixture.repo, [
+    'touch', task, '--status', 'ready_for_review', '--mr', mrUrl,
+    '--watch-target', 'origin/main', '--interval-ms', '100', '--notify', 'off',
+  ]);
+  assert.match(output, /watch 已武装/);
+  const record = recordFor(fixture, task);
+  assert.equal(record.task_status, 'ready_for_review');
+  assert.equal(record.change_request.url, mrUrl);
+  assert.equal(record.change_request.target_ref, 'origin/main');
+  assert.equal(record.auto_reclaim.target_ref, 'origin/main');
+  assert.equal(record.auto_reclaim.change_ref, mrUrl);
+  assert.match(managerStderr(fixture.repo, [
+    'touch', task, '--status', 'ready_for_review', '--mr', 'javascript:alert(1)', '--no-watch',
+  ]), /http/iu);
 });
