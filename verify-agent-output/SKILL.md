@@ -14,6 +14,9 @@ description: "对冻结的单一 Git Artifact 执行一次独立验收，运行 
 - 与 `manage-worktrees` 组合时消费其 Artifact Ref；没有时接受调用方提供的 clean pinned Git workdir。
 - 与 `run-agent-verify-loop` 组合时只返回 Evidence；是否进入下一 iteration 由 Loop 决定。
 - 单 Artifact、单 reviewer、只验一次时直接使用本 Skill，不为此启动全局 orchestrator。
+- 分支仍在快速演进、review 后会立即修复时，不启动本 Skill。可以由 controller 派新上下文做迭代期
+  只读 review，但该结果只是 `controller_recheck` / advisory，不能冒充标准 Evidence 或
+  `independent_evidence`。RC、合入候选等终审边界先冻结唯一 Artifact，再运行本 Skill 全流程。
 
 ## 前置条件
 

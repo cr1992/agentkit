@@ -1,8 +1,9 @@
 # 编排运行时 v1
 
 本运行时用于 `orchestration_mode: full`。`SKILL.md` 定义的 `≤3` 个独立只读 worker 轻量档使用仓库外
-JSON 快照，不初始化本 ledger；两种档位都先通过 `worker-capability-preflight.mjs` 校验节点所需有效
-能力。任一轻量资格失效时，将节点、宿主派发回执和已有产物收养到本 ledger 后继续。
+JSON 快照，不初始化本 ledger。两种档位都先声明节点所需有效能力：requirements 非空时通过
+`worker-capability-preflight.mjs` 校验；为空时不调用脚本，只记录 `not_required` 与合同已提供全部输入等
+依据。任一轻量资格失效时，将节点、宿主派发回执和已有产物收养到本 ledger 后继续。
 
 `contract-tool.mjs` 是 Task Contract 的机械入口：
 
@@ -103,10 +104,12 @@ normalize --input <effective.json>
 check --requirements <requirements.json> [--effective <effective.json>]
 ```
 
-没有 required capability 时允许缺省 effective 文件；有要求但缺记录时返回
-`scoped_probe_or_replan`。binding / 指纹不匹配或过期返回 `refresh_effective_profile`；策略拒绝、审批
-通道故障和执行故障分别返回 `replan_or_controller`、`stop_same_class_and_escalate`、
-`stop_same_class_and_diagnose`。具体结构见对应两个 v1 schema。
+没有 required capability 时无需运行 `check`，允许缺省 effective 文件；controller 在快照或 ledger
+派发记录旁写明 `not_required` 与判据。有要求但缺记录时返回 `scoped_probe_or_replan`。binding / 指纹
+不匹配或过期返回 `refresh_effective_profile`；相同 requirements 与 binding 的当轮有效 `allowed` 结果
+可以复用。同机、本地进程或历史上总是通过都不能替代这些绑定；策略拒绝、审批通道故障和执行故障
+分别返回 `replan_or_controller`、`stop_same_class_and_escalate`、`stop_same_class_and_diagnose`。具体
+结构见对应两个 v1 schema。
 
 ## 轻量 Reflection
 

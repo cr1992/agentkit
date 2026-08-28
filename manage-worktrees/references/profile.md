@@ -42,6 +42,10 @@ Profile 可声明：
 
 Profile 是数据，不是任意命令执行入口。不要放 shell command、token、cookie、私钥或个人凭证路径。
 
+`default_base` 应表达仓库当前实际采用的默认基线。需要在版本线与 main 间切换的仓库，应由自己的发布
+流程显式更新该值（例如 `origin/dev/x.y.z` → `origin/main`）。portable core 不扫描 `dev/*` 猜活跃分支，
+也不引入一个与 `default_base` 竞争优先级的隐式覆盖项。
+
 ## 合成后再生成步骤
 
 golden 基准、代码生成产物、依赖锁文件这类东西被多个分支各自重新生成时，合成必然冲突，且冲突

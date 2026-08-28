@@ -11,7 +11,7 @@
 ## 已推送成果
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" reclaim <task-or-id> --pushed <exact-sha>
+node "$SKILL_DIR/scripts/worktree-mgr.mjs" reclaim <task-or-id> --pushed <sha-or-unique-prefix>
 ```
 
 只有无 stash、树干净、branch/HEAD 已进入给定 SHA，才执行：
@@ -26,6 +26,10 @@ final_snapshot -> reclaim_ready -> git worktree remove -> branch cleanup -> recl
 给定 SHA 还必须由待回收 branch 以外的持久 ref 保护：local/remote branch、tag 或
 `refs/worktree-archive/*` 均可。`--pushed <当前 HEAD>` 但只有候选 branch 自己引用时会被拒绝，因为删掉
 branch 后对象仍会成为 dangling object；这不是“已推送”证据。
+
+`--pushed` 是人体工学例外：接受十六进制唯一短前缀，runtime 用 `rev-parse --verify` 展开后，后续 event、
+可达性和 branch cleanup 全部只使用完整 object ID。`--discard`、Artifact、batch candidate 与 evidence
+archive 仍要求完整 SHA，因为它们承担 CAS 或冻结身份边界。
 
 ## 固定 SHA 的批次验收候选
 

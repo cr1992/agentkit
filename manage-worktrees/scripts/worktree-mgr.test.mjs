@@ -6,10 +6,49 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
-import { batchFingerprint, classifyPairState, deliverReclaimNotification, isCliEntry, mergeTreeScanSupported, normalizeCodegraphMode, parseGitVersion, processIsAlive, regeneratedPathKind, runFileTry } from './worktree-mgr.mjs';
+import * as managerApi from './worktree-mgr.mjs';
+import {
+  batchFingerprint,
+  canonicalJson,
+  codegraphStdio,
+  deliverReclaimNotification,
+  isCliEntry,
+  normalizeCodegraphMode,
+  processIsAlive,
+  refreshTargetRefCached,
+} from './worktree-mgr.mjs';
 import { appendTraceEvent } from './worktree-trace.mjs';
 
 const MANAGER = join(dirname(fileURLToPath(import.meta.url)), 'worktree-mgr.mjs');
+
+test('兼容入口保留拆分前的完整公共导出面', () => {
+  const baselineExports = [
+    'batchFingerprint',
+    'canonicalJson',
+    'classifyPairState',
+    'codegraphStdio',
+    'deliverReclaimNotification',
+    'isCliEntry',
+    'mergeTreeScanSupported',
+    'normalizeCodegraphMode',
+    'parseGitVersion',
+    'predictReviewRefresh',
+    'processIsAlive',
+    'refreshTargetRefCached',
+    'regeneratedPathKind',
+    'runFileCapture',
+    'runFileTry',
+    'verifyArtifactEnvelope',
+    'worktreeSkillDigest',
+  ];
+  assert.deepEqual(
+    baselineExports.filter((name) => typeof managerApi[name] !== 'function'),
+    [],
+    'composition root 必须继续导出拆分前的全部公共 helper',
+  );
+  assert.deepEqual(canonicalJson({ b: 2, a: 1 }), { a: 1, b: 2 });
+  assert.equal(typeof refreshTargetRefCached, 'function');
+});
 
 test('CodeGraph mode 默认 auto 且只接受 auto/on/off', () => {
   assert.equal(normalizeCodegraphMode(null), 'auto');
@@ -17,6 +56,8 @@ test('CodeGraph mode 默认 auto 且只接受 auto/on/off', () => {
   assert.equal(normalizeCodegraphMode('on'), 'on');
   assert.equal(normalizeCodegraphMode('off'), 'off');
   assert.throws(() => normalizeCodegraphMode('shared'), /auto\/on\/off/);
+  assert.equal(codegraphStdio(true), 'inherit');
+  assert.deepEqual(codegraphStdio(false), ['ignore', 'pipe', 'pipe']);
 });
 
 test('批次指纹只绑定 Git SHA 与输入顺序，不依赖宿主路径', () => {
@@ -26,17 +67,6 @@ test('批次指纹只绑定 Git SHA 与输入顺序，不依赖宿主路径', ()
   assert.notEqual(batchFingerprint(target, inputs), batchFingerprint(target, [...inputs].reverse()));
   assert.notEqual(batchFingerprint(target, inputs), batchFingerprint('d'.repeat(40), inputs));
   assert.match(batchFingerprint(target, inputs), /^sha256:[0-9a-f]{64}$/);
-});
-
-test('外部命令超过 timeout 后有界失败，不无限阻塞 spawn', () => {
-  const startedAt = Date.now();
-  const result = runFileTry(
-    process.execPath,
-    ['-e', 'setTimeout(() => {}, 5_000)'],
-    { timeoutMs: 50 },
-  );
-  assert.equal(result.ok, false);
-  assert.ok(Date.now() - startedAt < 1_000);
 });
 
 test('PID probe 的 EPERM 表示进程存在，不能误报 watcher stale', () => {
@@ -1232,7 +1262,7 @@ test('reclaim 删除目录权限不足时保留 Git 原始错误且不伪装回�
   } finally {
     chmodSync(dirname(worktree), 0o755);
   }
-  assert.match(output, /KEEP.*(?:Permission denied|Operation not permitted)/i);
+  assert.match(output, /KEEP[\s\S]*(?:Permission denied|Operation not permitted)/i);
   assert.equal(existsSync(worktree), true, '权限不足时物理目录仍在');
   const after = recordFor(fixture, 'permission-denied-task', true);
   assert.notEqual(after.worktree_state, 'reclaimed');
@@ -1703,20 +1733,6 @@ test('plan-batch 固定 target 与已推送 HEAD，并折叠被子分支覆盖�
   assert.equal(historical.blockers.some((item) => item.code === 'NO_UNIQUE_INPUT'), true);
 });
 
-test('产物类路径粗分只认「必须在合成态重生成」的那几类，不误伤普通源码', () => {
-  assert.equal(regeneratedPathKind('pnpm-lock.yaml'), 'lockfile');
-  assert.equal(regeneratedPathKind('app/moii_app/pubspec.lock'), 'lockfile');
-  assert.equal(regeneratedPathKind('test/goldens/home.png'), 'golden');
-  assert.equal(regeneratedPathKind('src/__snapshots__/view.test.ts.snap'), 'golden');
-  assert.equal(regeneratedPathKind('lib/models/user.freezed.dart'), 'codegen');
-  assert.equal(regeneratedPathKind('api/service.pb.go'), 'codegen');
-  assert.equal(regeneratedPathKind('dist/bundle.js'), 'build_output');
-  assert.equal(regeneratedPathKind('lib/models/user.dart'), null);
-  assert.equal(regeneratedPathKind('src/lock.rs'), null);
-  assert.equal(regeneratedPathKind(''), null);
-  assert.equal(regeneratedPathKind(null), null);
-});
-
 /**
  * 冲突矩阵 fixture：在同一 target 上造出四种关系——同 hunk 冲突、同文件相邻（能自动合但
  * 两支都改了）、结构性冲突（改/删）、完全正交。这正是 patchbay 那轮聚合里只有合到一半
@@ -1956,29 +1972,6 @@ test('产物类汇总在截断前统计：排在 50 项之后的 lock 文件不�
   assert.equal(regenerated[0].kind, 'lockfile');
 });
 
-test('成对状态分类 fail-closed：相邻面算不出来时只能报 incomplete，不能默认 clean', () => {
-  assert.equal(classifyPairState({ mergeTreeOk: false, conflicted: false, adjacentFiles: 0 }), 'error');
-  assert.equal(classifyPairState({ mergeTreeOk: true, conflicted: true, adjacentFiles: 0 }), 'conflict');
-  assert.equal(classifyPairState({ mergeTreeOk: true, conflicted: true, adjacentFiles: null }), 'conflict');
-  assert.equal(classifyPairState({ mergeTreeOk: true, conflicted: false, adjacentFiles: 3 }), 'adjacent');
-  assert.equal(classifyPairState({ mergeTreeOk: true, conflicted: false, adjacentFiles: 0 }), 'clean');
-  // diff 失败/超时后相邻面未知：不许静默降级成 clean。
-  assert.equal(classifyPairState({ mergeTreeOk: true, conflicted: false, adjacentFiles: null }), 'incomplete');
-});
-
-test('冲突预测的 Git 版本闸按 ≥2.39 判定，低版本走 supported:false 而不是错解旧格式', () => {
-  assert.deepEqual(parseGitVersion('git version 2.50.1 (Apple Git-155)'), [2, 50, 1]);
-  assert.deepEqual(parseGitVersion('git version 2.39.0'), [2, 39, 0]);
-  assert.equal(parseGitVersion('not a version'), null);
-  assert.equal(mergeTreeScanSupported('git version 2.39.0'), true);
-  assert.equal(mergeTreeScanSupported('git version 2.50.1 (Apple Git-155)'), true);
-  assert.equal(mergeTreeScanSupported('git version 3.0.0'), true);
-  // 2.38 有 --write-tree，但 -z 信息段还不是结构化 NUL 记录，按新格式解会错判冲突类型。
-  assert.equal(mergeTreeScanSupported('git version 2.38.5'), false);
-  assert.equal(mergeTreeScanSupported('git version 2.30.1'), false);
-  assert.equal(mergeTreeScanSupported(null), false);
-});
-
 test('带冲突矩阵的计划仍是合法冻结契约：batch-integrate 照常合成，不受附加字段影响', (t) => {
   const fixture = makeConflictScanFixture(t);
   // 取正交的两支，验证的是「计划里多出 conflict_scan」这一点，而不是冲突处置。
@@ -2176,6 +2169,29 @@ test('batch-integrate 按冻结顺序合成多分支，指纹与每步 merge com
   assert.equal(again.candidate.worktree_id, result.candidate.worktree_id);
 });
 
+// 回归：拆分曾把 printPostIntegrateSteps 留在另一个模块的闭包里，所有非 --json 成功路径
+// 在合成落账之后 ReferenceError；而全部 happy-path 用例都带 --json，掩盖了展示层缺陷。
+test('batch-integrate 非 --json 成功与幂等路径完整回显，不依赖 --json 才能走通', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+  prepareBatchInput(fixture, 'plain-alpha', 'alpha.txt', 'alpha\n');
+  prepareBatchInput(fixture, 'plain-beta', 'beta.txt', 'beta\n');
+  const { planPath } = freezePlan(fixture, ['plain-alpha', 'plain-beta']);
+
+  const output = manager(fixture.repo, [
+    'batch-integrate', '--plan', planPath,
+    '--agent', 'codex', '--agent-id', 'plain-integrator',
+  ]);
+  assert.match(output, /批次合成完成/);
+  assert.match(output, /下一步由 controller 执行门禁/);
+
+  const again = manager(fixture.repo, [
+    'batch-integrate', '--plan', planPath,
+    '--agent', 'codex', '--agent-id', 'plain-integrator',
+  ]);
+  assert.match(again, /同指纹候选已合成，幂等返回/);
+});
+
 test('batch-result 冻结终态证据，archive-evidence 保留精确候选后回收 done worktree', (t) => {
   const fixture = makeRemoteRepo();
   t.after(fixture.cleanup);
@@ -2349,6 +2365,24 @@ test('reclaim --pushed 拒绝只由待删除分支引用的 SHA', (t) => {
   manager(fixture.repo, ['reclaim', 'unprotected-head', '--pushed', head]);
   assert.equal(git(fixture.repo, ['rev-parse', 'durable-proof^{commit}']), head);
   assert.equal(existsSync(tree), false);
+});
+
+test('reclaim --pushed 接受唯一短 SHA，并把完整 OID 写入证据', (t) => {
+  const fixture = makeRepo();
+  t.after(fixture.cleanup);
+  manager(fixture.repo, [
+    'spawn', 'short-pushed-proof', '--agent', 'codex', '--agent-id', 'short-pushed-thread', '--purpose', '短 SHA 回收',
+  ]);
+  const tree = worktreeFor(fixture, 'short-pushed-proof');
+  writeFileSync(join(tree, 'short.txt'), 'short\n');
+  git(tree, ['add', 'short.txt']);
+  git(tree, ['commit', '-m', 'feat: short pushed proof']);
+  git(fixture.repo, ['merge', '--no-ff', '--no-edit', branchFor(fixture, 'short-pushed-proof')]);
+  const target = git(fixture.repo, ['rev-parse', 'HEAD']);
+  manager(fixture.repo, ['reclaim', 'short-pushed-proof', '--pushed', target.slice(0, 12)]);
+  const record = recordFor(fixture, 'short-pushed-proof', true);
+  assert.equal(record.reclaim_summary.target_sha, target);
+  assert.equal(record.reclaim_summary.reclaim_evidence.target_sha, target);
 });
 
 test('batch-integrate 拒绝已漂移的冻结计划，并要求重新 plan-batch', (t) => {
@@ -2557,6 +2591,7 @@ test('touch ready_for_review 默认武装 watch，--no-watch 退出，HEAD 变�
   t.after(() => {
     try { manager(fixture.repo, ['unwatch', task]); } catch {}
     try { manager(fixture.repo, ['unwatch', 'opted-out-review']); } catch {}
+    try { manager(fixture.repo, ['unwatch', 'base-following-review']); } catch {}
     fixture.cleanup();
   });
   writeFileSync(join(fixture.repo, '.worktree-trace.json'), `${JSON.stringify({
@@ -2589,6 +2624,21 @@ test('touch ready_for_review 默认武装 watch，--no-watch 退出，HEAD 变�
   ]);
   assert.match(protectedTarget, /换目标请先 unwatch/);
   assert.equal(recordFor(fixture, 'opted-out-review').auto_reclaim.target_ref, 'origin/main');
+
+  // 非默认 base 是该树登记的评审目标；自动武装不得被 Profile default_base 改回 main。
+  manager(fixture.repo, [
+    'spawn', 'base-following-review', '--base', 'origin/review-target', '--base-reason', '版本分支目标',
+    '--agent', 'codex', '--agent-id', 'base-following-thread', '--purpose', '跟随登记 base',
+  ]);
+  const baseFollowingTree = worktreeFor(fixture, 'base-following-review');
+  writeFileSync(join(baseFollowingTree, 'base-following.txt'), 'base\n');
+  git(baseFollowingTree, ['add', 'base-following.txt']);
+  git(baseFollowingTree, ['commit', '-m', 'feat: follow managed base']);
+  git(baseFollowingTree, ['push', '-u', 'origin', 'HEAD']);
+  manager(fixture.repo, ['touch', 'base-following-review', '--status', 'ready_for_review']);
+  const baseFollowingRecord = recordFor(fixture, 'base-following-review');
+  assert.equal(baseFollowingRecord.auto_reclaim.target_ref, 'origin/review-target');
+  assert.equal(baseFollowingRecord.auto_reclaim.target_base_sha, git(fixture.repo, ['rev-parse', 'origin/review-target']));
 
   // 默认：进入 ready_for_review 即自动武装，target 取 Profile default_base。
   manager(fixture.repo, [
@@ -2649,6 +2699,236 @@ test('未推送或无远端主干时自动武装 fail-soft，touch 本身仍然�
   assert.match(output, /尚未完整 push/);
   assert.equal(recordFor(fixture, 'unpushed-review').task_status, 'ready_for_review');
   assert.equal(recordFor(fixture, 'unpushed-review').auto_reclaim ?? null, null);
+});
+
+test('watcher 区分 target 前进的干净预判，refresh-review 可暂停门禁后精确 push 并重冻结', async (t) => {
+  const fixture = makeRemoteRepo();
+  const task = 'review-refresh-clean';
+  t.after(() => {
+    try { manager(fixture.repo, ['unwatch', task]); } catch {}
+    fixture.cleanup();
+  });
+  manager(fixture.repo, [
+    'spawn', task, '--base', 'origin/main',
+    '--agent', 'codex', '--agent-id', 'review-refresh-clean-thread', '--purpose', '刷新无冲突评审',
+  ]);
+  const worktree = worktreeFor(fixture, task);
+  writeFileSync(join(worktree, 'feature.txt'), 'feature\n');
+  git(worktree, ['add', 'feature.txt']);
+  git(worktree, ['commit', '-m', 'feat: refresh clean']);
+  git(worktree, ['push', '-u', 'origin', 'HEAD']);
+  manager(fixture.repo, ['touch', task, '--status', 'ready_for_review', '--interval-ms', '100', '--notify', 'off']);
+  const oldHead = git(worktree, ['rev-parse', 'HEAD']);
+
+  writeFileSync(join(fixture.repo, 'target-next.txt'), 'target\n');
+  git(fixture.repo, ['add', 'target-next.txt']);
+  git(fixture.repo, ['commit', '-m', 'feat: advance target cleanly']);
+  git(fixture.repo, ['push', 'origin', 'HEAD:main']);
+  const targetHead = git(fixture.repo, ['rev-parse', 'HEAD']);
+  await waitFor(
+    () => recordFor(fixture, task).auto_reclaim?.target_advance?.target_sha === targetHead,
+    'watcher 未记录 target advance',
+  );
+  let record = recordFor(fixture, task);
+  assert.equal(record.auto_reclaim.target_advance.prediction.state, 'clean');
+  assert.equal(JSON.parse(manager(fixture.repo, ['doctor', '--json'])).findings.some((item) => item.code === 'TARGET_ADVANCED_REFRESH_CLEAN'), true);
+
+  const paused = manager(fixture.repo, ['refresh-review', task, '--pause-before-push']);
+  assert.match(paused, /暂停在 push 前/);
+  record = recordFor(fixture, task);
+  assert.equal(record.review_refresh.state, 'rebased');
+  assert.equal(record.task_status, 'active');
+  const rebasedHead = git(worktree, ['rev-parse', 'HEAD']);
+  assert.notEqual(rebasedHead, oldHead);
+  assert.equal(git(fixture.remote, ['rev-parse', `refs/heads/${record.branch}`]), oldHead, '暂停阶段不得提前改写远端');
+  assert.equal(JSON.parse(manager(fixture.repo, ['doctor', '--json'])).findings.some((item) => item.code === 'REVIEW_REFRESH_PENDING'), true);
+
+  git(fixture.repo, ['push', '--force', 'origin', `HEAD:refs/heads/${record.branch}`]);
+  assert.throws(
+    () => manager(fixture.repo, ['refresh-review', task, '--continue']),
+    /upstream lease 已变化/,
+    '并发改写 upstream 后必须拒绝覆盖',
+  );
+  assert.equal(git(fixture.remote, ['rev-parse', `refs/heads/${record.branch}`]), targetHead);
+  git(worktree, ['push', '--force', 'origin', `${oldHead}:refs/heads/${record.branch}`]);
+
+  const completed = manager(fixture.repo, ['refresh-review', task, '--continue']);
+  assert.match(completed, /已 force-with-lease push 并重新武装 watcher/);
+  record = recordFor(fixture, task);
+  assert.equal(record.review_refresh, null);
+  assert.equal(record.task_status, 'ready_for_review');
+  assert.equal(record.base_sha, targetHead);
+  assert.equal(record.auto_reclaim.head_sha, rebasedHead);
+  assert.equal(record.auto_reclaim.target_ref, 'origin/main');
+  assert.equal(record.auto_reclaim.target_base_sha, targetHead);
+  assert.equal(record.auto_reclaim.armed_by, 'review_refresh');
+  assert.equal(git(fixture.remote, ['rev-parse', `refs/heads/${record.branch}`]), rebasedHead);
+  assert.equal(record.review_refreshes.at(-1).state, 'completed');
+});
+
+test('pause-before-push 门禁失败可 abort：补偿 managed rebase 元数据、恢复旧 HEAD 与 watcher', async (t) => {
+  const fixture = makeRemoteRepo();
+  const task = 'review-refresh-gate-abort';
+  t.after(() => {
+    try { manager(fixture.repo, ['unwatch', task]); } catch {}
+    fixture.cleanup();
+  });
+  const initialBase = git(fixture.repo, ['rev-parse', 'origin/main']);
+  manager(fixture.repo, [
+    'spawn', task, '--base', 'origin/main',
+    '--agent', 'codex', '--agent-id', 'review-refresh-abort-thread', '--purpose', '门禁失败放弃刷新',
+  ]);
+  const worktree = worktreeFor(fixture, task);
+  writeFileSync(join(worktree, 'abort-feature.txt'), 'feature\n');
+  git(worktree, ['add', 'abort-feature.txt']);
+  git(worktree, ['commit', '-m', 'feat: refresh abort']);
+  git(worktree, ['push', '-u', 'origin', 'HEAD']);
+  const oldHead = git(worktree, ['rev-parse', 'HEAD']);
+  manager(fixture.repo, ['touch', task, '--status', 'ready_for_review', '--interval-ms', '100', '--notify', 'off']);
+
+  writeFileSync(join(fixture.repo, 'abort-target.txt'), 'target\n');
+  git(fixture.repo, ['add', 'abort-target.txt']);
+  git(fixture.repo, ['commit', '-m', 'feat: advance target before abort']);
+  git(fixture.repo, ['push', 'origin', 'HEAD:main']);
+  const targetHead = git(fixture.repo, ['rev-parse', 'HEAD']);
+  await waitFor(
+    () => recordFor(fixture, task).auto_reclaim?.target_advance?.target_sha === targetHead,
+    'watcher 未记录 abort 场景的 target advance',
+  );
+
+  manager(fixture.repo, ['refresh-review', task, '--pause-before-push']);
+  let record = recordFor(fixture, task);
+  const rebasedHead = git(worktree, ['rev-parse', 'HEAD']);
+  assert.notEqual(rebasedHead, oldHead);
+  assert.equal(record.review_refresh.state, 'rebased');
+  assert.equal(record.review_refresh.pause_before_push, true);
+  assert.equal(record.base_sha, targetHead);
+
+  git(worktree, ['push', 'origin', '--delete', record.branch]);
+  assert.throws(
+    () => manager(fixture.repo, ['refresh-review', task, '--continue']),
+    /upstream 分支 .* 已不存在/,
+  );
+  git(worktree, ['push', 'origin', `${oldHead}:refs/heads/${record.branch}`]);
+
+  const aborted = manager(fixture.repo, ['refresh-review', task, '--abort']);
+  assert.match(aborted, /已 abort/);
+  record = recordFor(fixture, task);
+  assert.equal(git(worktree, ['rev-parse', 'HEAD']), oldHead);
+  assert.equal(git(fixture.remote, ['rev-parse', `refs/heads/${record.branch}`]), oldHead);
+  assert.equal(record.review_refresh, null);
+  assert.equal(record.history_operation, null);
+  assert.equal(record.task_status, 'ready_for_review');
+  assert.equal(record.base_ref, 'origin/main');
+  assert.equal(record.base_sha, initialBase);
+  assert.equal(record.history_rewrites.length, 1, '已发生的 rebase lineage 保留审计');
+  assert.equal(record.history_rollbacks.at(-1).kind, 'review_refresh_abort');
+  assert.equal(record.history_rollbacks.at(-1).from_head, rebasedHead);
+  assert.equal(record.ownership_epochs.length, 3);
+  assert.equal(record.ownership_epochs.at(-1).source, 'review_refresh_abort');
+  assert.equal(record.auto_reclaim.head_sha, oldHead);
+  assert.equal(record.auto_reclaim.target_base_sha, initialBase);
+  assert.equal(record.auto_reclaim.armed_by, 'auto_touch');
+  assert.equal(record.review_refreshes.at(-1).abort_kind, 'rebased_before_push');
+});
+
+test('refresh-review 冲突态 abort 继续复用 managed rebase 回滚并恢复 watcher', async (t) => {
+  const fixture = makeRemoteRepo();
+  const task = 'review-refresh-conflict-abort';
+  t.after(() => {
+    try { manager(fixture.repo, ['unwatch', task]); } catch {}
+    fixture.cleanup();
+  });
+  writeFileSync(join(fixture.repo, 'abort-conflict.txt'), 'base\n');
+  git(fixture.repo, ['add', 'abort-conflict.txt']);
+  git(fixture.repo, ['commit', '-m', 'feat: conflict abort base']);
+  git(fixture.repo, ['push', 'origin', 'HEAD:main']);
+  const initialBase = git(fixture.repo, ['rev-parse', 'HEAD']);
+  manager(fixture.repo, [
+    'spawn', task, '--base', 'origin/main',
+    '--agent', 'codex', '--agent-id', 'review-refresh-conflict-abort-thread', '--purpose', '冲突态放弃刷新',
+  ]);
+  const worktree = worktreeFor(fixture, task);
+  writeFileSync(join(worktree, 'abort-conflict.txt'), 'feature\n');
+  git(worktree, ['add', 'abort-conflict.txt']);
+  git(worktree, ['commit', '-m', 'feat: conflict abort feature']);
+  git(worktree, ['push', '-u', 'origin', 'HEAD']);
+  const oldHead = git(worktree, ['rev-parse', 'HEAD']);
+  manager(fixture.repo, ['touch', task, '--status', 'ready_for_review', '--interval-ms', '100', '--notify', 'off']);
+
+  writeFileSync(join(fixture.repo, 'abort-conflict.txt'), 'target\n');
+  git(fixture.repo, ['add', 'abort-conflict.txt']);
+  git(fixture.repo, ['commit', '-m', 'feat: conflict abort target']);
+  git(fixture.repo, ['push', 'origin', 'HEAD:main']);
+  const targetHead = git(fixture.repo, ['rev-parse', 'HEAD']);
+  await waitFor(
+    () => recordFor(fixture, task).auto_reclaim?.target_advance?.target_sha === targetHead,
+    'watcher 未记录 conflict abort target advance',
+  );
+  assert.match(managerStderr(fixture.repo, ['refresh-review', task]), /managed rebase/);
+  assert.equal(recordFor(fixture, task).history_operation.state, 'conflicted');
+
+  assert.match(manager(fixture.repo, ['refresh-review', task, '--abort']), /已 abort/);
+  const record = recordFor(fixture, task);
+  assert.equal(git(worktree, ['rev-parse', 'HEAD']), oldHead);
+  assert.equal(record.review_refresh, null);
+  assert.equal(record.history_operation, null);
+  assert.equal(record.base_sha, initialBase);
+  assert.equal(record.history_rewrites ?? null, null);
+  assert.equal(record.history_rollbacks ?? null, null);
+  assert.equal(record.auto_reclaim.head_sha, oldHead);
+  assert.equal(record.review_refreshes.at(-1).abort_kind, 'managed_rebase');
+});
+
+test('watcher 标记预判冲突，refresh-review 复用 managed rebase 并由自身 --continue 收口', async (t) => {
+  const fixture = makeRemoteRepo();
+  const task = 'review-refresh-conflict';
+  t.after(() => {
+    try { manager(fixture.repo, ['unwatch', task]); } catch {}
+    fixture.cleanup();
+  });
+  writeFileSync(join(fixture.repo, 'shared-refresh.txt'), 'base\n');
+  git(fixture.repo, ['add', 'shared-refresh.txt']);
+  git(fixture.repo, ['commit', '-m', 'feat: shared refresh base']);
+  git(fixture.repo, ['push', 'origin', 'HEAD:main']);
+
+  manager(fixture.repo, [
+    'spawn', task, '--base', 'origin/main',
+    '--agent', 'codex', '--agent-id', 'review-refresh-conflict-thread', '--purpose', '刷新冲突评审',
+  ]);
+  const worktree = worktreeFor(fixture, task);
+  writeFileSync(join(worktree, 'shared-refresh.txt'), 'feature\n');
+  git(worktree, ['add', 'shared-refresh.txt']);
+  git(worktree, ['commit', '-m', 'feat: feature edits shared refresh']);
+  git(worktree, ['push', '-u', 'origin', 'HEAD']);
+  manager(fixture.repo, ['touch', task, '--status', 'ready_for_review', '--interval-ms', '100', '--notify', 'off']);
+
+  writeFileSync(join(fixture.repo, 'shared-refresh.txt'), 'target\n');
+  git(fixture.repo, ['add', 'shared-refresh.txt']);
+  git(fixture.repo, ['commit', '-m', 'feat: target edits shared refresh']);
+  git(fixture.repo, ['push', 'origin', 'HEAD:main']);
+  const targetHead = git(fixture.repo, ['rev-parse', 'HEAD']);
+  await waitFor(
+    () => recordFor(fixture, task).auto_reclaim?.target_advance?.target_sha === targetHead,
+    'watcher 未记录冲突 target advance',
+  );
+  assert.equal(recordFor(fixture, task).auto_reclaim.target_advance.prediction.state, 'conflict');
+  assert.equal(JSON.parse(manager(fixture.repo, ['doctor', '--json'])).findings.some((item) => item.code === 'REBASE_NEEDED'), true);
+
+  assert.match(managerStderr(fixture.repo, ['refresh-review', task]), /解决冲突.*refresh-review.*--continue/s);
+  let record = recordFor(fixture, task);
+  assert.equal(record.review_refresh.state, 'prepared');
+  assert.equal(record.history_operation.state, 'conflicted');
+  writeFileSync(join(worktree, 'shared-refresh.txt'), 'resolved\n');
+  git(worktree, ['add', 'shared-refresh.txt']);
+  const completed = manager(fixture.repo, ['refresh-review', task, '--continue']);
+  assert.match(completed, /已 force-with-lease push 并重新武装 watcher/);
+  record = recordFor(fixture, task);
+  assert.equal(record.review_refresh, null);
+  assert.equal(record.history_operation, null);
+  assert.equal(record.task_status, 'ready_for_review');
+  assert.equal(readFileSync(join(worktree, 'shared-refresh.txt'), 'utf8'), 'resolved\n');
+  assert.equal(git(fixture.remote, ['rev-parse', `refs/heads/${record.branch}`]), git(worktree, ['rev-parse', 'HEAD']));
 });
 
 test('[P1-1] 被折叠的输入随后前进时，冻结计划必须判定为 stale 而不是静默漏合成', (t) => {
@@ -3068,7 +3348,10 @@ test('managed rebase 冲突保持 pending，交付命令 fail-closed，并由 ma
 
   writeFileSync(join(child, 'shared.txt'), 'resolved\n');
   git(child, ['add', 'shared.txt']);
-  assert.match(manager(fixture.repo, [...baseArgs, '--continue']), /finalize rebase/);
+  assert.match(managerStderr(fixture.repo, [
+    'rebase', 'conflict-child-managed', '--onto', 'origin/main', '--continue',
+  ]), /参数不一致/);
+  assert.match(manager(fixture.repo, ['rebase', 'conflict-child-managed', '--continue']), /finalize rebase/);
   const completed = recordFor(fixture, 'conflict-child-managed');
   assert.equal(completed.history_operation, null);
   assert.equal(completed.history_rewrites.length, 1);

@@ -15,6 +15,9 @@ node "$SKILL_DIR/scripts/worktree-mgr.mjs" spawn ci-gate-hardening \
   --owner <human-owner> --purpose "加固 CI 门禁" --codegraph auto
 ```
 
+CodeGraph 在交互 TTY 中保留原生进度；Agent、CI 和其他非 TTY 调用捕获其 stdout/stderr，成功时只输出
+manager 的一行摘要，失败时只返回有界错误，避免 ANSI 进度条占满工具上下文。
+
 `agent-id` 必须来自宿主真实 session/thread/task ID，不得编造。相同会话已有其他树时，先按
 [delivery-identity.md](delivery-identity.md) 判断复用、并存或替代。
 
@@ -51,9 +54,13 @@ node "$SKILL_DIR/scripts/worktree-mgr.mjs" rebase api-contract-followup \
   --expected-head <current-full-head> --reason "吸收父分支最新契约"
 ```
 
-冲突时只人工编辑并 `git add`；继续用原命令加 `--continue`，放弃用 `rebase <selector> --abort`。
+冲突时只人工编辑并 `git add`；继续只需 `rebase <selector> --continue`，intent 中已有 onto、原始 HEAD
+和 reason。为兼容旧调用可重复提供原参数，但提供时必须一致；放弃用 `rebase <selector> --abort`。
 pending 时 `artifact/touch/handoff/submit/watch` 全部 fail-closed。成功后旧 Artifact、MR head 与 watcher
 失效，push 新 HEAD 后重新登记评审边界。
+
+已经处于 `ready_for_review` 且 watcher 发现 target 前进时，不手工串联上述步骤；使用
+`refresh-review <selector>`，完整 push/rearm 与恢复语义见 [review-lifecycle.md](review-lifecycle.md)。
 
 历史已包含新目标时只更新 attribution：
 

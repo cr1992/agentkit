@@ -81,6 +81,10 @@ node "$SKILL_DIR/scripts/worktree-mgr.mjs" doctor
 
 `doctor` 出现 error 时暂停 `spawn` / `adopt`。尤其不能绕过 Profile drift、命名 DoD、event chain 或 branch cleanup 错误。
 
+watcher 发现目标分支已从登记 base 前进、但冻结 HEAD 尚未合入时，会记录只读冲突预判：
+`TARGET_ADVANCED_REFRESH_CLEAN`、`REBASE_NEEDED` 或 `TARGET_ADVANCED_PREDICTION_UNKNOWN`。预判使用
+`merge-tree`，只用于估算操作成本，不保证逐 commit rebase 必然同样成功。
+
 ### 2. 改文件前扫描碰撞
 
 ```bash
@@ -145,6 +149,8 @@ path、branch、HEAD、base 和 task 会尽量推断。detached HEAD 或 branch 
 边界，禁止 stash 搬运。更新评审态、交接或 watcher target 前必须读
 [评审、交接与合入监听](references/review-lifecycle.md)。
 
+目标前进后的显式 `refresh-review`、wrapper 门禁、远端 CI 默认与恢复语义见上述 reference。
+
 ### 7. 审计、提交和监听合入
 
 ```bash
@@ -194,10 +200,10 @@ target、输入、顺序或验收合同变化即重新规划。首次使用、�
 ### 9. 保守回收
 
 监听绑定冻结内容进入目标 ref 的事实，不依赖 change request 载体。`ready_for_review` 默认武装 watcher；
-已推送成果只用精确 SHA 回收：
+已推送成果用 commit SHA 回收；唯一短 SHA 会先展开、登记为完整 OID：
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" reclaim <task-or-id> --pushed <exact-sha>
+node "$SKILL_DIR/scripts/worktree-mgr.mjs" reclaim <task-or-id> --pushed <sha-or-unique-prefix>
 ```
 
 `--pushed` 还必须能由候选分支以外的 local/remote branch、tag 或 archive ref 证明可达；候选 HEAD 自证
@@ -233,7 +239,7 @@ submodule 场景，必须先读 [references/reclaim-and-watch.md](references/rec
 
 - 当前树并发时只改明确归属文件，提交必须带 pathspec：`git commit -m "type(scope): message" -- <owned-files...>`。
 - 小步 commit、频繁 push；worktree 只隔离 working directory/index，仍共享 refs、objects 和 stash。
-- 禁止 feature owner/agent 自行执行 `stash`、`reset --hard`、`clean -fd`、`checkout -- .`、`restore`、`merge`、`pull`、`rebase`。历史刷新只能由 manager 的 `rebase --onto` 事务执行，冲突续跑/放弃也必须走 manager 的 `--continue` / `--abort`；批次候选的唯一额外例外是当前登记 owner 按冻结计划执行 `batch-integrate`。这些动作都会落 event；跨会话必须先 handoff，命令也拒绝改写非干净树，避免冲掉尚未提交的人工裁决。
+- feature owner 禁止自行 stash、清理、重置、合并或 rebase；历史刷新只走 manager 的 `rebase` / `refresh-review`。批次候选仅当前 owner 可执行 `batch-integrate`。跨会话先 handoff，非干净树拒绝改写。
 - manager 只拥有它创建或接管的 worktree、branch 和 trace metadata，不拥有项目凭证、SDK license、个人 token 或共享运行态。
 - 秘密放在仓库外的 credential store；不得复制、软链或写入 trace。
 - event 是真源，record 是可重建缓存；`doctor` 永远只报告，不自动修复或删除。

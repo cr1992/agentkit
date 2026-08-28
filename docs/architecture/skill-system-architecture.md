@@ -250,12 +250,18 @@ reference。reference 必须从入口说明“何时读取”，不得要求所�
    ledger 中只能记录 `controller_recheck`；没有标准 Evidence Package 不得升级成
    `independent_evidence`。
 
+迭代期的分支仍会在 review 后立即修复时，上述原生 reviewer 是合适的决策辅助，但其结论仍只属于
+`controller_recheck` / advisory。RC、合入候选等终审边界必须先冻结唯一 Artifact；需要
+`independent_evidence` 时再运行 `verify-agent-output` 全流程，不能把移动分支上的手动 review 升格。
+
 独立模式的交付不是“子 Agent 都回复了”，而是 controller 对稳定产物和证据完成最终验收。
 
 编排档位与 worker 有效权限是正交轴。controller 在选择 lightweight / full 前，先为节点声明
-`required_capabilities`，并用实时接口事实、与当前接口指纹和 worker 配置绑定的有效记录，或按需最小
-探针证明。full 只增加 ledger、恢复、barrier 和缓存，不扩大 worker 权限；未知能力不能通过升级档位
-变成可用。探针是实际 worker，必须计入数量、预算和台账。
+`required_capabilities`。为空时不调用 preflight 脚本，只记录 `not_required` 与合同已提供全部输入等
+依据；非空时用实时接口事实、与当前接口指纹和 worker 配置绑定的有效记录，或按需最小探针证明。
+相同 requirements 与 binding 的当轮有效结果可以复用；同机、本地或历史上恒过不构成豁免。full 只
+增加 ledger、恢复、barrier 和缓存，不扩大 worker 权限；未知能力不能通过升级档位变成可用。探针是
+实际 worker，必须计入数量、预算和台账。
 
 ### 5.2 manage-worktrees
 
@@ -288,15 +294,28 @@ reference。reference 必须从入口说明“何时读取”，不得要求所�
 
 集成候选只承载"这组输入合成后兼容"的验收结论，不作为 change request 载体：合入仍按可独立评审、
 合入和回退的交付单元分别进行。合入监听绑定的是"内容进目标分支"这一事实，与内容经哪个载体合入
-无关，因此在进入 `ready_for_review` 时默认武装，而不是依附于某个 change request 的创建动作。
+无关，因此在进入 `ready_for_review` 时默认武装，而不是依附于某个 change request 的创建动作；未显式
+指定 target 时优先使用该树登记的 managed base，而不是全局 Profile 默认值。watcher 只观察和记录，
+目标前进但冻结 HEAD 尚未合入时，用 `merge-tree` 只读预判刷新为 `clean / conflict / unknown`；该预判
+不是逐 commit rebase 成功保证，也不授予后台进程远端历史改写权。
 若 HEAD 前进，状态更新与旧 watcher 失效必须在同一条 event 内原子完成，并以 watcher token/state
 做 CAS；随后才能尝试重冻结。这样旧 SHA 不会在状态更新与撤防之间抢先把任务推进到不可逆终态，
 陈旧 controller 也不能覆盖并发 rearm 或已进入 `merge_detected` 的 watcher。
 
+远端历史刷新由用户显式调用一次性 `refresh-review` 才能发生。命令复用 managed rebase 事务；默认在
+成功 rebase 后以冻结 upstream SHA 执行精确 `--force-with-lease` push，回读远端并重冻结、重新武装
+watcher。没有项目 wrapper 时，push 触发的服务端 CI 就是后续门禁，不得因此拒绝 portable core 执行；
+有 wrapper 时可用 `--pause-before-push` 在本地 rebase 后暂停，wrapper 通过后以 `--continue` 推送收口。
+冲突保留 recoverable marker，人工解冲突并 `git add` 后继续。显式 `--abort` 除了放弃未完成 rebase，
+也可在 `pause-before-push` 的本地 rebase 成功态恢复 `old_head`；后者必须确认 upstream 仍是冻结旧 SHA，
+以补偿 event 恢复原 base、ownership/change-request 边界并重武装原 watcher。已发生的 rebase lineage
+不可删除，另追加 rollback 审计；远端已推新 HEAD、被他人更新或分支已删除时拒绝自动回滚。
+
 堆叠交付的历史改写必须由 manager 事务拥有：先写 `history_operation` intent 并撤防旧 watcher，再
 执行 rebase；成功后原子更新 `base_ref/base_sha/stack_parent`、闭合旧 ownership epoch、新开
 `managed_rebase` epoch 并保存 old/new commit lineage。冲突或进程中断时 record 保持 pending，Artifact、
-评审登记、交接和提交命令 fail-closed，只允许按原参数 `--continue` 或显式 `--abort` 恢复。`retarget`
+评审登记、交接和提交命令 fail-closed；`rebase <selector> --continue` 从 intent 恢复，调用方若重复提供
+原参数则只做一致性校验，也可显式 `--abort` 恢复。`retarget`
 不改 Git 历史，仅当新 base 已是 live HEAD 祖先时更新验证/MR attribution。已有 MR 的 fallback 由
 一次 `touch --status ready_for_review --mr <url> --watch-target <ref>` 同时写入状态、结构化 URL 与 watcher；
 未显式 target 时使用 record 的 managed base 推断堆叠目标，portable core 不声称已修改远端 MR。
@@ -1060,8 +1079,10 @@ orchestrate-subagents/
 
 编排先列节点所需有效能力，再按规模选档。`worker-capability-preflight.mjs` 只让 `allowed` 满足
 requirements；把策略拒绝、未证明、审批通道故障和执行故障分开处置，不把易变错误串写成判据。
-无运行时工具需求的节点可以使用空 requirements，不固定花一个 worker 探针。有效记录绑定 host、
-worker profile、接口指纹和 session / 配置摘要，过期或 binding 漂移 fail closed。
+无运行时工具需求的节点可以使用空 requirements，此时不调用 preflight 脚本，只登记 `not_required`
+及其合同依据，也不固定花一个 worker 探针。非空 requirements 的当轮 `allowed` 结果仅在 requirements
+与 binding 完全相同时可复用；同机、本地或过去恒过不构成豁免。有效记录绑定 host、worker profile、
+接口指纹和 session / 配置摘要，过期或 binding 漂移 fail closed。
 
 `review-budget.mjs` 是 reviewer 派发前的纯门禁，不派发、不修改历史。它按 Artifact digest 统计已执行
 review：默认最多一次 primary；只有 primary 不可判定、证据冲突或协议歧义时允许一次不同 lens 的
@@ -1149,14 +1170,39 @@ failure_kind / failure_ref` 保存动态重路由 lineage。首次派发使用 `
 
 ### 8.4 manage-worktrees 的脚本工具
 
-保留现有：
+保留稳定 CLI 入口，并按职责拆分 portable runtime：
 
-- `worktree-mgr.mjs`；
+- `worktree-mgr.mjs`：唯一 CLI composition root，只负责公开导出、依赖装配、命令注册与错误边界；
+- `worktree-core.mjs`：CLI/Git 通用原语、record 选择与更新、watcher heartbeat/cache、摘要及输入校验；
+- `worktree-lifecycle.mjs`：spawn/adopt/list/touch/handoff/audit/rebuild/supersede；spawn 内部按请求、root
+  认领、占位检查、物理建树和台账登记分阶段执行；
+- `worktree-history.mjs`：retarget 与 managed rebase 事务；
+- `worktree-batch-plan.mjs` / `worktree-batch-integrate.mjs` / `worktree-batch-result.mjs`：
+  分别负责冻结计划、候选合成、门禁步骤与终态 Evidence；候选合成再拆为计划解析、候选复用/新建、
+  rerere 配置、结果落账和展示阶段；
+- `worktree-review-watch.mjs` / `worktree-review-refresh.mjs`：分别负责 submit/watch/worker 与显式
+  review refresh 补偿事务，后台 watcher 不持有 refresh 权限；
+- `worktree-reclaim.mjs`：回收证明、submodule 检查、目录和 branch 两阶段清理；
+- `worktree-doctor.mjs`：只读 findings 聚合；
+- `worktree-artifact.mjs` / `worktree-learning.mjs`：稳定 Artifact/Binding envelope 与
+  Reflection/Proposal；
+- `worktree-process.mjs`：统一有界执行外部进程并规范化输出/错误；
+- `worktree-merge-preview.mjs`：只读 `merge-tree` 预判、批次冲突矩阵与展示；
 - `worktree-scan.mjs`；
 - `worktree-profile.mjs`；
 - `worktree-trace.mjs`；
 - `worktree-provider-gitlab.mjs`；
 - 对应测试。
+
+内部模块不得形成新的跨 Skill import 合同；对外仍只承诺 `worktree-mgr.mjs` / `worktree-scan.mjs`
+CLI 与 capabilities 中声明的 envelope。模块拆分必须保持 event 类型、record schema、错误语义和恢复命令
+不变，外部进程仍统一受 timeout 约束。领域模块通过 composition root 一次性注入依赖，依赖方向固定为
+`core/provider/trace -> domain -> worktree-mgr`，禁止领域模块互相静态 import 形成环；确需复用的稳定
+阶段函数由 composition root 显式装配。内部文件名和 factory 不是公共 API。
+
+`spawn` 触发可选 CodeGraph 初始化时，交互 TTY 保留原生进度；非 TTY 必须捕获 stdout/stderr、设置
+`CI/NO_COLOR/TERM=dumb` 等安静环境，成功只输出单行摘要，失败只输出有界诊断，避免 ANSI 进度污染
+Agent 或 CI 的结构化工具输出。
 
 `worktree-scan.mjs` 对仓库根规范化的 Git 来源只做 exact / ancestor 高置信度匹配；只有显式任务
 adapter 的 app 相对路径允许 suffix-relative 低置信度兜底。低置信度仍保守返回 `COLLIDE`，同时在
@@ -1177,7 +1223,8 @@ adapter 的 app 相对路径允许 suffix-relative 低置信度兜底。低置�
 | `batch-result <candidate> --state --candidate --evidence` | 把 controller 已完成的 `passed/failed/stale` 与精确候选和 Evidence digest 冻结为不可覆盖终态 |
 | `plan-batch --scan-conflicts` | 冻结前对 included 输入两两写树式干跑，输出冲突矩阵 |
 | `reclaim <candidate> --archive-evidence <sha> --reason <text>` | 创建本地 evidence archive ref，回读精确 SHA 后回收不作为 MR 载体的终态批次候选 |
-| `rebase <selector> --onto <ref> --expected-head <sha>` | manager-owned 历史事务，刷新 base、stack parent、ownership 与 lineage；支持 `--continue/--abort` 恢复 |
+| `rebase <selector> --onto <ref> --expected-head <sha>` | manager-owned 历史事务，刷新 base、stack parent、ownership 与 lineage；pending 时 selector + `--continue/--abort` 即可恢复，重复参数只校验一致性 |
+| `refresh-review <selector> [--pause-before-push]` | 显式刷新冻结评审分支：managed rebase、精确 lease push、远端回读与 watcher 重冻结；wrapper 可在 push 前暂停后 `--continue` |
 | `retarget <selector> --base <ref> --expected-head <sha>` | 不改历史地更新验证/MR target attribution，新 base 必须已是 HEAD 祖先 |
 | `touch ... --mr <url> --watch-target <ref>` | 一次 event 登记结构化 MR、评审状态、冻结 HEAD 与 watcher target |
 
@@ -1218,7 +1265,8 @@ append-only 记录；不同输入重跑拒绝覆盖。同一结论可幂等读�
 `refs/worktree-archive/evidence/<worktree-id>` 并回读精确 candidate SHA，再复用通用 dirty、stash、
 Git operation、submodule、worktree remove 和 branch cleanup 状态机。归档保存 batch fingerprint、target、
 有序输入和 result/Evidence digest，保留 `task_status=done` 与真实 outcome，不借道 `abandoned`。归档 ref
-只给当前仓库提供 GC 可达性，不宣称跨 clone/机器持久性。普通 `reclaim --pushed` 也必须找到候选自身
+只给当前仓库提供 GC 可达性，不宣称跨 clone/机器持久性。普通 `reclaim --pushed` 接受当前仓库可唯一
+解析的十六进制短 SHA，并在校验前展开为完整 object ID；它仍必须找到候选自身
 branch 之外包含目标 SHA 的 local/remote branch、tag 或 archive ref，堵住“用当前 HEAD 自证后删掉最后
 一个 ref”的证据丢失路径。
 

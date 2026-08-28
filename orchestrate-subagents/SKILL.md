@@ -59,8 +59,11 @@ controller 亲自完成：
 
 先列每个节点真正需要的 `required_capabilities`，再用
 `scripts/worker-capability-preflight.mjs check` 校验当轮事实或新鲜、binding 匹配的 Effective Worker
-Capability；只有 `allowed` 可用。输入已随合同完整提供时 requirements 可为空。探针只在比 controller
-自做或缩小节点更便宜时派发，并计入 worker 与 Token 预算。完整结构和反应矩阵见
+Capability；只有 `allowed` 可用。输入已随合同完整提供、节点不依赖额外宿主能力时 requirements 可为空，
+此时不调用 preflight 脚本，在快照或 ledger 中记录 `not_required` 及依据即可。非空 requirements 必须
+取得绑定当前 host、worker profile、接口指纹与 session / 配置摘要的 `allowed`；同机、本地或过去恒过
+都不构成豁免。相同 binding 与 requirements 的当轮有效结果可以复用，不做形式化重复调用。探针只在
+比 controller 自做或缩小节点更便宜时派发，并计入 worker 与 Token 预算。完整结构和反应矩阵见
 [编排运行时](references/orchestration-runtime.md)。
 
 ### 显式轻量档
@@ -185,6 +188,10 @@ controller 圆场。
 复核记录；`independent_evidence` 绑定唯一 Artifact 与标准 Evidence。失败、不可判定、安全阻塞、
 human gate 或错绑 Evidence 均不能通过。节点专属验收合同只能用 `contract-tool.mjs project` 从公共
 合同切出 acceptance 子集；完整门禁见 [编排运行时](references/orchestration-runtime.md)「合同投影」。
+
+分支仍在快速演进、review 后会立即修复时，可派新上下文做迭代期只读 review，但它属于 controller 的
+决策辅助：最多登记为 `controller_recheck`，不得声称已生成 `independent_evidence`。到 RC / 合入候选等
+需要一锤定音的边界时，再冻结唯一 Artifact 并运行 `verify-agent-output` 全流程。
 
 聚合状态可能掩蔽条目失败，验收必须下钻到最小可观察单元。critic 必须主动寻找反例：多数判假可作为淘汰信号，多数判真仍不是接受证明。**处方核验**：finding 的事实核验不等于处方核验——采信任何「要求改变现状」的 finding 前，controller 先从裁决真源独立推导预期态，推不出或与处方矛盾时处方不进契约、升级人裁；finding 自己的证据已解释掉大部分偏差而结论未降级的，按证伪信号处理。验收比对对象永远是真源，不是修复目标、MR 描述或契约里转抄的处方。完成但缺少 acceptance 证据时，worker 状态保持 `partial`；停止重试后只有 controller 可判 `未通过`。
 
