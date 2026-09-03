@@ -472,7 +472,9 @@ export function createCommands(deps) {
     const records = loadRecords(loaded.context.common_dir).filter((record) =>
       record.auto_reclaim &&
       !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state) &&
-      record.worktree_state !== 'reclaimed');
+      // archive 的前置条件本身已经要求 watcher 先 disarm，正常路径不会走到这里；这里保留
+      // 一道防线，避免归档记录被任何遗留/异常状态误当作待恢复 watcher。
+      record.worktree_state !== 'reclaimed' && record.worktree_state !== 'archived');
     for (const record of records) {
       const heartbeat = readWatcherHeartbeat(loaded.context.common_dir, record.worktree_id);
       const health = watcherHealth(record, heartbeat);

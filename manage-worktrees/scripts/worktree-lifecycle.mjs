@@ -66,6 +66,7 @@ export function createCommands(deps) {
     stackParentForRef,
     localBranchExists,
     autoArmReviewWatch,
+    isSettledWorktreeState,
   } = deps;
 
   function cmdSupersede(args) {
@@ -476,12 +477,20 @@ export function createCommands(deps) {
     );
   }
 
-  function buildListing(includeAll = false, loaded = loadRepositoryProfile()) {
+  /**
+   * @param {boolean} [includeAll] `--all`：额外把已回收但分支清理仍待处理的历史 record 之外的
+   *   其他已回收 record 也纳入 historical（与是否 archived 无关，是完全独立的轴）。
+   * @param {ReturnType<typeof loadRepositoryProfile>} [loaded]
+   * @param {{includeArchived?:boolean}} [options] `includeArchived`：`--archived`，只影响
+   *   worktree_state === 'archived' 的历史 record 是否出现在 historical 中；默认隐藏。
+   */
+  function buildListing(includeAll = false, loaded = loadRepositoryProfile(), options = {}) {
+    const includeArchived = Boolean(options.includeArchived);
     const worktrees = parseWorktrees(loaded.context.current_worktree);
     const records = loadRecords(loaded.context.common_dir);
     const mainPath = loaded.context.primary_worktree;
     const rows = worktrees.map((worktree) => {
-      const record = records.find((candidate) => candidate.worktree_state !== 'reclaimed' && canonicalSelectorPath(candidate.path) === worktree.path);
+      const record = records.find((candidate) => !isSettledWorktreeState(candidate.worktree_state) && canonicalSelectorPath(candidate.path) === worktree.path);
       const status = worktree.bare ? null : gitTry(['status', '--porcelain'], worktree.path);
       return {
         kind: worktree.path === mainPath ? 'MAIN' : record ? 'TRACKED' : 'UNTRACKED',
@@ -493,6 +502,8 @@ export function createCommands(deps) {
     const historical = records
       .filter((record) => {
         if (livePaths.has(canonicalSelectorPath(record.path))) return false;
+        const archived = record.worktree_state === 'archived';
+        if (archived) return includeArchived;
         return includeAll || record.worktree_state !== 'reclaimed' || hasPendingBranchCleanup(loaded, record);
       })
       .map((record) => ({ ...record, branch_cleanup_pending: hasPendingBranchCleanup(loaded, record) }));
@@ -524,18 +535,23 @@ export function createCommands(deps) {
   }
 
   function cmdList(args) {
-    rejectUnknownFlags(args.flags, ['json', 'all', 'config']);
+    rejectUnknownFlags(args.flags, ['json', 'all', 'present', 'archived', 'config']);
     const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
-    const listing = buildListing(Boolean(args.flags.get('all')), loaded);
+    const presentOnly = Boolean(args.flags.get('present'));
+    const listing = buildListing(Boolean(args.flags.get('all')), loaded, { includeArchived: Boolean(args.flags.get('archived')) });
+    // --present 只关心"目录还在不在"：既有的 TRACKED/UNTRACKED/MAIN 分类完全不变，只是把
+    // historical（目录已经不存在的 record，含 MISSING/HISTORY/BRANCH_PENDING/ARCHIVED）整体
+    // 隐藏，避免它们持续刷屏。
+    const historical = presentOnly ? [] : listing.historical;
     const summary = {
       worktrees: listing.rows.length,
       tracked: listing.rows.filter((row) => row.kind === 'TRACKED').length,
       untracked: listing.rows.filter((row) => row.kind === 'UNTRACKED').length,
-      historical: listing.historical.length,
+      historical: historical.length,
     };
     const lastReclaim = latestReclaim(listing.records);
     if (args.flags.get('json')) {
-      console.log(JSON.stringify({ profile: { source: listing.loaded.profile_source, path: listing.loaded.profile_path }, summary, last_reclaim: lastReclaim, worktrees: listing.rows, records: listing.historical }, null, 2));
+      console.log(JSON.stringify({ profile: { source: listing.loaded.profile_source, path: listing.loaded.profile_path }, summary, last_reclaim: lastReclaim, worktrees: listing.rows, records: historical }, null, 2));
       return;
     }
     log(`worktrees=${summary.worktrees} TRACKED=${summary.tracked} UNTRACKED=${summary.untracked} history=${summary.historical}`);
@@ -546,12 +562,14 @@ export function createCommands(deps) {
       console.log(`  [${row.kind}] [${row.dirty === null ? '?' : row.dirty ? 'DIRTY' : 'CLEAN'}] ${row.branch ?? '(detached)'}  ${row.path}`);
       if (row.record) console.log(`    ${row.record.agent.host}/${row.record.agent.id}  task=${row.record.task}  status=${row.record.task_status}/${row.record.worktree_state}\n    ${row.record.purpose}`);
     }
-    for (const record of listing.historical) {
-      const label = record.branch_cleanup_pending
-        ? 'BRANCH_PENDING'
-        : record.worktree_state === 'reclaimed'
-          ? 'HISTORY'
-          : 'MISSING';
+    for (const record of historical) {
+      const label = record.worktree_state === 'archived'
+        ? 'ARCHIVED'
+        : record.branch_cleanup_pending
+          ? 'BRANCH_PENDING'
+          : record.worktree_state === 'reclaimed'
+            ? 'HISTORY'
+            : 'MISSING';
       const cleanup = record.worktree_state === 'reclaimed' ? ` branch=${record.branch_cleanup?.status ?? 'legacy'}` : '';
       console.log(`  [${label}] ${record.worktree_id.slice(0, 8)} ${record.task} ${record.agent.host}/${record.agent.id}${cleanup} ${record.path}`);
     }

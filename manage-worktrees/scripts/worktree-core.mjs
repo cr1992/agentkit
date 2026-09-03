@@ -352,7 +352,7 @@ export function readJsonFileOrDie(path, label) {
 export function parseArgs(argv) {
   const flags = new Map();
   const positionals = [];
-  const booleanFlags = new Set(['json', 'all', 'recover-lock', 'no-watch', 'abort-on-conflict', 'no-rerere', 'recompose', 'scan-conflicts', 'abort', 'continue', 'pause-before-push']);
+  const booleanFlags = new Set(['json', 'all', 'present', 'archived', 'verbose', 'recover-lock', 'no-watch', 'abort-on-conflict', 'no-rerere', 'recompose', 'scan-conflicts', 'abort', 'continue', 'pause-before-push']);
   for (let index = 0; index < argv.length; index++) {
     const value = argv[index];
     if (!value.startsWith('--')) {
@@ -540,9 +540,17 @@ export function loadRecords(commonDir) {
     .map((entry) => entry.record);
 }
 
+/** worktree_state 值本身没有独立的终态集合导出，这里内联判断，避免和
+ * TERMINAL_TASK_STATES（task_status 维度）混淆。archived 与 reclaimed 一样代表
+ * "已经不需要再当作在办 worktree 处理"的记录，只是 archived 不删除任何 Git 对象。
+ * @param {string} worktreeState */
+export function isSettledWorktreeState(worktreeState) {
+  return worktreeState === 'reclaimed' || worktreeState === 'archived';
+}
+
 /** @param {Record<string, any>} record */
 export function isActiveRecord(record) {
-  return !TERMINAL_TASK_STATES.has(record.task_status) && record.worktree_state !== 'reclaimed';
+  return !TERMINAL_TASK_STATES.has(record.task_status) && !isSettledWorktreeState(record.worktree_state);
 }
 
 /**
@@ -555,7 +563,7 @@ export function isActiveRecord(record) {
  */
 export function coexistingSessionRecords(records, actor, task) {
   return records.filter((record) =>
-    record.worktree_state !== 'reclaimed' &&
+    !isSettledWorktreeState(record.worktree_state) &&
     record.task !== task &&
     record.agent?.host === actor.host &&
     record.agent?.id === actor.id);

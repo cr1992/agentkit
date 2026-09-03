@@ -34,6 +34,7 @@ export function createCommands(deps) {
     primaryProfileDriftFinding,
     buildListing,
     learningRoot,
+    isSettledWorktreeState,
   } = deps;
 
   function collectDoctorRecordMetadataFindings(loaded, listing, recordsById, record, findings) {
@@ -293,6 +294,10 @@ export function createCommands(deps) {
       if (entry.error) { findings.push({ code: 'RECORD_CACHE_INVALID', severity: 'error', path: entry.path, detail: entry.error }); continue; }
       const record = entry.record;
       try { readEventChain(loaded.context.common_dir, record.worktree_id); } catch (error) { findings.push({ code: error.code ?? 'EVENT_CHAIN_INVALID', severity: 'error', worktree_id: record.worktree_id, detail: error.message }); }
+      // archived 是"已经确认安全、停止刷屏"的历史 record：event chain / record cache 完整性仍然
+      // 检查（上面两步），但命名 DoD 与全部生命周期/元数据/watcher finding 一律不再生成——
+      // 这些都是"这条 worktree 还要不要处理"的提示，archive 已经回答过这个问题。
+      if (record.worktree_state === 'archived') continue;
       if (record.worktree_state !== 'reclaimed') {
         try {
           validateTaskNaming(record.task, loaded.profile.task_naming);
@@ -353,7 +358,7 @@ export function createCommands(deps) {
   /** @param {ReturnType<typeof buildListing>} listing @param {Record<string,any>[]} findings */
   function collectDoctorSessionFindings(listing, findings) {
     const unreclaimedBySession = new Map();
-    for (const record of listing.records.filter((candidate) => candidate.worktree_state !== 'reclaimed')) {
+    for (const record of listing.records.filter((candidate) => !isSettledWorktreeState(candidate.worktree_state))) {
       const key = `${record.agent?.host ?? 'unknown'}\u0000${record.agent?.id ?? 'unknown'}`;
       const group = unreclaimedBySession.get(key) ?? [];
       group.push(record);
@@ -427,8 +432,23 @@ export function createCommands(deps) {
     }
   }
 
+  /** WORKTREE_MISSING/BASE_OVERRIDE/EPHEMERAL_WORKTREE 三类 warning 只在目录已经不存在的
+   * record 上折叠；archived 已经被上游整段跳过、不会再产生这三类 finding，这里只需要覆盖
+   * "还没 archive、但目录已经不见了"的存量噪声。 */
+  const FOLDABLE_MISSING_CODES = new Set(['WORKTREE_MISSING', 'BASE_OVERRIDE', 'EPHEMERAL_WORKTREE']);
+
+  /** @param {ReturnType<typeof buildListing>} listing */
+  function missingWorktreeIds(listing) {
+    return new Set(
+      listing.records
+        .filter((record) => !isSettledWorktreeState(record.worktree_state))
+        .filter((record) => !listing.rows.some((row) => row.path === canonicalSelectorPath(record.path)))
+        .map((record) => record.worktree_id),
+    );
+  }
+
   function cmdDoctor(args) {
-  rejectUnknownFlags(args.flags, ['json', 'config']);
+  rejectUnknownFlags(args.flags, ['json', 'verbose', 'config']);
     const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
     const findings = [];
     const listing = buildListing(true, loaded);
@@ -445,8 +465,24 @@ export function createCommands(deps) {
     collectDoctorSupersessionFindings(listing, findings);
     collectDoctorSessionFindings(listing, findings);
     collectDoctorRuntimeFindings(loaded, findings);
-  if (args.flags.get('json')) console.log(JSON.stringify({ findings }, null, 2));
-    else { log(`doctor findings=${findings.length}`); for (const finding of findings) console.log(`  [${finding.severity}] ${finding.code} ${finding.path ?? finding.worktree_id ?? ''}`); }
+    if (args.flags.get('json')) { console.log(JSON.stringify({ findings }, null, 2)); return; }
+    // JSON 输出永远是完整 findings，机器消费不受展示折叠影响；下面的折叠只发生在给人看的文本模式。
+    log(`doctor findings=${findings.length}`);
+    if (args.flags.get('verbose')) {
+      for (const finding of findings) console.log(`  [${finding.severity}] ${finding.code} ${finding.path ?? finding.worktree_id ?? ''}`);
+      return;
+    }
+    const missingIds = missingWorktreeIds(listing);
+    const foldedIds = new Set();
+    for (const finding of findings) {
+      const foldable = finding.severity === 'warning'
+        && FOLDABLE_MISSING_CODES.has(finding.code)
+        && finding.worktree_id
+        && missingIds.has(finding.worktree_id);
+      if (foldable) { foldedIds.add(finding.worktree_id); continue; }
+      console.log(`  [${finding.severity}] ${finding.code} ${finding.path ?? finding.worktree_id ?? ''}`);
+    }
+    if (foldedIds.size > 0) console.log(`  [summary] missing_worktrees=${foldedIds.size} (run doctor --verbose to expand)`);
   }
 
 

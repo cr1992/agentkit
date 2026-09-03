@@ -13,6 +13,7 @@ import * as mergePreview from './worktree-merge-preview.mjs';
 import * as profile from './worktree-profile.mjs';
 import * as provider from './worktree-provider-gitlab.mjs';
 import * as trace from './worktree-trace.mjs';
+import { createCommands as createArchiveCommands } from './worktree-archive.mjs';
 import { createCommands as createArtifactCommands } from './worktree-artifact.mjs';
 import { createCommands as createBatchIntegrateCommands } from './worktree-batch-integrate.mjs';
 import { createCommands as createBatchPlanCommands } from './worktree-batch-plan.mjs';
@@ -105,6 +106,8 @@ assignNew(dependencies, reviewRefreshCommands, 'worktree-review-refresh');
 const reviewCommands = { ...reviewWatchCommands, ...reviewRefreshCommands };
 const lifecycleCommands = createLifecycleCommands(dependencies);
 assignNew(dependencies, lifecycleCommands, 'worktree-lifecycle');
+const archiveCommands = createArchiveCommands(dependencies);
+assignNew(dependencies, archiveCommands, 'worktree-archive');
 const batchPlanCommands = createBatchPlanCommands(dependencies);
 assignNew(dependencies, batchPlanCommands, 'worktree-batch-plan');
 const batchIntegrateCommands = createBatchIntegrateCommands(dependencies);
@@ -132,7 +135,9 @@ function usage() {
 spawn <task> --agent <host> --agent-id <id> --purpose <text> [--owner <name>] [--base <ref> --base-reason <text>] [--root <path>] [--codegraph auto|on|off]
   同会话已有未回收树时默认拒绝；独立并行加 --parallel-reason <text>；替代加 --supersedes <selector> --replacement-reason <text>
 adopt <path> --agent <host> --agent-id <id> --purpose <text> [--task <slug>] [--base <ref> --base-reason <text>]
-list [--json] [--all]
+list [--json] [--all] [--present] [--archived]
+  --present：只列目录仍然存在的 record（TRACKED/UNTRACKED/MAIN 分类不变），隐藏全部历史记录
+  --archived：历史记录里额外显示已 archive 的 record（标 [ARCHIVED]），默认隐藏
 plan-batch <selector> <selector> [...] [--target <ref>] [--scan-conflicts] [--json]
   --scan-conflicts：冻结前两两 merge-tree 干跑，输出冲突矩阵（不动工作区/index/ref，不改指纹）
 batch-integrate --plan <plan.json> | <selector> <selector> [...] --agent <host> --agent-id <id>
@@ -154,7 +159,9 @@ retarget <selector> --base <ref> --expected-head <sha> --reason <text> [--id <uu
 supersede <old-selector> --by <replacement-selector> --reason <text> [--id <uuid>] [--by-id <uuid>]
 handoff <selector> --to-agent <host> --to-agent-id <id> --note <text> [--id <uuid>]
 audit <selector> [--json] [--id <uuid>]
-doctor [--json]
+doctor [--json] [--verbose]
+  非 json 文本模式默认把目录已消失 record 的 WORKTREE_MISSING/BASE_OVERRIDE/EPHEMERAL_WORKTREE
+  三类 warning 折叠成一行 [summary]；--verbose 逐条展开；--json 输出的 findings 始终完整不折叠
 rebuild [<selector>] [--id <uuid>] [--recover-lock]
 watch <selector> [--target <remote/ref>] [--interval-ms <ms>] [--change-ref <text>] [--notify auto|off] [--id <uuid>]
 submit <selector> [--title <text>] [--description <text>] [--target <branch>] [--remote <name>] [--interval-ms <ms>] [--notify auto|off] [--id <uuid>]
@@ -163,6 +170,9 @@ unwatch <selector> [--id <uuid>]
 reclaim <selector> --pushed <sha> [--id <uuid>]
 reclaim <selector> --superseded-by <replacement-selector> [--discard <exact-old-head>] [--id <uuid>] [--replacement-id <uuid>]
 reclaim <selector> --archive-evidence <exact-candidate-head> --reason <text> [--id <uuid>]
+archive <selector> --reason <text> [--id <uuid>]
+  只接受目录已不存在、分支已删除或已合入、且未武装监听的历史 record；只追加一条 archived
+  event，不删除分支、不删除目录、不改任何 ref；默认从 list/doctor 隐藏，list --archived 可见
 binding <selector> [--id <uuid>] [--json]
 artifact <selector> [--id <uuid>] [--json]
 verify-artifact <artifact.json> [--json]
@@ -205,6 +215,7 @@ function main() {
     unwatch: reviewCommands.cmdUnwatch,
     'watch-worker': reviewCommands.cmdWatchWorker,
     reclaim: reclaimCommands.cmdReclaim,
+    archive: archiveCommands.cmdArchive,
     binding: artifactCommands.cmdBinding,
     artifact: artifactCommands.cmdArtifact,
     'verify-artifact': artifactCommands.cmdVerifyArtifact,

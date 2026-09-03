@@ -33,7 +33,7 @@ node (Join-Path $SkillDir "scripts/worktree-mgr.mjs") <command>
 node (Join-Path $SkillDir "scripts/worktree-scan.mjs") <command>
 ```
 
-下文多行示例采用 POSIX 续行语法；PowerShell 或 cmd 中保留相同 argv，改成宿主支持的一行命令或续行语法。不要把 `python3`、`bash`、`~` 展开或 `/tmp` 视为跨平台常量。
+下文多行示例采用 POSIX 续行语法；PowerShell/cmd 保留相同 argv 即可。不要把 `python3`、`bash`、`~` 展开或 `/tmp` 视为跨平台常量。
 
 不要假设目标仓库有同名脚本。仓库可以通过根目录 `.worktree-trace.json` 提供 Profile，但 portable core 不执行 Profile 中的任意 shell command。配置 schema 和项目适配边界见 [references/profile.md](references/profile.md)。
 
@@ -223,17 +223,13 @@ node "$SKILL_DIR/scripts/worktree-mgr.mjs" reclaim old-ios-validation \
   --superseded-by current-ios-validation
 ```
 
-只有人工明确裁定无需恢复时，才用精确旧 HEAD 授权无归档回收：
-
-```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" reclaim old-ios-validation \
-  --superseded-by current-ios-validation \
-  --discard <exact-old-head>
-```
+只有人工明确裁定无需恢复时，才在上述命令追加 `--discard <exact-old-head>` 授权无归档回收。
 
 禁止 `rm -rf`、`git worktree remove --force` 和 `branch -D`。任何 dirty、stash、submodule、目录、权限、
-branch-tip 或归档证据异常都返回 `KEEP`，由 `doctor` 报告。首次回收、`KEEP/BRANCH_PENDING`、替代树或
-submodule 场景，必须先读 [references/reclaim-and-watch.md](references/reclaim-and-watch.md)。
+branch-tip 或归档证据异常都返回 `KEEP`，由 `doctor` 报告。`archive` 只标记目录已消失、分支已安全的
+历史 record 为 `archived`（不动分支/目录/ref），从 list/doctor 隐藏；不同于 reclaim。首次回收、
+`KEEP/BRANCH_PENDING`、替代树、submodule 或 archive 场景，必须先读
+[references/reclaim-and-watch.md](references/reclaim-and-watch.md)。
 
 ## 并发安全底线
 

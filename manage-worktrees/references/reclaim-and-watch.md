@@ -1,6 +1,6 @@
 # Watch 与保守回收
 
-仅在准备武装、恢复或解除 watcher，以及执行 `reclaim` 或诊断 `KEEP/BRANCH_PENDING` 时读取。
+仅在准备武装、恢复或解除 watcher，以及执行 `reclaim`/`archive` 或诊断 `KEEP/BRANCH_PENDING` 时读取。
 
 ## 内容监听
 

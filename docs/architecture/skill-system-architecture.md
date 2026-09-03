@@ -1199,6 +1199,9 @@ CLI `--help`、`init` 的 `ledger` / `state_root` 回显与 state root 误传指
 - `worktree-review-watch.mjs` / `worktree-review-refresh.mjs`：分别负责 submit/watch/worker 与显式
   review refresh 补偿事务，后台 watcher 不持有 refresh 权限；
 - `worktree-reclaim.mjs`：回收证明、submodule 检查、目录和 branch 两阶段清理；
+- `worktree-archive.mjs`：`archive` 命令——只对目录已不存在、分支已删除或已合入、且未武装监听的
+  历史 record 追加 `archived` event；纯 trace 元数据操作，不写任何 Git 对象或 ref，与
+  `worktree-reclaim.mjs` 的职责边界严格分离；
 - `worktree-doctor.mjs`：只读 findings 聚合；
 - `worktree-artifact.mjs` / `worktree-learning.mjs`：稳定 Artifact/Binding envelope 与
   Reflection/Proposal；
@@ -1239,6 +1242,9 @@ adapter 的 app 相对路径允许 suffix-relative 低置信度兜底。低置�
 | `batch-result <candidate> --state --candidate --evidence` | 把 controller 已完成的 `passed/failed/stale` 与精确候选和 Evidence digest 冻结为不可覆盖终态 |
 | `plan-batch --scan-conflicts` | 冻结前对 included 输入两两写树式干跑，输出冲突矩阵 |
 | `reclaim <candidate> --archive-evidence <sha> --reason <text>` | 创建本地 evidence archive ref，回读精确 SHA 后回收不作为 MR 载体的终态批次候选 |
+| `archive <selector> --reason <text>` | 对目录已不存在、分支已删除或已合入且未武装监听的历史 record 追加 `archived` event；不删除分支/目录/ref；默认从 `list`/`doctor` 隐藏，`list --archived` 可见 |
+| `list --present` | 只输出目录仍存在的 record（既有 TRACKED/UNTRACKED/MAIN 分类不变），隐藏全部历史记录 |
+| `doctor --verbose` | 文本模式逐条展开被默认折叠的 `WORKTREE_MISSING`/`BASE_OVERRIDE`/`EPHEMERAL_WORKTREE` warning；`--json` 输出的 `findings` 始终完整、不受折叠影响 |
 | `rebase <selector> --onto <ref> --expected-head <sha>` | manager-owned 历史事务，刷新 base、stack parent、ownership 与 lineage；pending 时 selector + `--continue/--abort` 即可恢复，重复参数只校验一致性 |
 | `refresh-review <selector> [--pause-before-push]` | 显式刷新冻结评审分支：managed rebase、精确 lease push、远端回读与 watcher 重冻结；wrapper 可在 push 前暂停后 `--continue` |
 | `retarget <selector> --base <ref> --expected-head <sha>` | 不改历史地更新验证/MR target attribution，新 base 必须已是 HEAD 祖先 |
@@ -1285,6 +1291,18 @@ Git operation、submodule、worktree remove 和 branch cleanup 状态机。归�
 解析的十六进制短 SHA，并在校验前展开为完整 object ID；它仍必须找到候选自身
 branch 之外包含目标 SHA 的 local/remote branch、tag 或 archive ref，堵住“用当前 HEAD 自证后删掉最后
 一个 ref”的证据丢失路径。
+
+`archive` 与 `reclaim`/`--archive-evidence` 都叫“归档”，但语义完全不同：`reclaim` 系列以某种形式
+写 Git 对象或 ref（`git worktree remove`、`branch -D`、创建 `refs/worktree-archive/*`）；`archive`
+只追加一条 `archived` trace event，是纯粹的记录级降噪，用于处理宿主自建临时目录被回收、进程被杀等
+导致 record 目录早于 `reclaim` 消失、但分支已经安全（已删除或已合入登记 base ref / 当前 remote
+HEAD）的历史 record。`worktree_state` 因此新增终态值 `archived`，与 `reclaimed` 并列但不等价：
+`isActiveRecord`、`coexistingSessionRecords`、`buildListing` 的 historical 过滤、doctor 的
+session/lifecycle finding 生成、`resume-all` 的待恢复集合都把 `archived` 当作"已结算、不再是在办
+worktree"处理，但 `binding`/`artifact` 的 Worktree Binding envelope（§7.2）不使用这个新值——归档
+record 本来就没有可验证的存在目录，不构成合法的 Artifact/Binding 输入。`archived` record 默认从
+`list`/`doctor` 隐藏（`list --archived` 可见并标 `[ARCHIVED]`），但 event chain、`audit` 和
+record cache 完整性检查不受影响。
 
 合成期间的写动作限于候选树自身：按冻结顺序 merge、把候选重置回冻结 target 以重新合成、
 `git merge --abort`。候选树是一次性产物、内容可从计划完整复现，因此重置不损失唯一成果；但命令
