@@ -13,20 +13,32 @@ validate --input <json>
 digest --input <json>
 review-view --input <json>
 diff --left <json> --right <json>
+project --input <json> --items <id,id> [--contract-id <id>]
+capabilities
 ```
 
 `orchestration-ledger.mjs` 只记录控制面的已发生事实，不直接派发 Agent：
 
 ```text
-init --contract <json> --state-root <dir>
+init --contract <json> [--state-root <dir>] [--ledger-id <id>]
 add-node / add-edge / dispatch-record / update / attach
 batch-init / batch-record / batch-status / batch-fuse
 record-reflection / propose-improvement
 status / inspect / rebuild / doctor / capabilities
 ```
 
+`init` 回显 `ledger_id / ledger_dir / ledger / state_root / revision`。后续所有命令的 `--ledger`
+传 `ledger` 字段的值，也就是 `<state-root>/ledgers/<ledger-id>`，**不是 `--state-root` 本身**；
+把 state root 当 `--ledger` 传时 ledger 直接给出应传的绝对路径（多个 ledger 时列出候选），
+不再报 `events.ndjson` 缺失。
+
+五个脚本（`contract-tool` / `orchestration-ledger` / `worker-capability-preflight` /
+`review-budget` / `orchestration-reflection`）在 `--help`、`-h`、`help` 或无参数时打印自己的命令与
+参数清单并退出 0；清单由脚本内的 `CLI_SPEC` 表机械渲染，不另写一份。未知命令与非法输入仍保持
+各脚本原有的错误形状与非零退出。
+
 `capabilities` 同时输出独立的 `protocol_version`、`runtime_version` 和 Skill tree `content_digest`。
-当前协议版本为 `1.1.0`，ledger runtime 为 `1.6.0`；三者分别表达兼容语义、脚本实现和精确安装内容，
+当前协议版本为 `1.1.0`，ledger runtime 为 `1.7.0`；三者分别表达兼容语义、脚本实现和精确安装内容，
 不能互相替代。
 
 ## Reviewer 预算门禁
@@ -104,6 +116,11 @@ normalize --input <effective.json>
 check --requirements <requirements.json> [--effective <effective.json>]
 ```
 
+Requirements 的 `required` 只接受 `worker.` 前缀的能力键（例如 `worker.read.cwd`、
+`worker.execute_commands`）；`host.*`、`shell.*` 等其他前缀一律拒绝，报错会同时给出前缀与示例键。
+同一约定写在 [Worker Capability Requirements v1](schemas/worker-capability-requirements-v1.schema.json)
+的 `required.description` 里。
+
 没有 required capability 时无需运行 `check`，允许缺省 effective 文件；controller 在快照或 ledger
 派发记录旁写明 `not_required` 与判据。有要求但缺记录时返回 `scoped_probe_or_replan`。binding / 指纹
 不匹配或过期返回 `refresh_effective_profile`；相同 requirements 与 binding 的当轮有效 `allowed` 结果
@@ -129,12 +146,19 @@ node scripts/orchestration-reflection.mjs propose --state-root <session-state> -
 ```json
 {
   "verification": {
-    "requirement": "worker_self_check | controller_recheck | independent_evidence",
+    "requirement": "worker_self_check | controller_recheck | independent_evidence | not_applicable",
     "provider": "none | verify-agent-output",
     "artifact_scope": "node_output | integration_candidate | not_applicable"
   }
 }
 ```
+
+`not_applicable`（runtime 1.7.0 起）只给**没有实现交付物的只读评审节点**：`role` 必须是 `critic`
+或 `scout`，且 `provider: none`、`artifact_scope: not_applicable`；`worker` / `judge`（含缺省 role）
+传 `not_applicable` 一律拒绝。这类节点进入 `passed` 前仍必须先 `attach --type report` 附一份稳定
+report 作为可复核输出，只是不再被“实现节点没有稳定交付物”的实现档门禁拦住，也不需要
+`verification_ref`。它是**追加**语义：老的三档输入、老 ledger 与既有计数全部不变，
+`protocol_version` 不变。
 
 `worker_self_check` 有任一稳定输出即可通过，只能报告该最低保证。`controller_recheck` 先附稳定输出，
 再附以下 report；它必须完整覆盖当时除其他 Controller Recheck Record 外的稳定输出摘要。机器结构见
@@ -155,7 +179,8 @@ node scripts/orchestration-reflection.mjs propose --state-root <session-state> -
 标准 Artifact Ref，以及结构、摘要、合同和 Artifact 绑定都有效的 Evidence Package。进入 `passed`
 时，后两档的 `update` 输入必须用 `verification_ref` 指向被采信的 report / Evidence attachment digest；
 Evidence 必须为 `terminal_outcome: pass` 且不再要求 human gate。节点终态后不再接受 attachment。
-`status.summary.verification_assurance` 分别计数三档和 `none`，`doctor` 重新执行同一门禁。
+`status.summary.verification_assurance` 分别计数四档（含 `not_applicable`）和 `none`，
+`doctor` 重新执行同一门禁。
 
 **Token 消耗与成本核算（v1.2）**：`update` 支持记录节点消耗的 `tokens`（非负安全整数，或字段完整的 `{ input_tokens, output_tokens, total_tokens }`，其中 `total_tokens = input_tokens + output_tokens`）及非负安全整数 `duration_ms`。`status` 命令在 `summary.token_accounting` 中自动汇总总 Token 与按角色分级的消耗分布，支持计算多 Agent 分发相比全量顶配模型的 Token 节省率；`doctor` 使用同一校验器复核持久化节点。
 

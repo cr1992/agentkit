@@ -59,7 +59,7 @@ controller 亲自完成：
 
 先列每个节点真正需要的 `required_capabilities`，再用
 `scripts/worker-capability-preflight.mjs check` 校验当轮事实或新鲜、binding 匹配的 Effective Worker
-Capability；只有 `allowed` 可用。输入已随合同完整提供、节点不依赖额外宿主能力时 requirements 可为空，
+Capability；只有 `allowed` 可用。能力键一律 `worker.` 前缀（如 `worker.read.cwd`），其他前缀直接拒绝。输入已随合同完整提供、节点不依赖额外宿主能力时 requirements 可为空，
 此时不调用 preflight 脚本，在快照或 ledger 中记录 `not_required` 及依据即可。非空 requirements 必须
 取得绑定当前 host、worker profile、接口指纹与 session / 配置摘要的 `allowed`；同机、本地或过去恒过
 都不构成豁免。相同 binding 与 requirements 的当轮有效结果可以复用，不做形式化重复调用。探针只在
@@ -98,8 +98,8 @@ record-reflection / propose-improvement
 status / inspect / rebuild / doctor
 ```
 
-所有修改命令支持 `--expected-revision`。节点必须选择 `worker_self_check`、`controller_recheck` 或
-`independent_evidence`；依赖/barrier 未通过时不派发下游。批任务为每项建独立 Loop，再由 batch ledger
+所有修改命令支持 `--expected-revision`。节点必须选择 `worker_self_check`、`controller_recheck`、
+`independent_evidence`，只读 critic/scout 用 `not_applicable`；依赖/barrier 未通过时不派发下游。批任务为每项建独立 Loop，再由 batch ledger
 按稳定 failure key 熔断。完整 schema、命令与边界见 [编排运行时](references/orchestration-runtime.md)。
 Reflection 只记证据化观察，Improvement Proposal 永远保持 `proposed`，不能改变当前运行。
 
@@ -180,12 +180,20 @@ controller 圆场。
 遇到合同失真、新授权、不可逆动作、资源/结论冲突、重试耗尽或改变全局方案的新事实时，worker 必须
 升级回 controller，不得自行扩 scope。
 
+### 面向用户汇报的词表
+
+台账术语只留在仓库外状态文件，不进用户汇报；对外一律白话：critic→独立挑错评审、
+scout→前期摸底、worker→实现者、controller recheck→我方复核、independent evidence→独立验收证据、
+产物冻结→固定到某个提交 SHA、awaiting_verification→待验收、partial→做了一半。
+术语首次出现就当场解释，不要把台账原词直接抛给用户。
+
 ## 7. 验证、收敛与停止
 
 回收后依次 `normalize → deduplicate → validate → synthesize`。研究要求直达来源，代码要求文件 / 符号证据，实现要求 diff 与约定测试；关键 claim 由 controller 用外部可观察证据重验，不采信 worker 自述。
 
-三种保证不能混写：`worker_self_check` 只证明稳定输出；`controller_recheck` 绑定覆盖当前稳定输出的
-复核记录；`independent_evidence` 绑定唯一 Artifact 与标准 Evidence。失败、不可判定、安全阻塞、
+四种保证不能混写：`worker_self_check` 只证明稳定输出；`controller_recheck` 绑定覆盖当前稳定输出的
+复核记录；`independent_evidence` 绑定唯一 Artifact 与标准 Evidence；只读 critic/scout 用
+`not_applicable`，附一份 report 即收口。失败、不可判定、安全阻塞、
 human gate 或错绑 Evidence 均不能通过。节点专属验收合同只能用 `contract-tool.mjs project` 从公共
 合同切出 acceptance 子集；完整门禁见 [编排运行时](references/orchestration-runtime.md)「合同投影」。
 

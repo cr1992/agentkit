@@ -4,11 +4,23 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { allOptionNames, isHelpRequest, renderCliHelp } from './cli-help.mjs';
 import { canonicalJson, envelopeDigest, parseJsonStrict } from './contract-tool.mjs';
 import { ORCHESTRATION_PROTOCOL_VERSION } from './orchestration-metadata.mjs';
 import { skillContentDigest } from './orchestration-ledger.mjs';
 import { buildProposal, buildReflection, readAndValidateReflection, safeRelative, verifyEvidenceRefs, writeNewJson } from './reflection-support.mjs';
 
+// CLI 命令与参数的唯一真源：选项白名单、`--help` 清单和命令错误信息都从这里推导。
+const CLI_SPEC = {
+  capabilities: {},
+  record: { required: ['state-root', 'input'] },
+  propose: { required: ['state-root', 'reflection', 'input'] },
+};
+const CLI_OPTIONS = allOptionNames(CLI_SPEC);
+const CLI_NOTES = [
+  '--state-root 是仓库外的会话状态目录；--reflection 传 record 回显的相对 ref。',
+  'Improvement Proposal 生命周期固定为 proposed，不改变当前运行。',
+];
 const RUNTIME_VERSION = '1.0.0';
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 
@@ -59,13 +71,14 @@ function parseCli(argv) {
   const options = {};
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index];
-    if (!['--state-root', '--input', '--reflection'].includes(token) || argv[index + 1] === undefined || argv[index + 1].startsWith('--')) throw new OrchestrationReflectionError(`unknown or incomplete option: ${token}`);
+    if (!token.startsWith('--') || !CLI_OPTIONS.has(token.slice(2)) || argv[index + 1] === undefined || argv[index + 1].startsWith('--')) throw new OrchestrationReflectionError(`unknown or incomplete option: ${token}`);
     options[token.slice(2)] = argv[++index];
   }
   return { command, options };
 }
 
 export function main(argv = process.argv.slice(2)) {
+  if (isHelpRequest(argv)) return { help: renderCliHelp('orchestration-reflection.mjs', CLI_SPEC, CLI_NOTES) };
   const { command, options } = parseCli(argv);
   if (command === 'capabilities') return { skill: 'orchestrate-subagents', protocol_version: ORCHESTRATION_PROTOCOL_VERSION, runtime_version: RUNTIME_VERSION, contracts: { reflection_record: [1], improvement_proposal: [1] }, modes: ['lightweight', 'full-reference'], content_digest: skillContentDigest() };
   if (!options['state-root']) throw new OrchestrationReflectionError('缺少 --state-root');
@@ -77,7 +90,7 @@ export function main(argv = process.argv.slice(2)) {
     if (!options.reflection || !options.input) throw new OrchestrationReflectionError('propose requires --reflection and --input');
     try { return proposeStandalone(options['state-root'], options.reflection, readJson(options.input)); } catch (error) { throw error instanceof OrchestrationReflectionError ? error : new OrchestrationReflectionError(error.message); }
   }
-  throw new OrchestrationReflectionError('command must be capabilities, record, or propose');
+  throw new OrchestrationReflectionError(`command must be one of: ${Object.keys(CLI_SPEC).join(', ')}`);
 }
 
 function entry() {
@@ -90,7 +103,8 @@ function entry() {
 
 if (entry()) {
   try {
-    process.stdout.write(`${JSON.stringify(main(), null, 2)}\n`);
+    const result = main();
+    process.stdout.write(typeof result?.help === 'string' ? result.help : `${JSON.stringify(result, null, 2)}\n`);
   } catch (error) {
     process.stderr.write(`orchestration reflection error: ${error.message}\n`);
     process.exit(error instanceof OrchestrationReflectionError ? 2 : 3);

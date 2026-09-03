@@ -852,16 +852,21 @@ evidence_digest: "sha256:..."
 
 ~~~yaml
 verification:
-  requirement: worker_self_check | controller_recheck | independent_evidence
+  requirement: worker_self_check | controller_recheck | independent_evidence | not_applicable
   provider: none | verify-agent-output
   artifact_scope: node_output | integration_candidate | not_applicable
-verification_assurance: none | worker_self_check | controller_recheck | independent_evidence
-verification_ref: "<被采信的 report / Evidence attachment digest，最低档为 null>"
+verification_assurance: none | worker_self_check | controller_recheck | independent_evidence | not_applicable
+verification_ref: "<被采信的 report / Evidence attachment digest，最低档与 not_applicable 为 null>"
 ~~~
 
-三档不能互相冒充：稳定输出只满足 `worker_self_check`；`controller_recheck` 必须用一份覆盖当前全部
+四档不能互相冒充：稳定输出只满足 `worker_self_check`；`controller_recheck` 必须用一份覆盖当前全部
 稳定输出摘要的 Controller Recheck Record；`independent_evidence` 必须绑定唯一 Artifact Ref 和标准
-Evidence Package。后两档的 `passed` 事件绑定精确 `verification_ref`，防止同节点多份报告或 Evidence
+Evidence Package。`not_applicable`（ledger runtime 1.7.0 起）只描述**没有实现交付物的只读评审
+节点**：`role` 限 `critic` / `scout`，必须搭配 `provider: none` 与 `artifact_scope: not_applicable`，
+`worker` / `judge`（含缺省 role）传该值一律拒绝；它仍要求先 attach 一份稳定 `report` 才能 `passed`，
+只是不再套用实现档的“稳定交付物”门禁，也不产生 `verification_ref`。这一档是**追加**语义——老的
+三档输入、老 ledger 和既有计数全部不变，因此 `protocol_version` 保持 `1.1.0`，只 bump ledger
+runtime。后两档的 `passed` 事件绑定精确 `verification_ref`，防止同节点多份报告或 Evidence
 产生“任意一份 pass”歧义。orchestrator 只校验跨 Skill 公共字段、RFC 8785 摘要、合同 / Artifact
 绑定、`terminal_outcome: pass` 和 human gate；不复制 verifier 的 L0/L1 状态机，也不派生 reviewer。
 合同绑定自 v1.2 起是双路径：缺省全等（验证合同 = 公共合同本身），或绑定该节点唯一一份**投影合同**
@@ -872,8 +877,8 @@ Evidence Package。后两档的 `passed` 事件绑定精确 `verification_ref`�
 [编排运行时](../../orchestrate-subagents/references/orchestration-runtime.md)「合同投影」段。
 
 独立验收默认只放在最终冻结的高风险 integration candidate，而不是每个中间 worker commit；这是
-保证强度选择，不是由 worker 数量自动触发。`status` 和最终审计只能报告 ledger 实际记录的
-`verification_assurance`。
+保证强度选择，不是由 worker 数量自动触发。`status.summary.verification_assurance` 分别计数四档与
+`none`，最终审计只能报告 ledger 实际记录的 `verification_assurance`。
 
 ### 7.8 Embedded Verification Record
 
@@ -1136,12 +1141,13 @@ environment_fault / contract_gap / safety / undecidable`。前四类可以由最
 | `digest` | 计算合同摘要 |
 | `review-view` | 生成去除实现者叙事的 reviewer 输入 |
 | `diff` | 比较合同版本，判断是否必须重签 |
+| `project` | 从公共合同切出节点级、产物专属的 acceptance 子集 |
 
 `orchestration-ledger.mjs`：
 
 | 命令 | 作用 |
 | --- | --- |
-| `init` | 创建任务图和 revision 0 |
+| `init` | 创建任务图和 revision 0，并回显后续 `--ledger` 应传的绝对路径 |
 | `add-node` / `add-edge` | 登记节点、依赖与 barrier |
 | `dispatch-record` | 严格记录 worker identity、本地 tier、精确模型 / 强度、attempt lineage、调整动作、失败证据、配置确认状态、能力证据与最大尝试数 |
 | `update` | 记录运行中、阻塞、待验收和终态，可附 Token / duration 计量 |
@@ -1156,8 +1162,15 @@ environment_fault / contract_gap / safety / undecidable`。前四类可以由最
 | `rebuild` | 从 event 重建 snapshot |
 | `doctor` | 检查孤儿节点、revision 冲突和未闭环资源 |
 
+五个脚本（`contract-tool` / `orchestration-ledger` / `worker-capability-preflight` /
+`review-budget` / `orchestration-reflection`）统一支持 `--help`、`-h`、`help` 与无参数：清单由脚本内
+`CLI_SPEC` 表机械渲染并退出 0，未知命令与非法输入仍返回各自原有的错误形状与非零退出。ledger 的
+`--ledger` 取 `init` 回显的 `ledger` 字段（`<state-root>/ledgers/<ledger-id>`）；误传 state root 时
+直接指出应传路径，不再退化成 `events.ndjson` 缺失。
+
+
 脚本不直接派发 Agent。派发 API 属于宿主，Skill 负责把宿主回执写入 ledger。
-protocol `1.1.0` 与 runtime `1.6.0` 分别标识兼容语义和脚本实现；capabilities 另给精确 Skill
+protocol `1.1.0` 与 runtime `1.7.0` 分别标识兼容语义和脚本实现；capabilities 另给精确 Skill
 content digest。dispatch schema v2 以 `attempt_id / attempt / previous_attempt_id / adjustment_action /
 failure_kind / failure_ref` 保存动态重路由 lineage。首次派发使用 `initial`；重派必须创建新节点，前序
 节点已进入 `failed`，且 `failure_ref` 指向前序节点已附的 report / Evidence。完整档必须绑定实时
@@ -1167,6 +1180,9 @@ failure_kind / failure_ref` 保存动态重路由 lineage。首次派发使用 `
 `{ input_tokens, output_tokens, total_tokens }` 三元组且总数必须等于输入与输出之和；`duration_ms` 只接受
 非负安全整数。`status.summary.token_accounting` 汇总总量和按角色分布，`doctor` 复核持久化值；这些
 字段同时属于 `orchestration-ledger-v1.schema.json` 的公开节点 schema。
+runtime `1.7.0` 相对 `1.6.0` 只做追加：新增只读评审节点的 `not_applicable` 验收档（见 7.7.1）、
+CLI `--help`、`init` 的 `ledger` / `state_root` 回显与 state root 误传指路；老输入、老 ledger 和
+`protocol_version` 均不变。
 
 ### 8.4 manage-worktrees 的脚本工具
 

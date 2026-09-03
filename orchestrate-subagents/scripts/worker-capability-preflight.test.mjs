@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +40,18 @@ test('Effective capability descriptors and requirements fail closed', () => {
   assert.throws(() => normalizeEffective({ ...effective, surprise: true }), /unknown keys/);
   assert.throws(() => normalizeEffective({ ...effective, evidence_refs: [] }), /require at least one evidence ref/);
   assert.throws(() => normalizeRequirements({ ...requirements, required: ['model.discovery'] }), /worker\.\*/);
+});
+
+test('非 worker.* 能力键的报错必须给出前缀约定和一个示例键', () => {
+  // 实战踩点：required: ["shell.bash"] 只被告知 "must be an array of worker.* capability keys"，
+  // 而 worker.* 前缀当时在 SKILL.md / runtime 文档 / schema description 里都查不到。
+  for (const key of ['shell.bash', 'host.network', 'read.cwd']) {
+    assert.throws(() => normalizeRequirements({ ...requirements, required: [key] }), /required prefix: "worker\."/u, key);
+    assert.throws(() => normalizeRequirements({ ...requirements, required: [key] }), /worker\.read\.cwd/u, key);
+  }
+  const schema = JSON.parse(readFileSync(new URL('../references/schemas/worker-capability-requirements-v1.schema.json', import.meta.url), 'utf8'));
+  assert.match(schema.properties.required.description, /worker\. 前缀/u);
+  assert.match(schema.properties.required.items.description, /worker\.read\.cwd/u);
 });
 
 test('Only allowed outcomes satisfy required capabilities', () => {

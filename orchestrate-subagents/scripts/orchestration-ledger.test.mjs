@@ -14,6 +14,7 @@ const LEDGER_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'orchestrati
 const SELF_CHECK = { requirement: 'worker_self_check', provider: 'none', artifact_scope: 'node_output' };
 const CONTROLLER_RECHECK = { requirement: 'controller_recheck', provider: 'none', artifact_scope: 'node_output' };
 const INDEPENDENT_EVIDENCE = { requirement: 'independent_evidence', provider: 'verify-agent-output', artifact_scope: 'integration_candidate' };
+const NOT_APPLICABLE = { requirement: 'not_applicable', provider: 'none', artifact_scope: 'not_applicable' };
 const SHA_A = 'a'.repeat(40);
 const SHA_B = 'b'.repeat(40);
 
@@ -76,6 +77,24 @@ function makeFixture({ independent = false, acceptance = [{ contract_item_id: 'd
   const initialized = main(['init', '--contract', contractPath, '--state-root', join(root, 'state'), '--ledger-id', 'ledger']);
   return { root, contract, input, ...initialized, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
+
+test('init 回显后续 --ledger 应传的绝对路径，误传 state root 时直接指路而不是 ENOENT', () => {
+  const f = makeFixture();
+  try {
+    assert.equal(f.ledger, f.ledger_dir);
+    assert.equal(f.ledger, join(f.state_root, 'ledgers', 'ledger'));
+    assert.equal(main(['status', '--ledger', f.ledger]).ledger_id, 'ledger');
+
+    // 误把 state root 当 --ledger：恰有一个 ledger 时直接给出应传的路径。
+    for (const command of ['status', 'doctor', 'rebuild']) {
+      assert.throws(() => main([command, '--ledger', f.state_root]), /--ledger 需要 ledger 目录而不是 state root；请传 .*ledgers\/ledger$/u, command);
+    }
+
+    // 同一 state root 下有多个 ledger 时列出候选，而不是猜一个。
+    main(['init', '--contract', join(f.root, 'contract.json'), '--state-root', f.state_root, '--ledger-id', 'second']);
+    assert.throws(() => main(['status', '--ledger', f.state_root]), /请从 .*ledgers 下选一个：ledger, second$/u);
+  } finally { f.cleanup(); }
+});
 
 test('任务图 barrier、派发回执、稳定产物和终态由 ledger 机械约束', () => {
   const f = makeFixture();
@@ -215,7 +234,8 @@ test('capabilities --json 保持统一能力发现兼容', () => {
   const capabilities = JSON.parse(output);
   assert.equal(capabilities.skill, 'orchestrate-subagents');
   assert.equal(capabilities.protocol_version, '1.1.0');
-  assert.equal(capabilities.runtime_version, '1.6.0');
+  assert.equal(capabilities.runtime_version, '1.7.0');
+  assert.ok(capabilities.features.includes('read-only-node-not-applicable-verification'));
   assert.ok(capabilities.features.includes('worker-capability-preflight'));
   assert.ok(capabilities.features.includes('lightweight-reflection'));
   assert.ok(capabilities.features.includes('evidence-bound-dynamic-reroute'));
@@ -237,6 +257,84 @@ test('新节点必须显式声明验收档位，独立 Evidence 还必须在合�
   try {
     assert.throws(() => main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('missing.json', { node_id: 'missing', objective: 'missing policy' })]), /必须显式声明/);
     assert.throws(() => main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('undeclared.json', node({ node_id: 'undeclared', objective: 'undeclared provider' }, INDEPENDENT_EVIDENCE))]), /未声明 verify-agent-output/);
+  } finally { f.cleanup(); }
+});
+
+test('只读 critic/scout 节点用 not_applicable 收口，worker/judge 仍被拒绝', () => {
+  const f = makeFixture();
+  try {
+    // 实战踩点：critic 只读节点没有实现交付物，只能拿 worker_self_check 占位，
+    // 随后 update --state passed 又被"实现节点没有稳定交付物"拒掉。
+    for (const role of ['worker', 'judge']) {
+      assert.throws(
+        () => main(['add-node', '--ledger', f.ledger_dir, '--input', f.input(`${role}-na.json`, node({ node_id: `${role}-na`, role, objective: '实现节点不能免验' }, NOT_APPLICABLE))]),
+        /not_applicable 只允许只读评审节点/u,
+        role,
+      );
+    }
+    // 默认 role（worker）同样被拒。
+    assert.throws(() => main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('default-na.json', { node_id: 'default-na', objective: '默认角色', verification: NOT_APPLICABLE })]), /not_applicable 只允许只读评审节点/u);
+    // artifact_scope 必须同步声明 not_applicable。
+    assert.throws(() => main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('scope-na.json', node({ node_id: 'scope-na', role: 'critic', objective: '范围不一致' }, { ...NOT_APPLICABLE, artifact_scope: 'node_output' }))]), /artifact_scope 必须是 not_applicable/u);
+
+    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('critic.json', node({ node_id: 'critic', role: 'critic', objective: '独立挑错评审' }, NOT_APPLICABLE))]);
+    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('scout.json', node({ node_id: 'scout', role: 'scout', objective: '前期摸底' }, NOT_APPLICABLE))]);
+
+    // 仍要求一份稳定 report 作为可复核输出；worktree 之类的环境附件不算。
+    assert.throws(() => main(['update', '--ledger', f.ledger_dir, '--node', 'critic', '--input', f.input('critic-early.json', { state: 'passed' })]), /critic\/scout 节点需先 attach report/u);
+    main(['attach', '--ledger', f.ledger_dir, '--node', 'critic', '--type', 'worktree', '--input', f.input('critic-wt.json', { worktree_id: 'wt-critic' })]);
+    assert.throws(() => main(['update', '--ledger', f.ledger_dir, '--node', 'critic', '--input', f.input('critic-wt-pass.json', { state: 'passed' })]), /critic\/scout 节点需先 attach report/u);
+
+    main(['attach', '--ledger', f.ledger_dir, '--node', 'critic', '--type', 'report', '--input', f.input('critic-report.json', { report_type: 'critic_findings', findings: ['处方与裁决真源矛盾'] })]);
+    const passed = main(['update', '--ledger', f.ledger_dir, '--node', 'critic', '--input', f.input('critic-pass.json', { state: 'passed' })]);
+    assert.equal(passed.nodes.critic.verification_assurance, 'not_applicable');
+    assert.equal(passed.nodes.critic.verification_ref, null);
+
+    main(['attach', '--ledger', f.ledger_dir, '--node', 'scout', '--type', 'report', '--input', f.input('scout-report.json', { report_type: 'scout_inventory', paths: ['a', 'b'] })]);
+    main(['update', '--ledger', f.ledger_dir, '--node', 'scout', '--input', f.input('scout-pass.json', { state: 'passed' })]);
+
+    const summary = main(['status', '--ledger', f.ledger_dir]).summary;
+    assert.equal(summary.verification_assurance.not_applicable, 2);
+    assert.equal(summary.verification_assurance.worker_self_check, 0);
+    assert.equal(summary.completion_ready, true);
+    assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
+  } finally { f.cleanup(); }
+});
+
+test('not_applicable 是追加语义：老的三档输入与 assurance 计数全部照旧', () => {
+  const f = makeFixture();
+  try {
+    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('legacy.json', node({ node_id: 'legacy', objective: '老输入不受影响' }))]);
+    main(['attach', '--ledger', f.ledger_dir, '--node', 'legacy', '--type', 'artifact', '--input', f.input('artifact.json', artifactRef())]);
+    main(['update', '--ledger', f.ledger_dir, '--node', 'legacy', '--input', f.input('legacy-pass.json', { state: 'passed' })]);
+    const summary = main(['status', '--ledger', f.ledger_dir]).summary;
+    assert.equal(summary.verification_assurance.worker_self_check, 1);
+    assert.equal(summary.verification_assurance.not_applicable, 0);
+
+    // 实现节点缺稳定交付物的老报错不变。
+    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('bare.json', node({ node_id: 'bare', objective: '没有交付物' }))]);
+    assert.throws(() => main(['update', '--ledger', f.ledger_dir, '--node', 'bare', '--input', f.input('bare-pass.json', { state: 'passed' })]), /实现节点没有稳定交付物/u);
+
+    // doctor 用同一门禁复核：把已 passed 的 critic 节点 report 从 stable_outputs 抹掉即现形。
+    assert.equal(main(['doctor', '--ledger', f.ledger_dir]).findings.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('doctor 对 passed 的 not_applicable 节点复跑同一门禁', () => {
+  const f = makeFixture();
+  try {
+    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('critic.json', node({ node_id: 'critic', role: 'critic', objective: '独立挑错评审' }, NOT_APPLICABLE))]);
+    main(['attach', '--ledger', f.ledger_dir, '--node', 'critic', '--type', 'report', '--input', f.input('report.json', { report_type: 'critic_findings', findings: ['x'] })]);
+    main(['update', '--ledger', f.ledger_dir, '--node', 'critic', '--input', f.input('pass.json', { state: 'passed' })]);
+    assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
+
+    // 把 report 附件内容改掉：attachment 摘要与门禁同时现形。
+    const snapshot = main(['status', '--ledger', f.ledger_dir]);
+    const ref = snapshot.nodes.critic.stable_outputs.find((item) => item.type === 'report').ref;
+    writeFileSync(join(f.ledger_dir, ref), JSON.stringify({ report_type: 'critic_findings', findings: ['被改写'] }));
+    const doctored = main(['doctor', '--ledger', f.ledger_dir]);
+    assert.equal(doctored.healthy, false);
+    assert.ok(doctored.findings.some((item) => item.startsWith('attachment_invalid:')), JSON.stringify(doctored.findings));
   } finally { f.cleanup(); }
 });
 

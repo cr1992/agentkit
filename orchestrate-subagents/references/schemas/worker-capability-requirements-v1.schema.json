@@ -12,9 +12,10 @@
     "capability_fingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "binding": { "type": "string", "pattern": "^(session:[A-Za-z0-9._-]{1,128}|config:sha256:[0-9a-f]{64})$" },
     "required": {
+      "description": "节点真正需要的 worker 能力键。每一项必须以 worker. 前缀开头（例如 worker.read.cwd、worker.execute_commands）；host.*、shell.* 等其他前缀一律拒绝。空数组表示 not_required，此时无需提供 Effective Worker Capability。",
       "type": "array",
       "uniqueItems": true,
-      "items": { "type": "string", "pattern": "^worker\\.[a-z][a-z0-9_.-]{0,63}$" }
+      "items": { "type": "string", "description": "worker. 前缀 + 小写点分能力名，例如 worker.read.cwd", "pattern": "^worker\\.[a-z][a-z0-9_.-]{0,63}$" }
     }
   }
 }

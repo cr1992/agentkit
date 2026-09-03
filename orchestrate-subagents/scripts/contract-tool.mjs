@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isHelpRequest, renderCliHelp } from './cli-help.mjs';
 
 export class ContractError extends Error {}
 
@@ -132,9 +133,21 @@ export function contractDiff(left, right) {
   return { changed_fields: changed, requires_resign: resign, old_digest: left.contract_digest ?? null, new_digest: right.contract_digest ?? null };
 }
 
+// CLI 命令与参数的唯一真源：`--help` 清单和未知命令错误信息都从这里推导。
+const CLI_SPEC = {
+  normalize: { required: ['input'] },
+  validate: { required: ['input'] },
+  digest: { required: ['input'] },
+  'review-view': { required: ['input'] },
+  diff: { required: ['left', 'right'] },
+  project: { required: ['input', 'items'], optional: ['contract-id'] },
+  capabilities: {},
+};
+const CLI_NOTES = ['--items 是逗号分隔的 acceptance contract_item_id 列表，投影合同只能收窄这些条目。'];
 function parseCli(argv) { const command = argv[0]; const options = {}; for (let i = 1; i < argv.length; i += 2) { if (!argv[i]?.startsWith('--') || argv[i + 1] === undefined) throw new ContractError('参数必须是 --name value'); options[argv[i].slice(2)] = argv[i + 1]; } return { command, options }; }
 function read(path) { return parseJsonStrict(readFileSync(resolve(path), 'utf8')); }
 export function main(argv = process.argv.slice(2)) {
+  if (isHelpRequest(argv)) return { help: renderCliHelp('contract-tool.mjs', CLI_SPEC, CLI_NOTES) };
   const { command, options } = parseCli(argv);
   if (command === 'normalize') return normalizeContract(read(options.input));
   if (command === 'validate') { const value = validateContract(read(options.input)); return { valid: true, contract_id: value.contract_id, contract_digest: value.contract_digest }; }
@@ -143,8 +156,8 @@ export function main(argv = process.argv.slice(2)) {
   if (command === 'diff') return contractDiff(read(options.left), read(options.right));
   if (command === 'project') return projectContract(read(options.input), String(options.items ?? '').split(',').map((item) => item.trim()).filter(Boolean), { contractId: options['contract-id'] ?? null });
   if (command === 'capabilities') return { tool: 'contract-tool', runtime_version: '1.1.0', task_contract_versions: [1], features: ['strict-json', 'canonical-digest', 'review-view', 'resign-diff', 'contract-projection'] };
-  throw new ContractError('命令必须是 normalize/validate/digest/review-view/diff/project/capabilities');
+  throw new ContractError(`命令必须是 ${Object.keys(CLI_SPEC).join('/')}`);
 }
 
 function isEntry() { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return pathToFileURL(resolve(process.argv[1] ?? '')).href === import.meta.url; } }
-if (isEntry()) { try { process.stdout.write(`${JSON.stringify(main(), null, 2)}\n`); } catch (error) { process.stderr.write(`${JSON.stringify({ error: 'invalid_contract', message: error.message })}\n`); process.exit(2); } }
+if (isEntry()) { try { const result = main(); process.stdout.write(typeof result?.help === 'string' ? result.help : `${JSON.stringify(result, null, 2)}\n`); } catch (error) { process.stderr.write(`${JSON.stringify({ error: 'invalid_contract', message: error.message })}\n`); process.exit(2); } }

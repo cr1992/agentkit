@@ -5,8 +5,19 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { allOptionNames, isHelpRequest, renderCliHelp } from './cli-help.mjs';
 import { parseJsonStrict } from './contract-tool.mjs';
 
+// CLI 命令与参数的唯一真源：选项白名单、`--help` 清单和命令错误信息都从这里推导。
+const CLI_SPEC = {
+  capabilities: {},
+  evaluate: { required: ['policy', 'history', 'request'] },
+};
+const CLI_OPTIONS = allOptionNames(CLI_SPEC);
+const CLI_NOTES = [
+  '--history 是 JSON 数组：没有历史 review 传 []，已有 review 传 [{review_id, artifact_digest, lens, kind, outcome}, ...]。',
+  'allowed:false 时退出码为 2，按 next_action 缩小输入、复用现有 review 或升级给人。',
+];
 const DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const REVIEW_KINDS = new Set(['primary', 'escalation']);
 const REVIEW_OUTCOMES = new Set(['pass', 'fail', 'undecidable', 'blocked_safety']);
@@ -50,7 +61,7 @@ export function validateReviewPolicy(policy) {
 
 /** @param {unknown} value */
 function validateHistory(value) {
-  if (!Array.isArray(value)) throw new ReviewBudgetError('history 必须是数组');
+  if (!Array.isArray(value)) throw new ReviewBudgetError('history 必须是数组：没有历史 review 传 []，已有 review 传 [{review_id, artifact_digest, lens, kind, outcome}, ...]');
   const ids = new Set();
   return value.map((item) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) throw new ReviewBudgetError('history item 无效');
@@ -112,18 +123,18 @@ export function evaluateReviewBudget(rawPolicy, rawHistory, rawRequest) {
 }
 
 function usage() {
-  return '用法: review-budget.mjs capabilities | evaluate --policy <json> --history <json> --request <json>\n';
+  return renderCliHelp('review-budget.mjs', CLI_SPEC, CLI_NOTES);
 }
 
 /** @param {string[]} argv */
 export function main(argv = process.argv.slice(2)) {
-  if (['--help', '-h', 'help'].includes(argv[0] ?? '')) return { help: usage() };
+  if (isHelpRequest(argv)) return { help: usage() };
   if (argv[0] === 'capabilities') return { runtime: 'review-budget', runtime_version: '1.0.0', contracts: { review_policy: [1], review_budget_request: [1] }, features: ['per-artifact-review-limit', 'distinct-lens-gate', 'smoke-first-gate', 'review-input-token-limit', 'safety-stop'] };
-  if (argv[0] !== 'evaluate') throw new ReviewBudgetError(usage().trim());
+  if (argv[0] !== 'evaluate') throw new ReviewBudgetError(`命令必须是 ${Object.keys(CLI_SPEC).join('/')}；参数清单见 --help`);
   const options = {};
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index];
-    if (!['--policy', '--history', '--request'].includes(token) || !argv[index + 1] || argv[index + 1].startsWith('--')) throw new ReviewBudgetError(usage().trim());
+    if (!token.startsWith('--') || !CLI_OPTIONS.has(token.slice(2)) || !argv[index + 1] || argv[index + 1].startsWith('--')) throw new ReviewBudgetError(`选项无效或缺值: ${token}；参数清单见 --help`);
     options[token.slice(2)] = argv[++index];
   }
   for (const key of ['policy', 'history', 'request']) if (!options[key]) throw new ReviewBudgetError(`缺少 --${key}`);

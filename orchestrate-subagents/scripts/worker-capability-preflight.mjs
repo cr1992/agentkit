@@ -5,8 +5,20 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseJsonStrict } from './contract-tool.mjs';
+import { allOptionNames, isHelpRequest, renderCliHelp } from './cli-help.mjs';
 import { ORCHESTRATION_PROTOCOL_VERSION } from './orchestration-metadata.mjs';
 
+// CLI 命令与参数的唯一真源：选项白名单、`--help` 清单和命令错误信息都从这里推导。
+const CLI_SPEC = {
+  capabilities: {},
+  normalize: { required: ['input'] },
+  check: { required: ['requirements'], optional: ['effective'] },
+};
+const CLI_OPTIONS = allOptionNames(CLI_SPEC);
+const CLI_NOTES = [
+  'requirements.required 里的能力键必须以 worker. 开头，例如 worker.read.cwd；其他前缀一律拒绝。',
+  'required 为空数组时无需 --effective，check 直接返回 not_required 形态的 ready。',
+];
 const SCHEMA_VERSION = 1;
 const RUNTIME_VERSION = '1.0.0';
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
@@ -62,7 +74,7 @@ function metadata(value, label) {
 
 function capabilityList(value, label) {
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || !CAPABILITY_PATTERN.test(item))) {
-    throw new WorkerCapabilityError(`${label} must be an array of worker.* capability keys`);
+    throw new WorkerCapabilityError(`${label} must be an array of worker.* capability keys (required prefix: "worker.", e.g. "worker.read.cwd"); other prefixes are rejected`);
   }
   return [...new Set(value)].sort();
 }
@@ -173,12 +185,13 @@ function readJson(path) {
 }
 
 export function main(argv = process.argv.slice(2)) {
+  if (isHelpRequest(argv)) return { help: renderCliHelp('worker-capability-preflight.mjs', CLI_SPEC, CLI_NOTES) };
   const command = argv[0];
   if (command === 'capabilities') return { protocol_version: ORCHESTRATION_PROTOCOL_VERSION, runtime_version: RUNTIME_VERSION, schemas: { effective_worker_capability: [1], worker_capability_requirements: [1] }, outcomes: [...OUTCOMES] };
   const options = {};
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index];
-    if (!['--input', '--requirements', '--effective'].includes(token) || argv[index + 1] === undefined || argv[index + 1].startsWith('--')) throw new WorkerCapabilityError(`unknown or incomplete option: ${token}`);
+    if (!token.startsWith('--') || !CLI_OPTIONS.has(token.slice(2)) || argv[index + 1] === undefined || argv[index + 1].startsWith('--')) throw new WorkerCapabilityError(`unknown or incomplete option: ${token}`);
     options[token.slice(2)] = argv[++index];
   }
   if (command === 'normalize') {
@@ -189,7 +202,7 @@ export function main(argv = process.argv.slice(2)) {
     if (!options.requirements) throw new WorkerCapabilityError('check requires --requirements');
     return checkCapabilities(options.effective ? readJson(options.effective) : null, readJson(options.requirements));
   }
-  throw new WorkerCapabilityError('command must be capabilities, normalize, or check');
+  throw new WorkerCapabilityError(`command must be one of: ${Object.keys(CLI_SPEC).join(', ')}`);
 }
 
 function entry() {
@@ -202,7 +215,8 @@ function entry() {
 
 if (entry()) {
   try {
-    process.stdout.write(`${JSON.stringify(main(), null, 2)}\n`);
+    const result = main();
+    process.stdout.write(typeof result?.help === 'string' ? result.help : `${JSON.stringify(result, null, 2)}\n`);
   } catch (error) {
     process.stderr.write(`worker capability preflight error: ${error.message}\n`);
     process.exit(error instanceof WorkerCapabilityError ? 2 : 3);

@@ -27,7 +27,7 @@ environment:
 dependencies: 前置节点与下游消费者
 required_capabilities: []
 verification:
-  requirement: worker_self_check | controller_recheck | independent_evidence
+  requirement: worker_self_check | controller_recheck | independent_evidence | not_applicable
   provider: none | verify-agent-output
   artifact_scope: node_output | integration_candidate | not_applicable
 extensions:
@@ -71,6 +71,8 @@ Contract，再把实际宿主派发回执写入 `dispatch-record`。schema 和 r
 - `inputs` 中的已知事实必须由 controller 亲自核实并能指出证据；单一来源解析、模式匹配或记忆值属于
   允许假设，并注明 worker 使用前必须验证。
 - `exclude` 禁止未申报行动，不禁止带理由上报越界方案；外部可变状态在动作前重查。
+- `not_applicable` 只给 `role: critic | scout` 的只读评审节点，必须搭配 `provider: none` 与
+  `artifact_scope: not_applicable`；这类节点验收时附一份 report 即可，不冒充实现交付。
 - `independent_evidence` 只使用 `verify-agent-output`，且 provider 与 Skill identity 必须在公共合同
   freeze 前声明。通常只对最终冻结的高风险候选启用，不给普通 worker 预先升级。
 - 修复类 acceptance 写从裁决真源推导的预期态，不把 reviewer 处方或修复手段本身当标准。

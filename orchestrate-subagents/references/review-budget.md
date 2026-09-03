@@ -38,7 +38,28 @@ worker 也不做 1:1 reviewer 配对，优先验证最终集成候选。
 
 ## 派发前机械门禁
 
-把已完成 review 的最小历史与新请求写成 JSON，然后执行：
+`--history` 是一个 JSON **数组**，不是带 `reviews` 字段的对象。还没有任何 review 时传空数组：
+
+```json
+[]
+```
+
+已有一次完成的 review 时，每项只需要门禁用到的五个字段：
+
+```json
+[
+  {
+    "review_id": "review-1",
+    "artifact_digest": "sha256:...",
+    "lens": "protocol_semantics",
+    "kind": "primary",
+    "outcome": "undecidable"
+  }
+]
+```
+
+`kind` 取 `primary | escalation`，`outcome` 取 `pass | fail | undecidable | blocked_safety`；
+`review_id` 在同一份历史内唯一。把这份历史与新请求写成 JSON，然后执行：
 
 ```text
 node <skill-dir>/scripts/review-budget.mjs evaluate \

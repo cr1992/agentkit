@@ -77,13 +77,13 @@
           "type": "object",
           "required": ["requirement", "provider", "artifact_scope"],
           "properties": {
-            "requirement": { "enum": ["worker_self_check", "controller_recheck", "independent_evidence"] },
+            "requirement": { "description": "not_applicable 只允许 role 为 critic / scout 的只读评审节点，且必须搭配 provider none 与 artifact_scope not_applicable。", "enum": ["worker_self_check", "controller_recheck", "independent_evidence", "not_applicable"] },
             "provider": { "enum": ["none", "verify-agent-output"] },
             "artifact_scope": { "enum": ["node_output", "integration_candidate", "not_applicable"] }
           },
           "additionalProperties": false
         },
-        "verification_assurance": { "enum": ["none", "worker_self_check", "controller_recheck", "independent_evidence"] },
+        "verification_assurance": { "enum": ["none", "worker_self_check", "controller_recheck", "independent_evidence", "not_applicable"] },
         "verification_ref": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
         "tokens": {
           "oneOf": [
