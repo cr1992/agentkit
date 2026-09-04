@@ -1,9 +1,9 @@
-# Awesome Agent Skills
+# agentkit
 
 [中文](./README.md) · **English**
 
-A practical collection of reusable skills for agentic software engineering—from task orchestration and Git worktree
-isolation to one-shot independent verification and explicit bounded loops.
+A zero-dependency Node.js CLI with four thin skills for agentic software engineering—from task orchestration and Git
+worktree isolation to one-shot independent verification and explicit bounded loops.
 
 ![On-demand selection and composition of agent-engineering skills](./docs/architecture/skill-collaboration.svg)
 
@@ -30,20 +30,43 @@ orchestration and worktrees only when the task actually needs multiple nodes or 
 
 ## Installation
 
-Install all skills:
+Install the runtime first (Node.js 22 or newer is required):
 
 ```bash
-npx skills add https://github.com/cr1992/awesome-agent-skills.git -g --agent '*'
+npm install -g @cr1992/agentkit
+agentkit doctor
+```
+
+Then install all skills:
+
+```bash
+npx skills add https://github.com/cr1992/agentkit.git -g --agent '*'
 ```
 
 Install a single skill:
 
 ```bash
-npx skills add https://github.com/cr1992/awesome-agent-skills.git -g --agent '*' --skill manage-worktrees
+npx skills add https://github.com/cr1992/agentkit.git -g --agent '*' --skill manage-worktrees
 ```
 
 Replace `manage-worktrees` with any other skill name in the table as needed. After an install or update, start a new
 agent task. Some hosts cache skill discovery or contents and may require a restart.
+
+## CLI
+
+The skills only define triggers and invariants. Their deterministic runtime is provided by `agentkit`. Existing 1.x
+script entry points remain as compatibility forwarders; new integrations should call the CLI directly:
+
+```bash
+agentkit capabilities --json
+agentkit worktree --help
+agentkit contract --help
+agentkit orchestrate --help
+agentkit host --help
+agentkit verify --help
+agentkit loop --help
+agentkit docs
+```
 
 ## Usage
 
@@ -63,20 +86,18 @@ exists.
 ## Requirements
 
 - Git.
-- Node.js 18 or newer for the deterministic runtimes and helper scripts in all four skills.
+- Node.js 22 or newer.
+- A globally available `agentkit` command; run `agentkit doctor` to validate the package version, entry points, and runtime manifest.
 - A host with task or sub-agent isolation primitives when actual multi-agent execution is required.
 
 ## Local validation
 
 ```bash
-node --test \
-  manage-worktrees/scripts/*.test.mjs \
-  orchestrate-subagents/scripts/*.test.mjs \
-  verify-agent-output/scripts/*.test.mjs \
-  run-agent-verify-loop/scripts/*.test.mjs
+node tools/validate-skills.mjs
+node --test tests/*.test.mjs domains/*/*.test.mjs scripts/*.test.mjs
 ```
 
 ## Repository scope
 
-This repository contains the four distributable Skill directories and repository-level documentation. It does not
-include unrelated Skills, credentials, or organization-specific configuration.
+This repository is the public distribution source for the `@cr1992/agentkit` npm package and the four skills. It does
+not include unrelated skills, credentials, or organization-specific configuration.

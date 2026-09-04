@@ -1,8 +1,9 @@
-# Awesome Agent Skills
+# agentkit
 
 **中文** · [English](./README.en.md)
 
-一组面向 Agent 软件工程的可复用 Skill：从任务编排、Git worktree 隔离，到一次性独立验收和显式有界循环。
+一个零依赖 Node.js CLI，加四个面向 Agent 软件工程的薄壳 Skill：从任务编排、Git worktree 隔离，
+到一次性独立验收和显式有界循环。
 
 ![Agent 工程 Skill 的按需选择与组合](./docs/architecture/skill-collaboration.svg)
 
@@ -27,20 +28,43 @@
 
 ## 安装
 
-安装全部 Skill：
+先安装运行时（需要 Node.js 22 或更高版本）：
 
 ```bash
-npx skills add https://github.com/cr1992/awesome-agent-skills.git -g --agent '*'
+npm install -g @cr1992/agentkit
+agentkit doctor
+```
+
+再安装全部 Skill：
+
+```bash
+npx skills add https://github.com/cr1992/agentkit.git -g --agent '*'
 ```
 
 只安装一个 Skill：
 
 ```bash
-npx skills add https://github.com/cr1992/awesome-agent-skills.git -g --agent '*' --skill manage-worktrees
+npx skills add https://github.com/cr1992/agentkit.git -g --agent '*' --skill manage-worktrees
 ```
 
 将 `manage-worktrees` 替换为表中的其他 Skill 名称即可。安装或更新后，建议新建 Agent 任务；部分宿主
 会缓存 Skill 清单或正文，需要重启后才会加载新版本。
+
+## CLI
+
+四个 Skill 只负责触发条件和不变量，确定性运行时统一由 `agentkit` 提供。现有 1.x 脚本入口仍保留
+兼容转发；新调用建议直接使用下列命令：
+
+```bash
+agentkit capabilities --json
+agentkit worktree --help
+agentkit contract --help
+agentkit orchestrate --help
+agentkit host --help
+agentkit verify --help
+agentkit loop --help
+agentkit docs
+```
 
 ## 使用方式
 
@@ -59,19 +83,17 @@ Skill 会根据当前宿主可用的 Agent、终端、Git 和任务控制能力�
 ## 环境要求
 
 - Git。
-- Node.js 18 或更高版本（四个 Skill 的确定性 runtime 与辅助脚本）。
+- Node.js 22 或更高版本。
+- 全局可用的 `agentkit` 命令；运行 `agentkit doctor` 可检查包版本、入口与运行时清单。
 - 若要实际派生和隔离多个 Agent，上层宿主需要提供相应的任务或子 Agent 能力。
 
 ## 本地验证
 
 ```bash
-node --test \
-  manage-worktrees/scripts/*.test.mjs \
-  orchestrate-subagents/scripts/*.test.mjs \
-  verify-agent-output/scripts/*.test.mjs \
-  run-agent-verify-loop/scripts/*.test.mjs
+node tools/validate-skills.mjs
+node --test tests/*.test.mjs domains/*/*.test.mjs scripts/*.test.mjs
 ```
 
 ## 仓库范围
 
-本仓库只包含上述 4 个可分发 Skill 目录和仓库级文档，不包含无关 Skill、凭证或组织专用配置。
+本仓库是 npm 包 `@cr1992/agentkit` 与上述 4 个 Skill 的公开分发仓，不包含无关 Skill、凭证或组织专用配置。
