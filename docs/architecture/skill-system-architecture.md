@@ -43,8 +43,8 @@
 
 因此本架构采用明确分层：
 
-> `SKILL.md` 负责触发条件、决策规则、角色边界和宿主编排；`scripts/` 负责状态、
-> Git 身份、确定性执行、证据、锁、恢复和机械不变量。
+> `SKILL.md` 负责触发条件、决策规则、角色边界和宿主编排；`agentkit` 的 `domains/` 负责状态、
+> Git 身份、确定性执行、证据、锁、恢复和机械不变量，`core/` 只承载跨域稳定原语。
 
 四个 Skill 不是一套必须整体安装的“框架”。它们是四个可独立使用的能力模块：
 
@@ -53,8 +53,9 @@
 3. `verify-agent-output`：一次性独立验收面，对冻结产物做一次完整验证。
 4. `run-agent-verify-loop`：显式循环收敛面，在实现与独立验收之间做有界迭代。
 
-单独安装时，每个 Skill 使用自己的脚本和宿主能力完成本职工作；同时安装时，它们通过
-版本化 JSON 契约和 CLI 输出联动，不通过跨目录 import、共享可变文件或隐藏调用耦合。
+四个 Skill 路由可以分别安装和触发；执行时都要求同一 `agentkit` 包在 `PATH` 上可用。组合使用时，
+它们通过版本化 JSON 契约和 CLI 输出联动，不通过兄弟 Skill import、共享可变文件或隐藏调用耦合。
+Skill 目录下的 `scripts/` 只在 1.x 保留兼容入口，不再承载运行时实现。
 
 当用户明确要求反复修复与独立验收，或显式调用
 `/run-agent-verify-loop + 目标` 时，controller 才选择 Loop 模式，并按第 5.5 节完成启动前置。
@@ -104,7 +105,7 @@ review run / Evidence，controller 按安全内核逐项裁决；verification ru
 
 - 自己的最小输入；
 - 自己能单独交付的输出；
-- 自己的脚本入口；
+- 自己的 domain CLI 入口与 Skill 路由；
 - 没有其他 Skill 时的适配方式；
 - 组合能力可用时的增强路径；
 - 无法提供的保证和必须披露的限制。
@@ -481,12 +482,17 @@ controller 根据任务事实选择能力：
 }
 ~~~
 
-controller 或宿主只能在 Skill 已被正常加载后，使用宿主解析出的 Skill 绝对路径调用该命令；
-runtime 不自行扫描兄弟目录或全局安装位置。
+controller 或宿主只能在 Skill 已被正常加载后调用 `PATH` 上的 `agentkit`；runtime 不自行扫描兄弟
+Skill 目录或全局安装位置。域级命令也可以通过包内固定入口直接执行，供安装矩阵和兼容层复验。
+
+`agentkit capabilities --json` 在保留各域原始载荷之外输出 `runtime_bundle_digest`，精确标识同一
+tarball 内的 CLI、core、domains、schema、按需文档、四个 shell 与 `shell-manifest.json`。
+`agentkit doctor` 校验 manifest 与 `package.json` 版本、全部兼容入口和目标路径；公开写命令在执行前
+重复该门禁。版本失配时写操作 fail closed，`status/inspect/doctor` 等只读诊断仍可运行。
 
 `protocol_version` 表示跨实现兼容语义，`runtime_version` 表示脚本实现版本，Skill tree
-`content_digest` 表示精确安装内容。三者必须分别报告；软链安装不能依赖 Git 信息、mtime 或路径字符串
-识别版本，CLI 入口判断也必须对调用路径和模块路径做 realpath 归一化。
+`content_digest` 表示该域实际执行所依赖的分发内容。三者必须分别报告；软链安装不能依赖 Git 信息、
+mtime 或路径字符串识别版本，CLI 入口判断也必须对调用路径和模块路径做 realpath 归一化。
 
 调用方必须在合同 freeze 前完成版本交集判断，并把最终 provider 写入合同。没有交集时可以在
 freeze 前选择 standalone provider 或 fail closed；合同 freeze 后发现 provider 缺失、版本不兼容
@@ -583,9 +589,11 @@ contract_digest: "sha256:..."
 - v1 canonical JSON 采用 RFC 8785；原始 JSON 解析阶段拒绝重复 key；
 - `contract_digest` 对移除 `contract_digest` 字段后的完整 canonical payload 计算 SHA-256；
 - `skill_set` 记录本轮实际加载并参与决策的 Skill；没有发布版本时仍必须记录内容摘要；
-- Skill `content_digest` 根据已解析安装目录生成：对允许参与运行的 `SKILL.md / agents /
-  references / scripts` 文件逐个计算 SHA-256，再对按规范化相对路径排序的
-  `[{path, size, sha256}]` manifest 使用 RFC 8785 + SHA-256；不包含绝对路径、缓存和运行状态；
+- Skill `content_digest` 按逻辑根 `skill / domain / docs / core / schemas / shell-manifest` 生成：其中 `skill` 只纳入
+  `SKILL.md / agents / scripts`，其他根纳入完整受管文件；逐文件计算 SHA-256 后，对按规范化逻辑路径
+  排序的 `[{path, size, sha256}]` manifest 使用 RFC 8785 + SHA-256。绝对路径、缓存、运行状态和纯路由
+  `bin/` 不参与摘要；`bin/` 不执行领域语义，把它纳入会让帮助文案或前缀路由变化迫使四个域一起
+  re-contract。任何进入 `core / domain / schemas / docs` 的执行或协议变化都必须触发摘要漂移；
 - 合同冻结后任何变化都创建新版本；
 - extension 不得覆盖公共字段；
 - `review_policy` 在 reviewer 派发前冻结每个 Artifact 的 primary/escalation 上限、lens 去重、smoke
@@ -810,7 +818,7 @@ forensics: []
 review_result_digest: "sha256:..."
 ~~~
 
-`verify-agent-output/references/verification-protocol.md` 是 reviewer 行为、输入隔离、证伪步骤和
+`docs/verify/verification-protocol.md` 是 reviewer 行为、输入隔离、证伪步骤和
 三态 verdict 语义的唯一真源。Review Result schema 是跨 Skill 契约；unknown
 `contract_item_id`、无 evidence finding、`no_defect_found` 无 forensics、以及包含 safety finding
 却试图按普通 pass 处理都必须被脚本拒绝。`challenge_nonce` 由 runtime 在当前验收轮生成并放入
@@ -874,7 +882,7 @@ runtime。后两档的 `passed` 事件绑定精确 `verification_ref`，防止�
 与逐条 acceptance 条目摘要。ledger 校验血缘 + 条目子集，并要求除 `contract_id` / `acceptance` 子集 /
 `extensions.projection` 外的字段与公共合同逐字段全等，因此投影只能收窄验收面，不能改写 `objective`、
 `scope`、`permissions` 等任何其他字段。规范表述在
-[编排运行时](../../orchestrate-subagents/references/orchestration-runtime.md)「合同投影」段。
+[编排运行时](../orchestrate/orchestration-runtime.md)「合同投影」段。
 
 独立验收默认只放在最终冻结的高风险 integration candidate，而不是每个中间 worker commit；这是
 保证强度选择，不是由 worker 数量自动触发。`status.summary.verification_assurance` 分别计数四档与
@@ -1047,7 +1055,7 @@ proposal_digest: "sha256:..."
 
 ### 8.2 通用脚本约束
 
-- 统一使用 Node 18+ 原生 ESM 模块（`.mjs`），不引入第三方或 Python 运行时依赖；
+- 统一使用 Node 22+ 原生 ESM 模块（`.mjs`），不引入第三方或 Python 运行时依赖，也不提前编译；
 - 所有机器消费命令支持 `--json`；
 - 所有状态修改命令使用 revision / lock；
 - init 冻结相关 Skill manifest；provider 派发、Evidence 接收和 Loop `next` 前重算摘要；
@@ -1058,28 +1066,32 @@ proposal_digest: "sha256:..."
 - event journal 追加写，snapshot 可重建；
 - Reflection、Convergence Report 和 Proposal 使用 write-new / append-only，不回写 Evidence；
 - `propose-improvement` 只能输出 `lifecycle: proposed`，不能编辑 Skill 文件；
-- `doctor` 只报告，不自动删除或修复；
+- 域级 `doctor` 只检查显式选择的 ledger / run / loop 等状态，不自动删除或修复；顶层
+  `agentkit doctor` 只检查 Node、Git、安装完整性与各域 capabilities，不把缺少状态选择器判为故障；
 - runtime 提供 `capabilities`、`status`、`inspect`、`validate`、`doctor`；
-- 单个 Skill 的脚本不能依赖兄弟 Skill 路径。
+- 单个 Skill 不能依赖兄弟 Skill 路径；共享代码只能从包根 `core/` 与对应 `domains/<domain>/` 获取；
+- 1.x 兼容入口必须 import-safe，只允许静态透传 domain 导出并在直接执行时调用同一进程内的
+  `runCli()`；不得在 import 时执行命令，也不得再派生第二个 Node 进程。2.0 删除这些 stub。
 
-### 8.3 orchestrate-subagents 的脚本工具
+### 8.3 orchestrate-subagents 的领域工具
 
-建议目录：
+当前目录：
 
 ~~~text
+domains/orchestrate/
+├── host_capability_cache.mjs
+├── resolve_model_policy.mjs
+├── worker-capability-preflight.mjs
+├── orchestration-reflection.mjs
+├── review-budget.mjs
+├── orchestration-ledger.mjs
+├── contract-tool.mjs
+└── *.test.mjs
+docs/orchestrate/*.md
 orchestrate-subagents/
 ├── SKILL.md
 ├── agents/openai.yaml
-├── references/
-└── scripts/
-    ├── host_capability_cache.mjs
-    ├── resolve_model_policy.mjs
-    ├── worker-capability-preflight.mjs
-    ├── orchestration-reflection.mjs
-    ├── review-budget.mjs
-    ├── orchestration-ledger.mjs
-    ├── contract-tool.mjs
-    └── *.test.mjs
+└── scripts/*.mjs          # 1.x 兼容 stub；不含实现
 ~~~
 
 编排先列节点所需有效能力，再按规模选档。`worker-capability-preflight.mjs` 只让 `allowed` 满足
@@ -1106,8 +1118,8 @@ ledger。effort 参数未暴露时记录 `unsupported`，不能写成 `inherited
 有效窗口不超过 2160 小时；观察记录只绑定格式有效的 `sha256:` 能力指纹，并保持输入事件嵌套在
 `event` 字段。随后 `resolve_model_policy.mjs` 只加载用户级 `hosts/<host>.json` schema v2。配置直接定义
 有序 tier、每个 tier 的候选模型、effort 默认值与上下限、channel、dispatch provenance，以及允许的
-动态调整动作和最大尝试数；不再维护 budget mode、公共 policy、role route、task override、alias 与
-profile 的多层合并。tier 名称和数量由用户决定，脚本只信任显式 `tier_order`，不猜模型强弱。
+动态调整动作和最大尝试数；没有预设档位，也没有按角色 / 任务的路由表或多层合并。tier 名称和
+数量由用户决定，脚本只信任显式 `tier_order`，不猜模型强弱。
 
 本地配置不存在时，Controller 只根据实时 schema 形成候选映射，不复制示例或凭记忆猜型号；首次
 保存、增加模型、提高 effort / attempt 上限或明显增费前必须获用户确认。已有合法配置构成动态调整
@@ -1321,20 +1333,22 @@ record cache 完整性检查不受影响。
 `extensions.worktreeConfig` 是唯一会写仓库级配置的动作，必须留下可区分"本轮写入"与"原本已启用"
 的独立审计事件，并如实保存覆盖前值；Git boolean 必须按 Git 自身语义归一化。
 
-### 8.5 verify-agent-output 的脚本工具
+### 8.5 verify-agent-output 的领域工具
 
-建议目录：
+当前目录：
 
 ~~~text
+domains/verify/
+├── verification-runtime.mjs
+└── verification-runtime.test.mjs
+docs/verify/
+├── verification-protocol.md
+├── evidence-schema.md
+└── input-preparation.md
 verify-agent-output/
 ├── SKILL.md
 ├── agents/openai.yaml
-├── references/
-│   ├── verification-protocol.md
-│   └── evidence-schema.md
-└── scripts/
-    ├── verification-runtime.mjs
-    └── verification-runtime.test.mjs
+└── scripts/verification-runtime.mjs  # 1.x 兼容 stub
 ~~~
 
 建议 CLI：
@@ -1367,21 +1381,22 @@ CLI 命令统一支持 `--help`。`run-smoke / record-review / run-final` 默认
 CLI 渲染策略截断。terminal 非 pass 的 compact 输出可给非权威 `next_mode_hint`，提醒 controller 保留
 Evidence，并在已授权多轮修复时新建 Loop；该提示不能自行改变 provider 或启动循环。
 
-### 8.6 run-agent-verify-loop 的脚本工具
+### 8.6 run-agent-verify-loop 的领域工具
 
-建议目录：
+当前目录：
 
 ~~~text
+domains/loop/
+├── loop-runtime.mjs
+└── loop-runtime.test.mjs
+docs/loop/
+├── embedded-review-adapter.md
+├── loop-state-machine.md
+└── recovery-and-fuses.md
 run-agent-verify-loop/
 ├── SKILL.md
 ├── agents/openai.yaml
-├── references/
-│   ├── embedded-review-adapter.md
-│   ├── loop-state-machine.md
-│   └── recovery-and-fuses.md
-└── scripts/
-    ├── loop-runtime.mjs
-    └── loop-runtime.test.mjs
+└── scripts/loop-runtime.mjs  # 1.x 兼容 stub
 ~~~
 
 Loop 不维护第二套 verifier protocol。`embedded-review-adapter.md` 只定义：
@@ -1392,10 +1407,10 @@ Loop 不维护第二套 verifier protocol。`embedded-review-adapter.md` 只定�
 - embedded 模式缺少标准 Evidence 哪些保证。
 
 三态 verdict、finding class、取证要求和输入隔离以
-`verify-agent-output/references/verification-protocol.md` 与第 7.6 节 Review Result v1 为唯一
+`docs/verify/verification-protocol.md` 与第 7.6 节 Review Result v1 为唯一
 语义真源。独立安装的 Loop 随版本化 JSON schema 携带必要的机器校验规则，但不能复制或改写完整
 行为协议。Phase 1a 已在 verifier Skill、embedded adapter、共享 Review Result schema 和兼容测试
-同批落地后删除旧 `run-agent-verify-loop/references/verifier-protocol.md`，迁移窗口未丢失独立验收规则。
+同批落地后删除旧的 Loop 本地 verifier protocol，迁移窗口未丢失独立验收规则。
 
 建议 CLI：
 
@@ -1661,9 +1676,10 @@ assurance:
 
 ### 12.1 安装原则
 
-- 四个 Skill 可以分别安装；
+- 四个 Skill 路由可以分别安装，运行前必须能从 `PATH` 解析兼容版本的 `agentkit`；
+- 每个 Skill frontmatter 用 `metadata.requires.bins: ["agentkit"]` 提示宿主依赖；该提示不替代运行时门禁；
 - 不存在“安装 Loop 必须同时安装另外三个”的要求；
-- 安装多个 Skill 后，由 controller 做 capability discovery；
+- 安装多个 Skill 后，由 controller 通过 `agentkit capabilities --json` 做 capability discovery；
 - Skill 不能在运行时静默下载兄弟 Skill；
 - freeze 前缺少组合 provider 时选择明确的 standalone mode；freeze 后缺失则 abort / re-contract；
 - 安全要求无法满足时 fail closed。
@@ -1680,10 +1696,11 @@ assurance:
 
 调用方只接受自己声明支持的版本范围。未来 schema 不兼容时拒绝，不做猜测转换。
 
-### 12.3 独立发布与组合兼容矩阵
+### 12.3 统一引擎发布与组合兼容矩阵
 
-每个 Skill 可以独立发版，但发布测试必须覆盖：
+引擎、四个 Skill 路由、schema 与按需文档作为同一包版本发布；Skill 可以独立安装，但发布测试必须覆盖：
 
+- 从真实 `npm pack` tarball 安装到临时 prefix，并经临时 `PATH` 遍历四个 Skill 的 15 种非空组合；
 - 自己的 standalone 行为；
 - 与当前稳定版其他 Skill 的组合行为；
 - capability 版本无交集时的 fallback / fail-closed；
@@ -1698,6 +1715,22 @@ assurance:
 2. README 只提供稳定能力摘要，不能另行定义或弱化本文件中的行为语义；
 3. 发布检查必须验证文档摘要、Skill 版本和组合兼容矩阵；
 4. 运行时实现、测试、schema 与本文件冲突时，停止发布并完成重新评审，不能在发布副本中临时改写契约。
+
+### 12.5 分发载荷与许可证
+
+发布载荷除四个 Skill 目录外，还包含：
+
+- `package.json` 与 `bin/`：提供零依赖 ESM 的 `agentkit` 命令映射，不生成编译产物；
+- `shell-manifest.json`：绑定包版本、CLI 入口、四个 Skill shell、兼容入口、domain 目标与只读命令边界；
+- `core/`、`domains/` 与 `schemas/`：共享原语、四个领域运行时与 canonical schema 真源；
+- `docs/orchestrate/`、`docs/worktree/`、`docs/verify/`、`docs/loop/`：由 `agentkit docs` 按需读取；
+- `LICENSE`：MIT，随发布一起分发；
+- `tests/`：四个 Skill 的共享测试，使安装侧可以在自己的环境上复验安装矩阵与跨 Skill 契约；
+- `tools/validate-skills.mjs`：Skill 规范校验入口，供安装侧独立复跑。
+
+载荷之外的内容不进入发布：发布仓自有的说明文档、生成产物和仓库级配置由发布仓维护，
+发布流程不得覆盖它们。发布流程在提交前必须校验载荷内容摘要，并把架构文档与四个
+`SKILL.md` 的摘要写入发布提交，便于事后核验发布内容与本文件是否同源。
 
 ## 13. 测试策略
 
@@ -1830,7 +1863,7 @@ assurance:
 优先实现：
 
 1. `verify-agent-output` 及 `verification-runtime.mjs`；
-2. `run-agent-verify-loop/scripts/loop-runtime.mjs`；
+2. `domains/loop/loop-runtime.mjs`；
 3. Verification Profile、Review Result、Evidence、Embedded Record、Loop State 的 schema、状态机和测试；
 4. 更新 verifier / orchestrator frontmatter，落实单 reviewer carve-out；
 5. 将 Loop 的旧 `verifier-protocol.md` 安全迁移为 canonical protocol + embedded adapter；

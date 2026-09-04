@@ -1,6 +1,9 @@
 ---
 name: verify-agent-output
 description: "对冻结的单一 Git Artifact 执行一次独立验收，运行 L0、隔离 reviewer 证伪并生成 Evidence。当用户要求固定 commit/SHA 的一次性 review 时使用；多节点编排、自动修复和反复验收不适用。"
+metadata:
+  requires:
+    bins: ["agentkit"]
 ---
 
 # verify-agent-output：一次性独立验收
@@ -28,32 +31,32 @@ controller 必须先提供：
 4. clean workdir，`HEAD == artifact_sha`；
 5. 新上下文 reviewer，或由用户中继的第二会话。只有当前实现者上下文时停止，不得伪造独立验收。
 
-详细 envelope 与字段规则见 [references/evidence-schema.md](references/evidence-schema.md)。进入 L1 前必须完整读取
-[references/verification-protocol.md](references/verification-protocol.md)。
+详细 envelope 与字段规则见 [Evidence schema](../docs/verify/evidence-schema.md)。进入 L1 前必须完整读取
+[验收协议](../docs/verify/verification-protocol.md)。
 
 ## 标准流程
 
-从宿主解析 Skill 目录调用 runtime，不扫描兄弟 Skill 或全局安装目录。输入已冻结时使用 happy path：
+输入已冻结时使用 happy path：
 
 ```text
-node <skill-dir>/scripts/verification-runtime.mjs capabilities
-node <skill-dir>/scripts/verification-runtime.mjs prepare-run \
+agentkit verify capabilities
+agentkit verify prepare-run \
   --contract contract.json --profile profile.json --artifact artifact.json \
   --workdir <clean-pinned-workdir> --state-root <repo-outside-state-root> \
   --isolation-assurance host_reported
-node <skill-dir>/scripts/verification-runtime.mjs run-smoke --run <run-dir>
-node <skill-dir>/scripts/verification-runtime.mjs review-input --run <run-dir>
-node <skill-dir>/scripts/verification-runtime.mjs review-bundle \
+agentkit verify run-smoke --run <run-dir>
+agentkit verify review-input --run <run-dir>
+agentkit verify review-bundle \
   --run <run-dir> --out review-bundle.json
-node <skill-dir>/scripts/verification-runtime.mjs record-review \
+agentkit verify record-review \
   --run <run-dir> --stdin \
   --verifier-run-id <opaque-id> --isolation-assurance host_reported
-node <skill-dir>/scripts/verification-runtime.mjs run-final --run <run-dir>
-node <skill-dir>/scripts/verification-runtime.mjs validate --run <run-dir>
+agentkit verify run-final --run <run-dir>
+agentkit verify validate --run <run-dir>
 ```
 
 所有子命令支持 `--help`；写命令支持 `--expected-revision`。尚未准备输入、happy path 失败或需要完整
-诊断时，先读 [输入准备与诊断命令](references/input-preparation.md)。readiness/preflight 失败属于环境
+诊断时，先读 [输入准备与诊断命令](../docs/verify/input-preparation.md)。readiness/preflight 失败属于环境
 前提，不得记录为 Artifact verdict。
 
 ## 状态与裁决

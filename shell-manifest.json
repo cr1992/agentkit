@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "package_name": "@cr1992/agentkit",
+  "package_version": "1.0.0",
+  "cli": {
+    "command": "agentkit",
+    "entry": "bin/agentkit.mjs"
+  },
+  "skills": {
+    "orchestrate-subagents": {
+      "domain": "orchestrate",
+      "shell": "orchestrate-subagents/SKILL.md",
+      "entries": {
+        "contract-tool.mjs": {
+          "target": "domains/orchestrate/contract-tool.mjs",
+          "mutates_state": false
+        },
+        "host_capability_cache.mjs": {
+          "target": "domains/orchestrate/host_capability_cache.mjs",
+          "read_only_commands": ["status"]
+        },
+        "orchestration-ledger.mjs": {
+          "target": "domains/orchestrate/orchestration-ledger.mjs",
+          "read_only_commands": ["batch-status", "status", "inspect", "doctor"]
+        },
+        "orchestration-reflection.mjs": {
+          "target": "domains/orchestrate/orchestration-reflection.mjs",
+          "read_only_commands": []
+        },
+        "resolve_model_policy.mjs": {
+          "target": "domains/orchestrate/resolve_model_policy.mjs",
+          "mutates_state": false
+        },
+        "review-budget.mjs": {
+          "target": "domains/orchestrate/review-budget.mjs",
+          "mutates_state": false
+        },
+        "worker-capability-preflight.mjs": {
+          "target": "domains/orchestrate/worker-capability-preflight.mjs",
+          "mutates_state": false
+        }
+      }
+    },
+    "manage-worktrees": {
+      "domain": "worktree",
+      "shell": "manage-worktrees/SKILL.md",
+      "entries": {
+        "worktree-mgr.mjs": {
+          "target": "domains/worktree/worktree-mgr.mjs",
+          "read_only_commands": ["list", "plan-batch", "audit", "doctor", "binding", "artifact", "verify-artifact"]
+        },
+        "worktree-scan.mjs": {
+          "target": "domains/worktree/worktree-scan.mjs",
+          "mutates_state": false
+        }
+      }
+    },
+    "verify-agent-output": {
+      "domain": "verify",
+      "shell": "verify-agent-output/SKILL.md",
+      "entries": {
+        "verification-runtime.mjs": {
+          "target": "domains/verify/verification-runtime.mjs",
+          "read_only_commands": ["scaffold", "prepare", "digest", "readiness", "preflight", "review-input", "review-bundle", "status", "inspect", "validate", "doctor"]
+        }
+      }
+    },
+    "run-agent-verify-loop": {
+      "domain": "loop",
+      "shell": "run-agent-verify-loop/SKILL.md",
+      "entries": {
+        "loop-runtime.mjs": {
+          "target": "domains/loop/loop-runtime.mjs",
+          "read_only_commands": ["status", "inspect", "validate", "doctor"]
+        }
+      }
+    }
+  }
+}

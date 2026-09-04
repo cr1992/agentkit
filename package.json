@@ -1,0 +1,29 @@
+{
+  "name": "@cr1992/agentkit",
+  "version": "1.0.0",
+  "description": "Agent engineering toolkit: orchestration, git worktree isolation, independent verification and bounded verify loops.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "agentkit": "./bin/agentkit.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "shell-manifest.json",
+    "bin/",
+    "domains/",
+    "core/",
+    "schemas/",
+    "docs/worktree/",
+    "docs/verify/",
+    "docs/orchestrate/",
+    "docs/loop/",
+    "orchestrate-subagents/",
+    "manage-worktrees/",
+    "verify-agent-output/",
+    "run-agent-verify-loop/"
+  ],
+  "dependencies": {}
+}
