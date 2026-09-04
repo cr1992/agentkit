@@ -1718,7 +1718,7 @@ assurance:
 
 ### 12.5 分发载荷与许可证
 
-发布载荷除四个 Skill 目录外，还包含：
+公开镜像载荷除四个 Skill 目录外，还包含：
 
 - `package.json` 与 `bin/`：提供零依赖 ESM 的 `agentkit` 命令映射，不生成编译产物；
 - `shell-manifest.json`：绑定包版本、CLI 入口、四个 Skill shell、兼容入口、domain 目标与只读命令边界；
@@ -1728,8 +1728,13 @@ assurance:
 - `tests/`：四个 Skill 的共享测试，使安装侧可以在自己的环境上复验安装矩阵与跨 Skill 契约；
 - `tools/validate-skills.mjs`：Skill 规范校验入口，供安装侧独立复跑。
 
-载荷之外的内容不进入发布：发布仓自有的说明文档、生成产物和仓库级配置由发布仓维护，
-发布流程不得覆盖它们。发布流程在提交前必须校验载荷内容摘要，并把架构文档与四个
+公开镜像中的 `tests/`、domain 测试文件和仓库级校验工具用于分发复验，不进入 npm tarball；npm 包只
+携带运行时、schema、按需文档、四个 Skill shell、兼容入口、manifest、LICENSE，以及由发布仓维护的
+双语 README。
+包清单必须显式排除 `*.test.mjs`，并在 `publishConfig` 固定 public npm registry 与公开访问级别。
+
+载荷之外的内容不进入公开镜像：发布仓自有的生成产物和仓库级配置由发布仓维护，
+同步流程不得覆盖它们。发布流程在提交前必须校验载荷内容摘要，并把架构文档与四个
 `SKILL.md` 的摘要写入发布提交，便于事后核验发布内容与本文件是否同源。
 
 ## 13. 测试策略

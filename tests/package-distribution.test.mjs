@@ -24,6 +24,16 @@ test('package.json 保持零依赖、显式 bin 映射与 Node 下限', () => {
   assert.equal(manifest.bin.agentkit, './bin/agentkit.mjs');
   assert.equal(manifest.engines.node, '>=22');
   assert.equal(manifest.license, 'MIT');
+  assert.deepEqual(manifest.repository, {
+    type: 'git',
+    url: 'git+https://github.com/cr1992/agentkit.git',
+  });
+  assert.equal(manifest.homepage, 'https://github.com/cr1992/agentkit#readme');
+  assert.equal(manifest.bugs.url, 'https://github.com/cr1992/agentkit/issues');
+  assert.deepEqual(manifest.publishConfig, {
+    access: 'public',
+    registry: 'https://registry.npmjs.org/',
+  });
 });
 
 test('npm pack 内容清单只含运行时与四个 Skill，不含内部计划与共享测试', () => {
@@ -55,6 +65,7 @@ test('npm pack 内容清单只含运行时与四个 Skill，不含内部计划�
     // 内部计划文档与跨 Skill 共享测试不进发布物。
     assert.deepEqual(files.filter((path) => path.startsWith('docs/plans/')), []);
     assert.deepEqual(files.filter((path) => path.startsWith('tests/')), []);
+    assert.deepEqual(files.filter((path) => path.endsWith('.test.mjs')), []);
     // 没有编译产物或第三方运行时。
     assert.deepEqual(files.filter((path) => path.startsWith('node_modules/') || path.endsWith('.map')), []);
   } finally { rmSync(sandbox, { recursive: true, force: true }); }

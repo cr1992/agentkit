@@ -3,6 +3,18 @@
   "version": "1.0.0",
   "description": "Agent engineering toolkit: orchestration, git worktree isolation, independent verification and bounded verify loops.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cr1992/agentkit.git"
+  },
+  "homepage": "https://github.com/cr1992/agentkit#readme",
+  "bugs": {
+    "url": "https://github.com/cr1992/agentkit/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "type": "module",
   "bin": {
     "agentkit": "./bin/agentkit.mjs"
@@ -14,6 +26,7 @@
     "shell-manifest.json",
     "bin/",
     "domains/",
+    "!domains/**/*.test.mjs",
     "core/",
     "schemas/",
     "docs/worktree/",
