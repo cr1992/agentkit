@@ -11,7 +11,7 @@
 其内部再按有效能力、任务规模、本地模型配置和验收证据选择轻量或完整运行方式及后续重路由。
 各 provider 仍可独立使用，并通过冻结的 Artifact、Binding 和 Evidence envelope 按需组合。
 
-[Agent Skills 协作契约与安全边界（v1 · Release Candidate）](./docs/architecture/skill-system-architecture.md)
+[Agent Skills 协作契约与安全边界（v1.0.0）](./docs/architecture/skill-system-architecture.md)
 
 ## 包含的 Skill
 
@@ -28,9 +28,18 @@
 
 ## 安装
 
+### CLI
+
+CLI 需要 Node.js 22 或更高版本：
+
+```bash
+npm install -g @cr1992/agentkit
+agentkit doctor
+```
+
 ### Skill
 
-Skill 仓库已可直接安装：
+安装全部 Skill：
 
 ```bash
 npx skills add https://github.com/cr1992/agentkit.git -g --agent '*'
@@ -42,26 +51,7 @@ npx skills add https://github.com/cr1992/agentkit.git -g --agent '*'
 npx skills add https://github.com/cr1992/agentkit.git -g --agent '*' --skill manage-worktrees
 ```
 
-将 `manage-worktrees` 替换为表中的其他 Skill 名称即可。
-
-### CLI
-
-CLI 需要 Node.js 22 或更高版本。`@cr1992/agentkit` 尚未发布到 npm registry；namespace
-就绪并完成首发后，安装命令将是：
-
-```bash
-npm install -g @cr1992/agentkit
-agentkit doctor
-```
-
-在此之前，维护者可从仓库根目录建立本地链接：
-
-```bash
-npm link
-agentkit doctor
-```
-
-安装或更新后，建议新建 Agent 任务；部分宿主
+将 `manage-worktrees` 替换为表中的其他 Skill 名称即可。安装或更新后，建议新建 Agent 任务；部分宿主
 会缓存 Skill 清单或正文，需要重启后才会加载新版本。
 
 ## CLI

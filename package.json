@@ -28,6 +28,7 @@
     "pack:check": "npm pack --dry-run"
   },
   "files": [
+    "CHANGELOG.md",
     "shell-manifest.json",
     "bin/",
     "domains/",
