@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +22,7 @@ test('package.json 保持零依赖、显式 bin 映射与 Node 下限', () => {
   // 包名与命令名解耦：命令名固定 agentkit，不随 scope 变化。
   assert.deepEqual(Object.keys(manifest.bin), ['agentkit']);
   assert.equal(manifest.bin.agentkit, './bin/agentkit.mjs');
+  assert.notEqual(statSync(join(ROOT, manifest.bin.agentkit)).mode & 0o111, 0, 'CLI 源入口必须可执行');
   assert.equal(manifest.engines.node, '>=22');
   assert.equal(manifest.license, 'MIT');
   assert.deepEqual(manifest.repository, {
