@@ -26,12 +26,13 @@ test('操作文档只示范 agentkit 命令，不重新引入 Skill 兼容脚本
   }
 });
 
-test('README 与维护约定声明 GitHub 仓为唯一真源且不虚报 npm 已发布', () => {
+test('README 与维护约定声明 GitHub 仓为唯一真源并给出正式安装命令', () => {
   const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
   const agents = readFileSync(join(ROOT, 'AGENTS.md'), 'utf8');
   assert.match(readme, /唯一真源/u);
   assert.match(agents, /产品代码不得从其他仓库生成、镜像或反向覆盖/u);
-  assert.match(readme, /尚未发布到 npm registry/u);
+  assert.match(readme, /npm install -g @cr1992\/agentkit/u);
+  assert.doesNotMatch(readme, /尚未发布到 npm registry/u);
   for (const invalid of ['agentkit orchestrate --help', 'agentkit host --help', 'agentkit loop --help']) {
     assert.ok(!readme.includes(invalid), `README 不应示范失败命令：${invalid}`);
   }

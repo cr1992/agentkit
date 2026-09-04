@@ -48,6 +48,7 @@ test('npm pack 内容清单只含运行时与四个 Skill，不含内部计划�
     for (const required of [
       'package.json',
       'LICENSE',
+      'CHANGELOG.md',
       'shell-manifest.json',
       'bin/agentkit.mjs',
       'bin/cli.mjs',

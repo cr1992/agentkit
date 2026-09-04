@@ -12,7 +12,7 @@ the `orchestrate-subagents` control plane, which then chooses lightweight or ful
 rerouting from effective capabilities, task scale, and local model policy. Providers remain independently usable and
 compose through frozen Artifact, Binding, and Evidence envelopes.
 
-[Detailed collaboration contracts and safety boundaries (Chinese, v1 · Release Candidate)](./docs/architecture/skill-system-architecture.md)
+[Detailed collaboration contracts and safety boundaries (Chinese, v1.0.0)](./docs/architecture/skill-system-architecture.md)
 
 ## Included skills
 
@@ -30,9 +30,18 @@ orchestration and worktrees only when the task actually needs multiple nodes or 
 
 ## Installation
 
+### CLI
+
+The CLI requires Node.js 22 or newer:
+
+```bash
+npm install -g @cr1992/agentkit
+agentkit doctor
+```
+
 ### Skills
 
-The skills can be installed directly from this repository:
+Install all four skills:
 
 ```bash
 npx skills add https://github.com/cr1992/agentkit.git -g --agent '*'
@@ -44,26 +53,7 @@ Install a single skill:
 npx skills add https://github.com/cr1992/agentkit.git -g --agent '*' --skill manage-worktrees
 ```
 
-Replace `manage-worktrees` with any other skill name in the table as needed.
-
-### CLI
-
-The CLI requires Node.js 22 or newer. `@cr1992/agentkit` has not been published to the npm registry yet. Once the
-namespace is ready and the first release is published, the installation command will be:
-
-```bash
-npm install -g @cr1992/agentkit
-agentkit doctor
-```
-
-Until then, maintainers can link the CLI from the repository root:
-
-```bash
-npm link
-agentkit doctor
-```
-
-After an install or update, start a new
+Replace `manage-worktrees` with any other skill name in the table as needed. After an install or update, start a new
 agent task. Some hosts cache skill discovery or contents and may require a restart.
 
 ## CLI

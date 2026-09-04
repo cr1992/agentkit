@@ -19,4 +19,4 @@
 
 - Git tag、GitHub Release 与 npm 包使用同一个 semver。
 - `main` 上通过 CI 的提交才可打 tag；tag 后发布物必须能从 registry 反装并通过 `agentkit doctor`。
-- npm namespace 尚未就绪时不得创建正式 release tag；仓库版本可以保持候选版本，但 README 必须明确标注 registry 尚未发布。
+- 首发时先在本地冻结 tag 与 tarball；只有 npm 发布成功并从 registry 反装通过，才推送 tag 和创建 GitHub Release。

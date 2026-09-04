@@ -1,6 +1,6 @@
 # Agent Skills 协作契约与安全边界
 
-> 状态：v1 已实现，候选发布（Release Candidate；npm namespace 待就绪）
+> 状态：v1.0.0 稳定发布（Stable）
 >
 > 范围：`orchestrate-subagents`、`manage-worktrees`、
 > `verify-agent-output` 与 `run-agent-verify-loop`
