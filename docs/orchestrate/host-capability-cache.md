@@ -85,7 +85,7 @@ host、worker profile、接口指纹和 session / 配置 binding 相符的
 [Effective Worker Capability v1](../../schemas/effective-worker-capability-v1.schema.json) 检查：
 
 ```text
-node "<skill-directory>/scripts/worker-capability-preflight.mjs" check \
+agentkit orchestrate preflight check \
   --requirements <requirements.json> [--effective <effective.json>]
 ```
 
@@ -107,10 +107,10 @@ agent 配置摘要时可用 `config:sha256:<digest>`，最长 168 小时。配�
 
 ## 检查与刷新
 
-先从 skill 文件位置解析绝对目录，再用 Node.js 18+ 运行：
+安装 Node.js 22+ 与 `agentkit` 后运行：
 
 ```text
-node "<skill-directory>/scripts/host_capability_cache.mjs" status --host host-a --repo <git-root> --observed <current-observed.json>
+agentkit host cache status --host host-a --repo <git-root> --observed <current-observed.json>
 ```
 
 状态语义：
@@ -122,7 +122,7 @@ node "<skill-directory>/scripts/host_capability_cache.mjs" status --host host-a 
 刷新默认有效期 168 小时，可在 1–2160 小时内调整：
 
 ```text
-node "<skill-directory>/scripts/host_capability_cache.mjs" refresh --host host-a --repo <git-root> --observed <current-observed.json> --ttl-hours 168
+agentkit host cache refresh --host host-a --repo <git-root> --observed <current-observed.json> --ttl-hours 168
 ```
 
 快照使用规范化工具接口的 SHA-256 指纹和原子替换写入。宿主版本、有效期或工具接口变化会触发
@@ -140,7 +140,7 @@ descriptor 或其指纹任一无效时都返回 `stale`，不得仅因过期时�
 结构化观察：
 
 ```text
-node "<skill-directory>/scripts/host_capability_cache.mjs" observe --host host-a --repo <git-root> --event <event.json>
+agentkit host cache observe --host host-a --repo <git-root> --event <event.json>
 ```
 
 事件格式：

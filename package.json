@@ -22,6 +22,11 @@
   "engines": {
     "node": ">=22"
   },
+  "scripts": {
+    "validate": "node tools/validate-skills.mjs",
+    "test": "node tools/validate-skills.mjs && node --test tests/*.test.mjs domains/*/*.test.mjs scripts/*.test.mjs",
+    "pack:check": "npm pack --dry-run"
+  },
   "files": [
     "shell-manifest.json",
     "bin/",

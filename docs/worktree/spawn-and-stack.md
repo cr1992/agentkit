@@ -10,7 +10,7 @@
 4. `spawn` 回显的 task、branch、path、base 必须符合 primary Profile，不一致即停止。
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" spawn ci-gate-hardening \
+agentkit worktree spawn ci-gate-hardening \
   --agent codex --agent-id <real-thread-id> \
   --owner <human-owner> --purpose "加固 CI 门禁" --codegraph auto
 ```
@@ -38,7 +38,7 @@ manager 的一行摘要，失败时只返回有界错误，避免 ANSI 进度条
 依赖未合入分支时必须给出理由：
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" spawn api-contract-followup \
+agentkit worktree spawn api-contract-followup \
   --agent codex --agent-id <real-thread-id> \
   --purpose "基于契约分支实现客户端" \
   --base origin/agent/api-contract \
@@ -49,7 +49,7 @@ node "$SKILL_DIR/scripts/worktree-mgr.mjs" spawn api-contract-followup \
 保存父 worktree 关系并开启新 ownership epoch：
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" rebase api-contract-followup \
+agentkit worktree rebase api-contract-followup \
   --onto origin/agent/api-contract \
   --expected-head <current-full-head> --reason "吸收父分支最新契约"
 ```
@@ -65,7 +65,7 @@ pending 时 `artifact/touch/handoff/submit/watch` 全部 fail-closed。成功后
 历史已包含新目标时只更新 attribution：
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" retarget api-contract-followup \
+agentkit worktree retarget api-contract-followup \
   --base origin/main --expected-head <current-full-head> \
   --reason "父分支已合入，MR 改指 main"
 ```

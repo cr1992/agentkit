@@ -1,6 +1,6 @@
 # Agent Skills 协作契约与安全边界
 
-> 状态：v1 已实现，试点中（Pilot）
+> 状态：v1 已实现，候选发布（Release Candidate；npm namespace 待就绪）
 >
 > 范围：`orchestrate-subagents`、`manage-worktrees`、
 > `verify-agent-output` 与 `run-agent-verify-loop`
@@ -1716,9 +1716,9 @@ assurance:
 3. 发布检查必须验证文档摘要、Skill 版本和组合兼容矩阵；
 4. 运行时实现、测试、schema 与本文件冲突时，停止发布并完成重新评审，不能在发布副本中临时改写契约。
 
-### 12.5 分发载荷与许可证
+### 12.5 仓库与发布载荷
 
-公开镜像载荷除四个 Skill 目录外，还包含：
+本仓库直接维护四个 Skill 目录及以下同版本内容：
 
 - `package.json` 与 `bin/`：提供零依赖 ESM 的 `agentkit` 命令映射，不生成编译产物；
 - `shell-manifest.json`：绑定包版本、CLI 入口、四个 Skill shell、兼容入口、domain 目标与只读命令边界；
@@ -1728,14 +1728,14 @@ assurance:
 - `tests/`：四个 Skill 的共享测试，使安装侧可以在自己的环境上复验安装矩阵与跨 Skill 契约；
 - `tools/validate-skills.mjs`：Skill 规范校验入口，供安装侧独立复跑。
 
-公开镜像中的 `tests/`、domain 测试文件和仓库级校验工具用于分发复验，不进入 npm tarball；npm 包只
+仓库中的 `tests/`、domain 测试文件和仓库级校验工具用于持续复验，不进入 npm tarball；npm 包只
 携带运行时、schema、按需文档、四个 Skill shell、兼容入口、manifest、LICENSE，以及由发布仓维护的
 双语 README。
 包清单必须显式排除 `*.test.mjs`，并在 `publishConfig` 固定 public npm registry 与公开访问级别。
 
-载荷之外的内容不进入公开镜像：发布仓自有的生成产物和仓库级配置由发布仓维护，
-同步流程不得覆盖它们。发布流程在提交前必须校验载荷内容摘要，并把架构文档与四个
-`SKILL.md` 的摘要写入发布提交，便于事后核验发布内容与本文件是否同源。
+仓库级 CI、README 与生成的协作图由本仓库自行维护。任何外部聚合仓只能消费固定 commit、tag 或
+npm 版本，不得向本仓库回写生成结果。发布流程在提交前必须校验载荷清单与内容摘要，使 tag、npm
+tarball、架构文档与四个 `SKILL.md` 可以事后证明来自同一 commit。
 
 ## 13. 测试策略
 

@@ -14,7 +14,7 @@ manager 用真实 `agent-id` 做最小门禁。同一会话已有未回收树时
 `DELIVERY_WORKTREE_EXISTS`。同一交付直接进入旧路径；确属独立并行时说明可独立交付的理由：
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" spawn independent-release-audit \
+agentkit worktree spawn independent-release-audit \
   --agent codex --agent-id <real-thread-id> \
   --purpose "独立发布审计" \
   --parallel-reason "与现有改动可独立评审、合入和回退"
@@ -23,7 +23,7 @@ node "$SKILL_DIR/scripts/worktree-mgr.mjs" spawn independent-release-audit \
 替代旧树前先使旧树 clean，并用 `touch ... --status abandoned --note <迁移边界>` 冻结：
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" spawn current-ios-validation \
+agentkit worktree spawn current-ios-validation \
   --agent codex --agent-id <real-thread-id> \
   --purpose "迁移到新基线" \
   --supersedes old-ios-validation \
@@ -34,7 +34,7 @@ node "$SKILL_DIR/scripts/worktree-mgr.mjs" spawn current-ios-validation \
 存量替代树用 `supersede` 补双向关系，不伪造新树或手改 trace：
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" supersede old-ios-validation \
+agentkit worktree supersede old-ios-validation \
   --by current-ios-validation --reason "旧树已被完整替代"
 ```
 

@@ -144,7 +144,7 @@ Controller 不按 worker 的角色名机械路由，按节点实际决策杠杆�
 首次派发：
 
 ```text
-node "<skill-dir>/scripts/resolve_model_policy.mjs" \
+agentkit host model-policy \
   --host host-a \
   --tier primary \
   --selection-reason "常规跨文件实现使用本地主力层" \
@@ -156,7 +156,7 @@ node "<skill-dir>/scripts/resolve_model_policy.mjs" \
 失败后由 Controller 选择调整方式，并把上一份解析结果作为 lineage：
 
 ```text
-node "<skill-dir>/scripts/resolve_model_policy.mjs" \
+agentkit host model-policy \
   --host host-a \
   --tier frontier \
   --attempt 2 \

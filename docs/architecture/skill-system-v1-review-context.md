@@ -1,5 +1,8 @@
 # 四 Skill 协作架构 v1：总评审上下文
 
+> 历史记录：本文保留 v1 初始总评审的范围与证据，不再描述当前仓库和发布状态。当前维护边界见
+> [真源与发布维护](../maintenance/source-of-truth.md)。
+
 ## 1. 本次评审要决定什么
 
 本变更把朋友架构中的“任务隔离、独立验证、证据台账、有界循环、失败熔断、复盘沉淀”拆成四个
@@ -184,12 +187,9 @@ lock、snapshot 丢失、journal 截断、write-new 后 event 丢失、Skill dri
 
 ## 8. 当前安装与发布状态
 
-四个 Skill 已在本机共享池使用指向本仓源码的软链；既有宿主映射也已补齐新 verifier。已运行的
-宿主可能缓存 Skill 清单，验证触发效果时应新建任务或重启宿主。
-
-本分支尚未 push、merge 或同步实现到公开分发仓。这是有意的发布门：先完成本次总评审，接受后
-再进入权威分支并执行单向白名单同步、公开仓测试、敏感扫描和发布提交。公开仓中只有已评审的架构
-提案提交，不代表四个 runtime 已发布。
+本节记录评审当时的状态，现已完成：四个 runtime、共享 schema、薄壳 Skill 与真实安装矩阵均已进入
+`agentkit` 仓库。仓库已从分发副本切换为唯一真源；npm 首发仍受 namespace 就绪状态约束，不能把
+仓库迁移误写成 registry 已发布。
 
 ## 9. 建议 reviewer 重点证伪
 
@@ -202,7 +202,7 @@ lock、snapshot 丢失、journal 截断、write-new 后 event 丢失、Skill dri
 7. orchestration ledger 是否会把 worker 自述、无稳定产物或未满足 barrier 的节点误标为通过。
 8. schema 的 strictness 是否应在 v1 收紧；当前部分跨 Skill schema 保留扩展空间，runtime 校验更严格。
 9. runtime 代码可维护性，特别是 ledger 的紧凑实现，是否需要在不改变行为的前提下拆分模块。
-10. 是否接受“评审通过后才同步公开分发”的发布顺序。
+10. 是否接受“评审通过后才进入发布分支”的发布顺序。
 
 ## 10. 总评审整改增量（待复审）
 
