@@ -5,9 +5,9 @@
 ## 状态与 watcher
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" touch <selector> --status blocked --note "等待环境"
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" touch <selector> --status active
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" touch <selector> --status ready_for_review
+agentkit worktree touch <selector> --status blocked --note "等待环境"
+agentkit worktree touch <selector> --status active
+agentkit worktree touch <selector> --status ready_for_review
 ```
 
 `ready_for_review` 默认按该树登记的 `base_ref` 武装监听，Profile `default_base` 只在 record 没有 base 时
@@ -30,7 +30,7 @@ watcher 发现 target SHA 偏离本次武装时冻结的 target baseline、且�
 watcher 本身不改写历史、不 push。由人或 controller 显式授权一次刷新：
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" refresh-review <selector>
+agentkit worktree refresh-review <selector>
 ```
 
 命令要求 `ready_for_review`、clean、冻结 HEAD 与远端 upstream 完全一致、target 是登记 base 的快进后继。
@@ -41,9 +41,9 @@ node "$SKILL_DIR/scripts/worktree-mgr.mjs" refresh-review <selector>
 push 前跑本地门禁时：
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" refresh-review <selector> --pause-before-push
+agentkit worktree refresh-review <selector> --pause-before-push
 # 项目 wrapper 运行 lint/test/sign 等门禁
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" refresh-review <selector> --continue
+agentkit worktree refresh-review <selector> --continue
 ```
 
 rebase 冲突时保留 managed intent 与 refresh marker；只编辑冲突并 `git add`，然后运行同一
@@ -60,7 +60,7 @@ push/凭证/网络失败时用 `--continue` 幂等恢复。远端分支不存在
 交接前使树 clean 并 push：
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" handoff <selector> \
+agentkit worktree handoff <selector> \
   --to-agent kiro --to-agent-id <real-task-id> \
   --note "已完成什么，下一步是什么"
 ```
@@ -72,14 +72,14 @@ handoff 保存 ownership boundary SHA；脏树拒绝，禁止用 stash 搬运未
 先执行目标仓库自己的测试、commit gate、review 和 push 规则。Profile 已启用 provider 时：
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" submit <selector> \
+agentkit worktree submit <selector> \
   --title "<title>" --description "<summary>" --notify auto
 ```
 
 若 change request 已由 UI/API 创建，用一个 event 原子登记 URL、目标、冻结 HEAD、状态和 watcher：
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" touch <selector> \
+agentkit worktree touch <selector> \
   --status ready_for_review \
   --mr "https://gitlab.example/group/project/-/merge_requests/42" \
   --watch-target origin/main --notify auto

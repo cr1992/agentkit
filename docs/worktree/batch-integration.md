@@ -143,7 +143,7 @@ collecting -> planned -> composing -> verifying -> passed / failed / stale -> re
 完成门禁后，用 runtime 冻结终态，而不是只把 task 标成 `done`：
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" batch-result <candidate> \
+agentkit worktree batch-result <candidate> \
   --state passed \
   --candidate <exact-live-head> \
   --evidence <evidence.json>

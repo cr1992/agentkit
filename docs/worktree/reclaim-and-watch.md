@@ -11,7 +11,7 @@
 ## 已推送成果
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" reclaim <task-or-id> --pushed <sha-or-unique-prefix>
+agentkit worktree reclaim <task-or-id> --pushed <sha-or-unique-prefix>
 ```
 
 只有无 stash、树干净、branch/HEAD 已进入给定 SHA，才执行：
@@ -38,7 +38,7 @@ archive 仍要求完整 SHA，因为它们承担 CAS 或冻结身份边界。
 `batch-result` 冻结 `passed` / `failed` / `stale`，再走独立归档回收：
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" reclaim <candidate> \
+agentkit worktree reclaim <candidate> \
   --archive-evidence <exact-candidate-head> \
   --reason "固定验收已结束，输入已按正式交付单元处理"
 ```
@@ -64,7 +64,7 @@ git branch <recovery-branch> refs/worktree-archive/evidence/<worktree-id>
 不得为了清理而推送废弃分支。双向替代关系已经登记后，默认先归档旧 HEAD：
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" reclaim old-task --superseded-by new-task
+agentkit worktree reclaim old-task --superseded-by new-task
 ```
 
 默认 ref 是 `refs/worktree-archive/superseded/<old-worktree-id>`。manager 验证旧树为 `abandoned`、会话和
@@ -78,7 +78,7 @@ git branch <recovery-branch> <archive-ref>
 人工明确裁定无需恢复时，才允许精确 SHA 授权丢弃：
 
 ```bash
-node "$SKILL_DIR/scripts/worktree-mgr.mjs" reclaim old-task \
+agentkit worktree reclaim old-task \
   --superseded-by new-task --discard <exact-old-head>
 ```
 

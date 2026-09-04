@@ -132,8 +132,8 @@ Requirements 的 `required` 只接受 `worker.` 前缀的能力键（例如 `wor
 轻量档通过独立入口记录改进输入，不初始化 ledger：
 
 ```text
-node scripts/orchestration-reflection.mjs record --state-root <session-state> --input <reflection-input.json>
-node scripts/orchestration-reflection.mjs propose --state-root <session-state> --reflection <relative-ref> --input <proposal-input.json>
+agentkit orchestrate reflection record --state-root <session-state> --input <reflection-input.json>
+agentkit orchestrate reflection propose --state-root <session-state> --reflection <relative-ref> --input <proposal-input.json>
 ```
 
 `record` 的 `evidence_refs[].id` 必须是 state root 内相对路径，并逐项校验文件摘要；没有证据只能记录
@@ -190,7 +190,7 @@ Evidence 必须为 `terminal_outcome: pass` 且不再要求 human gate。节点�
 投影合同由 `contract-tool.mjs project` 生成，不得手写：
 
 ```bash
-node scripts/contract-tool.mjs project --input <公共合同.json> --items <item-id1,item-id2> \
+agentkit contract project --input <公共合同.json> --items <item-id1,item-id2> \
   [--contract-id <显式 id>] > node-contract.json
 ```
 

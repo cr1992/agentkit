@@ -12,7 +12,7 @@ the `orchestrate-subagents` control plane, which then chooses lightweight or ful
 rerouting from effective capabilities, task scale, and local model policy. Providers remain independently usable and
 compose through frozen Artifact, Binding, and Evidence envelopes.
 
-[Detailed collaboration contracts and safety boundaries (Chinese, v1 · Pilot)](./docs/architecture/skill-system-architecture.md)
+[Detailed collaboration contracts and safety boundaries (Chinese, v1 · Release Candidate)](./docs/architecture/skill-system-architecture.md)
 
 ## Included skills
 
@@ -30,14 +30,9 @@ orchestration and worktrees only when the task actually needs multiple nodes or 
 
 ## Installation
 
-Install the runtime first (Node.js 22 or newer is required):
+### Skills
 
-```bash
-npm install -g @cr1992/agentkit
-agentkit doctor
-```
-
-Then install all skills:
+The skills can be installed directly from this repository:
 
 ```bash
 npx skills add https://github.com/cr1992/agentkit.git -g --agent '*'
@@ -49,7 +44,26 @@ Install a single skill:
 npx skills add https://github.com/cr1992/agentkit.git -g --agent '*' --skill manage-worktrees
 ```
 
-Replace `manage-worktrees` with any other skill name in the table as needed. After an install or update, start a new
+Replace `manage-worktrees` with any other skill name in the table as needed.
+
+### CLI
+
+The CLI requires Node.js 22 or newer. `@cr1992/agentkit` has not been published to the npm registry yet. Once the
+namespace is ready and the first release is published, the installation command will be:
+
+```bash
+npm install -g @cr1992/agentkit
+agentkit doctor
+```
+
+Until then, maintainers can link the CLI from the repository root:
+
+```bash
+npm link
+agentkit doctor
+```
+
+After an install or update, start a new
 agent task. Some hosts cache skill discovery or contents and may require a restart.
 
 ## CLI
@@ -59,12 +73,11 @@ script entry points remain as compatibility forwarders; new integrations should 
 
 ```bash
 agentkit capabilities --json
+agentkit doctor --json
 agentkit worktree --help
 agentkit contract --help
-agentkit orchestrate --help
-agentkit host --help
+agentkit orchestrate ledger --help
 agentkit verify --help
-agentkit loop --help
 agentkit docs
 ```
 
@@ -93,11 +106,12 @@ exists.
 ## Local validation
 
 ```bash
-node tools/validate-skills.mjs
-node --test tests/*.test.mjs domains/*/*.test.mjs scripts/*.test.mjs
+npm test
+npm run pack:check
 ```
 
 ## Repository scope
 
-This repository is the public distribution source for the `@cr1992/agentkit` npm package and the four skills. It does
-not include unrelated skills, credentials, or organization-specific configuration.
+This repository is the sole source of truth for the `agentkit` CLI, all four skills, canonical schemas, tests, and
+architecture documentation. It is no longer generated or overwritten by another repository. See
+[source-of-truth and release maintenance](./docs/maintenance/source-of-truth.md) for the ownership boundary.

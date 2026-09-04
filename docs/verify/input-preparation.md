@@ -14,9 +14,9 @@ bundle`；骨架结构和摘要合法，但 TODO acceptance 与示例 L0 必须�
 输出重算摘要的新 JSON，不覆盖源文件。
 
 ```text
-node <skill-dir>/scripts/verification-runtime.mjs prepare \
+agentkit verify prepare \
   --workdir <clean-pinned-workdir> --out-dir <inputs-dir>
-node <skill-dir>/scripts/verification-runtime.mjs scaffold \
+agentkit verify scaffold \
   --kind bundle --workdir <clean-pinned-workdir> --base-sha <full-base-sha>
 ```
 

@@ -62,7 +62,7 @@ worker 也不做 1:1 reviewer 配对，优先验证最终集成候选。
 `review_id` 在同一份历史内唯一。把这份历史与新请求写成 JSON，然后执行：
 
 ```text
-node <skill-dir>/scripts/review-budget.mjs evaluate \
+agentkit orchestrate review-budget evaluate \
   --policy <review-policy.json> \
   --history <review-history.json> \
   --request <review-request.json>
