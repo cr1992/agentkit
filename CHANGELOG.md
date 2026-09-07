@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+## 1.1.0 - 2026-09-07
+
+- 修复从待回收 worktree 自身执行 `reclaim` 时，目录删除后误判本地分支已不存在的问题；未完成的
+  branch cleanup 现在返回非零并可幂等重试。
 - `manage-worktrees` 持久化评审 watcher 的 pending/disabled 意图，让 `doctor` 与 `resume-all` 不再忽略未武装记录。
 - 新增 macOS `watch-service` LaunchAgent，为已登记 watcher 提供跨 Agent 会话与重启后的自动恢复触发。
 

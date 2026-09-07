@@ -1,6 +1,6 @@
 {
   "name": "@cr1992/agentkit",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Agent engineering toolkit: orchestration, git worktree isolation, independent verification and bounded verify loops.",
   "license": "MIT",
   "repository": {

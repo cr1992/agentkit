@@ -12,7 +12,7 @@ the `orchestrate-subagents` control plane, which then chooses lightweight or ful
 rerouting from effective capabilities, task scale, and local model policy. Providers remain independently usable and
 compose through frozen Artifact, Binding, and Evidence envelopes.
 
-[Detailed collaboration contracts and safety boundaries (Chinese, v1.0.0)](./docs/architecture/skill-system-architecture.md)
+[Detailed collaboration contracts and safety boundaries (Chinese, v1.1.0)](./docs/architecture/skill-system-architecture.md)
 
 ## Included skills
 
