@@ -67,6 +67,10 @@ manager 的 trace/common-dir 状态只应由受信 operator/controller 与 runti
 | 批量集成 | `plan-batch` → `batch-integrate` → `batch-step` → `batch-result` | 同仓同 target：≥3 默认聚合，2 个仅在碰撞时；只合成冻结 SHA，不代跑门禁；合同/顺序/target 变化即重规划；读[批量集成](../docs/worktree/batch-integration.md) |
 | 回收 | `reclaim` / `archive` | 必须有远端/其他 ref 可达证明或明确 archive evidence；dirty、stash、submodule、权限或 branch-tip 异常一律 `KEEP`；替代树默认先归档，`--discard` 需人工明确授权；读[回收与看护](../docs/worktree/reclaim-and-watch.md) |
 
+`resume-all` 只提供当次恢复。需要跨 Agent 会话、注销或重启后仍自动恢复 watcher 时，先检查
+`agentkit worktree watch-service status`；macOS 可由用户一次性显式执行 `watch-service install`。
+未安装常驻维护器时不得把进程级 watcher 描述成跨会话保证。
+
 不得按目录年龄、名称或“看起来干净”删除。禁止 `rm -rf`、`git worktree remove --force`、`branch -D`
 和 feature owner 手工 rebase。watcher 的 `merge-tree` 结果只是目标前进后的只读成本预判，不保证逐
 commit rebase 成功；`batch-result` 只冻结 controller 已完成的验收结论，不替代验证。

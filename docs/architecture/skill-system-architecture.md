@@ -299,9 +299,19 @@ reference。reference 必须从入口说明“何时读取”，不得要求所�
 指定 target 时优先使用该树登记的 managed base，而不是全局 Profile 默认值。watcher 只观察和记录，
 目标前进但冻结 HEAD 尚未合入时，用 `merge-tree` 只读预判刷新为 `clean / conflict / unknown`；该预判
 不是逐 commit rebase 成功保证，也不授予后台进程远端历史改写权。
+默认武装同时持久化独立的 `review_watch` intent：`auto/pending` 表示期望自动回收但前置条件或进程尚未
+就绪，`disabled` 只来自显式 `--no-watch`/`unwatch`。`auto_reclaim` 继续表示某一次带 token 的实际
+watcher 租约。这样启动失败不会和人工退出一起坍缩成字段缺失；`doctor` 能报告 pending/legacy 缺口，
+`resume-all` 能重试 pending，并对无法判断历史意图的 legacy record fail-closed。
 若 HEAD 前进，状态更新与旧 watcher 失效必须在同一条 event 内原子完成，并以 watcher token/state
 做 CAS；随后才能尝试重冻结。这样旧 SHA 不会在状态更新与撤防之间抢先把任务推进到不可逆终态，
 陈旧 controller 也不能覆盖并发 rearm 或已进入 `merge_detected` 的 watcher。
+
+后台子进程本身不是跨会话持久性边界：宿主可能在任务结束时清理 descendant，注销和重启也会终止进程。
+portable runtime 因此只把它称为进程级即时监听。macOS 可由用户显式安装按仓库生成的 LaunchAgent，
+周期性从 primary worktree 执行 `resume-all`；服务用固定 argv 直接调用 Node/runtime，不执行 shell、不
+保存会话环境或凭证，也不在 npm install 时隐式落常驻项。LaunchAgent 只恢复原有意图，不改变冻结 SHA、
+target、回收证明或任何 KEEP 门禁。其他平台在对应 service adapter 落地前只支持显式 `resume-all`。
 
 远端历史刷新由用户显式调用一次性 `refresh-review` 才能发生。命令复用 managed rebase 事务；默认在
 成功 rebase 后以冻结 upstream SHA 执行精确 `--force-with-lease` push，回读远端并重冻结、重新武装
@@ -1210,6 +1220,8 @@ CLI `--help`、`init` 的 `ledger` / `state_root` 回显与 state root 误传指
   rerere 配置、结果落账和展示阶段；
 - `worktree-review-watch.mjs` / `worktree-review-refresh.mjs`：分别负责 submit/watch/worker 与显式
   review refresh 补偿事务，后台 watcher 不持有 refresh 权限；
+- `worktree-watch-service.mjs`：持久维护器适配层；当前只生成、装载和检查 macOS 用户级 LaunchAgent，
+  周期性恢复 trace 中的 watcher/pending intent，不拥有新的回收权限；
 - `worktree-reclaim.mjs`：回收证明、submodule 检查、目录和 branch 两阶段清理；允许从目标 worktree
   自身发起回收，但删除目录后的仓库级 Git 操作固定使用 primary worktree 作为稳定 cwd；branch probe
   区分明确 absent 与 operational failure，`BRANCH_PENDING` 返回非零并保留幂等重试；
@@ -1263,6 +1275,8 @@ adapter 的 app 相对路径允许 suffix-relative 低置信度兜底。低置�
 | `refresh-review <selector> [--pause-before-push]` | 显式刷新冻结评审分支：managed rebase、精确 lease push、远端回读与 watcher 重冻结；wrapper 可在 push 前暂停后 `--continue` |
 | `retarget <selector> --base <ref> --expected-head <sha>` | 不改历史地更新验证/MR target attribution，新 base 必须已是 HEAD 祖先 |
 | `touch ... --mr <url> --watch-target <ref>` | 一次 event 登记结构化 MR、评审状态、冻结 HEAD 与 watcher target |
+| `resume-all [--json]` | 恢复 stale watcher、重试持久 pending intent，并显式列出缺少 intent 的 legacy 评审记录 |
+| `watch-service install\|status\|uninstall` | macOS 按仓库管理用户级 LaunchAgent，为 `resume-all` 提供跨会话/重启触发；不随安装自动启用 |
 
 它继续只拥有 Git 隔离与生命周期：可以保存 controller 报告的 batch outcome，但不执行验证、不解释
 `verify-agent-output` verdict，也不推进 Loop iteration。

@@ -346,7 +346,7 @@ export function readJsonFileOrDie(path, label) {
 export function parseArgs(argv) {
   const flags = new Map();
   const positionals = [];
-  const booleanFlags = new Set(['json', 'all', 'present', 'archived', 'verbose', 'recover-lock', 'no-watch', 'abort-on-conflict', 'no-rerere', 'recompose', 'scan-conflicts', 'abort', 'continue', 'pause-before-push']);
+  const booleanFlags = new Set(['json', 'all', 'present', 'archived', 'verbose', 'quiet', 'recover-lock', 'no-watch', 'abort-on-conflict', 'no-rerere', 'recompose', 'scan-conflicts', 'abort', 'continue', 'pause-before-push']);
   for (let index = 0; index < argv.length; index++) {
     const value = argv[index];
     if (!value.startsWith('--')) {

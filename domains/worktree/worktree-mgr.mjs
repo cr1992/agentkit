@@ -4,7 +4,7 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -25,6 +25,7 @@ import { createCommands as createLifecycleCommands } from './worktree-lifecycle.
 import { createCommands as createReclaimCommands } from './worktree-reclaim.mjs';
 import { createCommands as createReviewRefreshCommands } from './worktree-review-refresh.mjs';
 import { createCommands as createReviewWatchCommands } from './worktree-review-watch.mjs';
+import { createCommands as createWatchServiceCommands } from './worktree-watch-service.mjs';
 
 export { runFileCapture, runFileTry } from './worktree-process.mjs';
 export {
@@ -71,12 +72,16 @@ const dependencies = {
   statSync,
   writeFileSync,
   tmpdir,
+  homedir,
   basename,
   dirname,
   join,
   resolve,
   fileURLToPath,
   managerScript,
+  processPlatform: process.platform,
+  processExecPath: process.execPath,
+  processGetuid: () => typeof process.getuid === 'function' ? process.getuid() : 0,
   ...mergePreview,
   ...profile,
   ...provider,
@@ -119,6 +124,8 @@ const artifactCommands = createArtifactCommands(dependencies);
 assignNew(dependencies, artifactCommands, 'worktree-artifact');
 const learningCommands = createLearningCommands(dependencies);
 assignNew(dependencies, learningCommands, 'worktree-learning');
+const watchServiceCommands = createWatchServiceCommands(dependencies);
+assignNew(dependencies, watchServiceCommands, 'worktree-watch-service');
 const doctorCommands = createDoctorCommands(dependencies);
 
 export const batchFingerprint = batchCommands.batchFingerprint;
@@ -126,7 +133,7 @@ export const verifyArtifactEnvelope = artifactCommands.verifyArtifactEnvelope;
 
 function cmdCapabilities(args) {
   rejectUnknownFlags(args.flags, ['json']);
-  console.log(JSON.stringify({ skill: 'manage-worktrees', runtime_version: '1.3.0', contracts: { worktree_binding: [1], artifact_ref: [1], reflection_record: [1], improvement_proposal: [1], batch_result: [1] }, features: ['git-common-dir-ledger', 'ownership-epochs', 'artifact-verification', 'incident-reflection', 'proposed-only-improvement', 'batch-integrate', 'batch-conflict-scan', 'declared-post-integrate-steps', 'batch-result', 'evidence-archive-reclaim', 'durable-pushed-ref-proof', 'auto-armed-review-watch', 'review-target-advance-prediction', 'explicit-review-refresh', 'managed-history-rewrite', 'stack-parent-attribution', 'structured-change-registration'], content_digest: worktreeSkillDigest() }, null, 2));
+  console.log(JSON.stringify({ skill: 'manage-worktrees', runtime_version: '1.4.0', contracts: { worktree_binding: [1], artifact_ref: [1], reflection_record: [1], improvement_proposal: [1], batch_result: [1] }, features: ['git-common-dir-ledger', 'ownership-epochs', 'artifact-verification', 'incident-reflection', 'proposed-only-improvement', 'batch-integrate', 'batch-conflict-scan', 'declared-post-integrate-steps', 'batch-result', 'evidence-archive-reclaim', 'durable-pushed-ref-proof', 'auto-armed-review-watch', 'persistent-review-watch-intent', 'launchd-watch-service', 'review-target-advance-prediction', 'explicit-review-refresh', 'managed-history-rewrite', 'stack-parent-attribution', 'structured-change-registration'], content_digest: worktreeSkillDigest() }, null, 2));
 }
 
 function usage() {
@@ -165,7 +172,9 @@ doctor [--json] [--verbose]
 rebuild [<selector>] [--id <uuid>] [--recover-lock]
 watch <selector> [--target <remote/ref>] [--interval-ms <ms>] [--change-ref <text>] [--notify auto|off] [--id <uuid>]
 submit <selector> [--title <text>] [--description <text>] [--target <branch>] [--remote <name>] [--interval-ms <ms>] [--notify auto|off] [--id <uuid>]
-resume-all [--json]
+resume-all [--json] [--quiet]
+watch-service install|status|uninstall [--json] [--interval-seconds <seconds>]
+  macOS 用户级 LaunchAgent 定期运行 resume-all；显式安装，不在 npm install 时自动常驻
 unwatch <selector> [--id <uuid>]
 reclaim <selector> --pushed <sha> [--id <uuid>]
 reclaim <selector> --superseded-by <replacement-selector> [--discard <exact-old-head>] [--id <uuid>] [--replacement-id <uuid>]
@@ -211,6 +220,7 @@ function main(argv = process.argv.slice(2)) {
     submit: reviewCommands.cmdSubmit,
     watch: reviewCommands.cmdWatch,
     'resume-all': reviewCommands.cmdResumeAll,
+    'watch-service': watchServiceCommands.cmdWatchService,
     unwatch: reviewCommands.cmdUnwatch,
     'watch-worker': reviewCommands.cmdWatchWorker,
     reclaim: reclaimCommands.cmdReclaim,

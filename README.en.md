@@ -39,6 +39,18 @@ npm install -g @cr1992/agentkit
 agentkit doctor
 ```
 
+On macOS, explicitly install the per-repository user service when worktree merge watchers must recover across agent
+sessions and restarts:
+
+```bash
+agentkit worktree watch-service install
+agentkit worktree watch-service status
+```
+
+The npm install does not create a persistent service. The service pins the Node and agentkit paths present at install
+time; rerun `watch-service install` after moving either installation, and inspect `program_available` in
+`status --json`. Other platforms currently use `agentkit worktree resume-all` for manual recovery.
+
 ### Skills
 
 Install all four skills:

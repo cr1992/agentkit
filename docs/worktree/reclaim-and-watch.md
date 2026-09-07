@@ -6,7 +6,15 @@
 
 监听绑定“冻结的 head SHA 已成为目标 ref 祖先”这一事实，不绑定 change request 载体。载体改为他人代推、
 聚合 MR 或其他分支时不解除监听。进入 `ready_for_review` 默认武装；`submit` 只是其中一个入口。电脑重启后
-由 `resume-all` 恢复 stale watcher；change request 已关闭且明确不会合入时用 `unwatch`。
+由 `resume-all` 恢复 stale watcher；macOS 要让这一步无需新 Agent 会话触发，显式安装用户级维护器：
+
+```bash
+agentkit worktree watch-service install
+```
+
+维护器定期执行有限的 `resume-all`，实际 watcher 仍用 token/event CAS 与 heartbeat 裁决；它不放宽任何
+回收前置条件。`watch-service status` 检查 plist、launchd job 与当前 Node/runtime 路径，`uninstall` 解除。
+未安装时只有进程级自动回收，不得称作跨会话保证。change request 已关闭且明确不会合入时用 `unwatch`。
 
 ## 已推送成果
 

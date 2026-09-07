@@ -37,6 +37,17 @@ npm install -g @cr1992/agentkit
 agentkit doctor
 ```
 
+macOS 上若要让 worktree 合入监听跨 Agent 会话和重启持续恢复，可按仓库显式安装用户级维护器：
+
+```bash
+agentkit worktree watch-service install
+agentkit worktree watch-service status
+```
+
+它不会随 npm install 自动常驻。服务固定安装时的 Node 与 agentkit 路径；升级 agentkit、切换 Node
+安装位置后应重新执行 `watch-service install`，`status --json` 的 `program_available` 可检查原路径。
+其他平台当前使用 `agentkit worktree resume-all` 手工恢复。
+
 ### Skill
 
 安装全部 Skill：
