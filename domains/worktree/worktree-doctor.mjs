@@ -35,6 +35,7 @@ export function createCommands(deps) {
     buildListing,
     learningRoot,
     isSettledWorktreeState,
+    watchServiceStatus,
   } = deps;
 
   function collectDoctorRecordMetadataFindings(loaded, listing, recordsById, record, findings) {
@@ -243,10 +244,45 @@ export function createCommands(deps) {
 
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} record @param {Record<string,any>[]} findings */
   function collectDoctorRecordWatcherFindings(loaded, record, findings) {
-    if (record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state) && record.worktree_state !== 'reclaimed') {
+    const reviewLifecycle = ['ready_for_review', 'integrating'].includes(record.task_status)
+      && !['reclaimed', 'archived'].includes(record.worktree_state);
+    const activeWatch = record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
+      ? record.auto_reclaim
+      : null;
+    if (reviewLifecycle && !activeWatch) {
+      if (record.review_watch?.policy === 'disabled') {
+        findings.push({
+          code: 'AUTO_RECLAIM_DISABLED',
+          severity: 'warning',
+          worktree_id: record.worktree_id,
+          path: record.path,
+          detail: `已显式关闭跨会话回收（${record.review_watch.reason ?? 'no reason'}）；合入后需要人工 reclaim。`,
+        });
+      } else if (record.review_watch?.policy === 'auto') {
+        findings.push({
+          code: 'AUTO_RECLAIM_NOT_ARMED',
+          severity: 'error',
+          worktree_id: record.worktree_id,
+          path: record.path,
+          target_ref: record.review_watch.target_ref ?? null,
+          head_sha: record.review_watch.head_sha ?? null,
+          detail: record.review_watch.reason ?? '自动回收 intent 已登记，但 watcher 尚未武装；运行 resume-all 重试。',
+        });
+      } else {
+        findings.push({
+          code: 'AUTO_RECLAIM_INTENT_MISSING',
+          severity: 'error',
+          worktree_id: record.worktree_id,
+          path: record.path,
+          detail: `评审态 record 没有 watcher 或显式退出记录；运行 touch ${record.task} --status ready_for_review 重新登记。`,
+        });
+      }
+      return;
+    }
+    if (activeWatch) {
       const heartbeat = readWatcherHeartbeat(loaded.context.common_dir, record.worktree_id);
       const health = watcherHealth(record, heartbeat);
-      const advance = record.auto_reclaim.target_advance;
+      const advance = activeWatch.target_advance;
       if (advance) {
         const prediction = advance.prediction?.state ?? 'unknown';
         findings.push({
@@ -258,7 +294,7 @@ export function createCommands(deps) {
           severity: 'warning',
           worktree_id: record.worktree_id,
           path: record.path,
-          target_ref: record.auto_reclaim.target_ref,
+          target_ref: activeWatch.target_ref,
           target_sha: advance.target_sha,
           recorded_base_sha: advance.recorded_base_sha,
           prediction: advance.prediction,
@@ -462,6 +498,21 @@ export function createCommands(deps) {
       }
     }
     collectDoctorRecordFindings(loaded, listing, recordsById, findings);
+    const expectsDurableWatch = listing.rows.some((row) => row.record
+      && ['ready_for_review', 'integrating'].includes(row.record.task_status)
+      && (row.record.review_watch?.policy === 'auto'
+        || (row.record.auto_reclaim && !['disarmed', 'reclaimed'].includes(row.record.auto_reclaim.state))));
+    if (expectsDurableWatch) {
+      const service = watchServiceStatus(loaded);
+      if (service.supported && (!service.installed || !service.loaded || !service.program_available)) {
+        findings.push({
+          code: 'AUTO_RECLAIM_SERVICE_INACTIVE',
+          severity: 'warning',
+          path: service.plist_path ?? loaded.context.primary_worktree,
+          detail: '当前 watcher 只有进程级存活保证；运行 agentkit worktree watch-service install 启用跨会话恢复。',
+        });
+      }
+    }
     collectDoctorSupersessionFindings(listing, findings);
     collectDoctorSessionFindings(listing, findings);
     collectDoctorRuntimeFindings(loaded, findings);

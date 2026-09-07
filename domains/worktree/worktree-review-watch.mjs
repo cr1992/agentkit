@@ -48,14 +48,103 @@ export function createCommands(deps) {
     reclaimRecord,
   } = deps;
 
+  /** @param {Record<string,any>} record */
+  function activeAutoReclaim(record) {
+    return record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
+      ? record.auto_reclaim
+      : null;
+  }
+
+  /**
+   * review_watch 是“应不应该自动回收”的持久意图；auto_reclaim 是某一次实际 watcher 的租约。
+   * 两者分开后，启动前置条件失败、宿主杀进程和显式 --no-watch 不再都坍缩成字段缺失。
+   * @param {ReturnType<typeof loadRepositoryProfile>} loaded
+   * @param {Record<string,any>} record
+   * @param {{flags:Map<string,unknown>}} args
+   * @param {{head:string|null}} snapshot
+   */
+  function reviewWatchIntent(loaded, record, args, snapshot) {
+    const previous = record.review_watch?.policy === 'auto'
+      ? record.review_watch
+      : record.auto_reclaim ?? null;
+    const targetRef = aliasedFlag(args.flags, 'target', 'watch-target')
+      ?? previous?.target_ref
+      ?? record.base_ref
+      ?? loaded.profile.default_base
+      ?? null;
+    const changeRefValue = aliasedFlag(args.flags, 'change-ref', 'mr');
+    return {
+      policy: 'auto',
+      state: 'pending',
+      target_ref: targetRef,
+      head_sha: snapshot.head,
+      interval_ms: parseWatchInterval(flag(args.flags, 'interval-ms') ?? previous?.interval_ms),
+      change_ref: changeRefValue
+        ? oneLine(changeRefValue, 'change-ref', 1000)
+        : previous?.change_ref ?? null,
+      notify: parseNotifyMode(flag(args.flags, 'notify') ?? previous?.notify),
+      reason: null,
+      source: 'auto_touch',
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * @param {ReturnType<typeof loadRepositoryProfile>} loaded
+   * @param {Record<string,any>} record
+   * @param {Record<string,any>} intent
+   * @param {'pending'|'disabled'} state
+   * @param {string} reason
+   * @param {string|null} [disarmToken]
+   */
+  function persistReviewWatchIntent(loaded, record, intent, state, reason, disarmToken = null) {
+    const now = new Date().toISOString();
+    return appendTraceEvent({
+      commonDir: loaded.context.common_dir,
+      worktreeId: record.worktree_id,
+      eventType: state === 'disabled' ? 'review_watch_disabled' : 'review_watch_pending',
+      actor: record.agent,
+      details: {
+        policy: state === 'disabled' ? 'disabled' : 'auto',
+        target_ref: intent.target_ref,
+        head_sha: intent.head_sha,
+        reason,
+      },
+      mutate(current) {
+        if (current.worktree_state === 'reclaimed' || current.worktree_state === 'archived') {
+          throw new WorktreeTraceError('WATCH_INTENT_SETTLED', `已结算 record 不能更新 watch intent: ${record.worktree_id}`);
+        }
+        const next = structuredClone(current);
+        if (disarmToken) {
+          if (next.auto_reclaim?.token !== disarmToken || ['disarmed', 'reclaimed'].includes(next.auto_reclaim?.state)) {
+            throw new WorktreeTraceError('WATCHER_CHANGED', `watch token 已被并发更新或解除: ${record.worktree_id}`);
+          }
+          next.auto_reclaim.state = 'disarmed';
+          next.auto_reclaim.disarmed_at = now;
+          next.auto_reclaim.disarm_reason = 'explicit_no_watch';
+        }
+        next.review_watch = {
+          ...intent,
+          policy: state === 'disabled' ? 'disabled' : 'auto',
+          state,
+          reason,
+          updated_at: now,
+        };
+        next.updated_at = now;
+        return next;
+      },
+    }).record;
+  }
+
   function autoArmReviewWatch(loaded, record, args, snapshot) {
+    const existing = activeAutoReclaim(record);
+    const intent = reviewWatchIntent(loaded, record, args, snapshot);
     if (args.flags.get('no-watch')) {
+      persistReviewWatchIntent(loaded, record, intent, 'disabled', 'explicit_no_watch', existing?.token ?? null);
+      if (existing?.token) removeWatcherHeartbeat(loaded.context.common_dir, record.worktree_id, existing.token);
       log('watch 未武装：--no-watch 显式退出；合入后需要人工回收。');
       return;
     }
-    const existing = record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
-      ? record.auto_reclaim
-      : null;
     // 原子失效旧 watcher 后仍沿用它的 target/interval/change-ref 默认值，避免自动重冻结
     // 把人工显式选择的 target 静默改回该树登记的 base。
     const previous = record.auto_reclaim ?? null;
@@ -63,8 +152,11 @@ export function createCommands(deps) {
       log('watch 保持原冻结 SHA：目标分支已确认包含该 head，自动回收已进入提交阶段。');
       return;
     }
-    const skip = (reason) => log(`watch 未武装：${reason}；自动回收保持关闭，可补齐前提后重新 touch。`);
-    const targetRef = aliasedFlag(args.flags, 'target', 'watch-target') ?? previous?.target_ref ?? record.base_ref ?? loaded.profile.default_base;
+    const skip = (reason) => {
+      persistReviewWatchIntent(loaded, record, intent, 'pending', reason);
+      log(`watch 未武装：${reason}；自动回收保持关闭，已登记 pending，resume-all/维护服务会重试。`);
+    };
+    const targetRef = intent.target_ref;
     if (!targetRef || !targetRef.includes('/')) {
       skip(`无法确定远端主干 target（Profile default_base=${loaded.profile.default_base ?? 'null'}）`);
       return;
@@ -102,11 +194,9 @@ export function createCommands(deps) {
         targetRef,
         targetSha: refreshedTarget.target_sha,
         headSha: snapshot.head,
-        intervalMs: parseWatchInterval(flag(args.flags, 'interval-ms') ?? previous?.interval_ms),
-        changeRef: aliasedFlag(args.flags, 'change-ref', 'mr')
-          ? oneLine(aliasedFlag(args.flags, 'change-ref', 'mr'), 'change-ref', 1000)
-          : previous?.change_ref ?? null,
-        notifyMode: parseNotifyMode(flag(args.flags, 'notify') ?? previous?.notify),
+        intervalMs: intent.interval_ms,
+        changeRef: intent.change_ref,
+        notifyMode: intent.notify,
         explicitConfig: flag(args.flags, 'config') ? loaded.profile_path : null,
         previousHealth: health.reason,
         armedBy: 'auto_touch',
@@ -196,6 +286,18 @@ export function createCommands(deps) {
           disarmed_at: null,
           disarm_reason: null,
           pid: null,
+        };
+        next.review_watch = {
+          policy: 'auto',
+          state: 'armed',
+          target_ref: options.targetRef,
+          head_sha: options.headSha,
+          interval_ms: options.intervalMs,
+          change_ref: options.changeRef,
+          notify: options.notifyMode,
+          reason: null,
+          source: options.armedBy ?? existing?.armed_by ?? 'explicit',
+          updated_at: now,
         };
         next.updated_at = now;
         return next;
@@ -465,24 +567,71 @@ export function createCommands(deps) {
   }
 
   function cmdResumeAll(args) {
-    rejectUnknownFlags(args.flags, ['json', 'config']);
+    rejectUnknownFlags(args.flags, ['json', 'quiet', 'config']);
     if (args.positionals.length) die('resume-all 不接受 selector；它只扫描已 arm record。', 2);
     const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
     const result = { resumed: [], healthy: [], skipped: [] };
-    const records = loadRecords(loaded.context.common_dir).filter((record) =>
-      record.auto_reclaim &&
-      !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state) &&
-      // archive 的前置条件本身已经要求 watcher 先 disarm，正常路径不会走到这里；这里保留
-      // 一道防线，避免归档记录被任何遗留/异常状态误当作待恢复 watcher。
-      record.worktree_state !== 'reclaimed' && record.worktree_state !== 'archived');
+    const records = loadRecords(loaded.context.common_dir).filter((record) => {
+      if (record.worktree_state === 'reclaimed' || record.worktree_state === 'archived') return false;
+      if (activeAutoReclaim(record)) return true;
+      if (!['ready_for_review', 'integrating'].includes(record.task_status)) return false;
+      // auto intent 要重试；没有任何 intent 的 legacy/live record 也必须进入 skipped，不能继续 0/0/0 隐身。
+      return record.review_watch?.policy === 'auto' || !record.review_watch;
+    });
     for (const record of records) {
+      const existing = activeAutoReclaim(record);
+      if (!existing) {
+        const intent = record.review_watch;
+        if (!intent) {
+          result.skipped.push({ worktree_id: record.worktree_id, task: record.task, reason: 'review watch intent missing; touch ready_for_review again' });
+          continue;
+        }
+        const snapshot = liveGitSnapshot(record);
+        let reason = null;
+        if (!snapshot.present) reason = 'worktree missing';
+        else if (snapshot.dirty !== false) reason = 'worktree dirty';
+        else if (!snapshot.head || snapshot.head !== intent.head_sha) reason = 'live head differs from pending intent';
+        else {
+          const upstream = gitTry(['rev-parse', '@{upstream}^{commit}'], record.path);
+          if (!upstream.ok || upstream.out !== snapshot.head) reason = 'current head not fully pushed to upstream';
+        }
+        if (!intent.target_ref || typeof intent.target_ref !== 'string') reason ??= 'target ref missing';
+        const intervalMs = Number(intent.interval_ms);
+        if (!Number.isInteger(intervalMs) || intervalMs < WATCH_MIN_INTERVAL_MS || intervalMs > WATCH_MAX_INTERVAL_MS) reason ??= 'interval invalid';
+        let refreshed = null;
+        if (!reason) {
+          refreshed = refreshTargetRef(intent.target_ref, loaded.context.current_worktree);
+          if (!refreshed.ok) reason = `target ref unavailable: ${intent.target_ref}`;
+        }
+        if (reason) {
+          result.skipped.push({ worktree_id: record.worktree_id, task: record.task, reason });
+          continue;
+        }
+        try {
+          const started = startWatcher(loaded, record, {
+            targetRef: intent.target_ref,
+            targetSha: refreshed.target_sha,
+            headSha: intent.head_sha,
+            intervalMs,
+            changeRef: intent.change_ref ?? null,
+            notifyMode: intent.notify ?? 'auto',
+            explicitConfig: flag(args.flags, 'config') ? loaded.profile_path : null,
+            previousHealth: intent.reason ?? 'pending intent',
+            armedBy: intent.source ?? 'auto_touch',
+          });
+          result.resumed.push({ worktree_id: record.worktree_id, task: record.task, pid: started.pid, previous_health: intent.reason ?? 'pending intent', dirty: false });
+        } catch (error) {
+          result.skipped.push({ worktree_id: record.worktree_id, task: record.task, reason: error instanceof Error ? error.message : String(error) });
+        }
+        continue;
+      }
       const heartbeat = readWatcherHeartbeat(loaded.context.common_dir, record.worktree_id);
       const health = watcherHealth(record, heartbeat);
       if (health.healthy) {
         result.healthy.push({ worktree_id: record.worktree_id, task: record.task, pid: heartbeat.state.pid });
         continue;
       }
-      const auto = record.auto_reclaim;
+      const auto = existing;
       const intervalMs = Number(auto.interval_ms);
       const snapshot = liveGitSnapshot(record);
       let reason = null;
@@ -512,6 +661,7 @@ export function createCommands(deps) {
         result.skipped.push({ worktree_id: record.worktree_id, task: record.task, reason: error instanceof Error ? error.message : String(error) });
       }
     }
+    if (args.flags.get('quiet')) return;
     if (args.flags.get('json')) {
       console.log(JSON.stringify(result, null, 2));
       return;
@@ -526,17 +676,45 @@ export function createCommands(deps) {
     rejectUnknownFlags(args.flags, ['id', 'config']);
     const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
     let record = selectRecord(loadRecords(loaded.context.common_dir), args.positionals[0] ?? null, flag(args.flags, 'id'));
-    const token = record.auto_reclaim?.token;
-    if (!token || ['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)) {
-      log(`watcher 未 arm: ${record.worktree_id.slice(0, 8)}`);
+    if (record.worktree_state === 'reclaimed' || record.worktree_state === 'archived') {
+      log(`已结算，无需 unwatch: ${record.worktree_id.slice(0, 8)}`);
       return;
     }
-    if (record.auto_reclaim.state === 'merge_detected') {
+    const active = activeAutoReclaim(record);
+    const token = active?.token;
+    if (!token) {
+      if (record.review_watch?.policy === 'disabled') {
+        log(`watcher 未 arm: ${record.worktree_id.slice(0, 8)}`);
+        return;
+      }
+      const snapshot = liveGitSnapshot(record);
+      const intent = {
+        ...(record.review_watch ?? {}),
+        target_ref: record.review_watch?.target_ref ?? record.base_ref ?? null,
+        head_sha: record.review_watch?.head_sha ?? snapshot.head,
+        interval_ms: record.review_watch?.interval_ms ?? parseWatchInterval(null),
+        change_ref: record.review_watch?.change_ref ?? null,
+        notify: record.review_watch?.notify ?? 'auto',
+        source: record.review_watch?.source ?? 'explicit',
+      };
+      persistReviewWatchIntent(loaded, record, intent, 'disabled', 'explicit_unwatch');
+      log(`auto-reclaim 已明确关闭: ${record.worktree_id.slice(0, 8)}`);
+      return;
+    }
+    if (active.state === 'merge_detected') {
       die('目标分支已确认包含冻结的 MR head，自动回收已进入提交阶段，不能再 unwatch。');
     }
     record = appendReclaimEvent(loaded.context.common_dir, record, 'auto_reclaim_disarmed', (next) => {
       next.auto_reclaim.state = 'disarmed';
       next.auto_reclaim.disarmed_at = new Date().toISOString();
+      next.auto_reclaim.disarm_reason = 'explicit_unwatch';
+      next.review_watch = {
+        ...(next.review_watch ?? {}),
+        policy: 'disabled',
+        state: 'disabled',
+        reason: 'explicit_unwatch',
+        updated_at: new Date().toISOString(),
+      };
     });
     removeWatcherHeartbeat(loaded.context.common_dir, record.worktree_id, token);
     log(`auto-reclaim watcher 已解除: ${record.worktree_id.slice(0, 8)}`);

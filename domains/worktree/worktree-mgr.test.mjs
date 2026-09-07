@@ -2641,7 +2641,14 @@ test('touch ready_for_review 默认武装 watch，--no-watch 退出，HEAD 变�
   git(optedOutTree, ['push', '-u', 'origin', 'HEAD']);
   const optedOut = manager(fixture.repo, ['touch', 'opted-out-review', '--status', 'ready_for_review', '--no-watch']);
   assert.match(optedOut, /--no-watch/);
-  assert.equal(recordFor(fixture, 'opted-out-review').auto_reclaim ?? null, null);
+  const optedOutRecord = recordFor(fixture, 'opted-out-review');
+  assert.equal(optedOutRecord.auto_reclaim ?? null, null);
+  assert.equal(optedOutRecord.review_watch.policy, 'disabled');
+  assert.equal(optedOutRecord.review_watch.reason, 'explicit_no_watch');
+  assert.equal(
+    JSON.parse(manager(fixture.repo, ['doctor', '--json'])).findings.some((finding) => finding.code === 'AUTO_RECLAIM_DISABLED'),
+    true,
+  );
 
   // 人工 watch 的 target 属于显式指令，touch 不得静默改指。
   manager(fixture.repo, ['watch', 'opted-out-review', '--target', 'origin/main']);
@@ -2708,9 +2715,12 @@ test('touch ready_for_review 默认武装 watch，--no-watch 退出，HEAD 变�
   assert.equal(audit.events.some((event) => event.event_type === 'auto_reclaim_rearmed'), true);
 });
 
-test('未推送或无远端主干时自动武装 fail-soft，touch 本身仍然成功', (t) => {
+test('未推送时持久化 pending intent，doctor 可见且 resume-all 在 push 后恢复', (t) => {
   const fixture = makeRemoteRepo();
-  t.after(fixture.cleanup);
+  t.after(() => {
+    try { manager(fixture.repo, ['unwatch', 'unpushed-review']); } catch {}
+    fixture.cleanup();
+  });
   manager(fixture.repo, [
     'spawn', 'unpushed-review', '--base', 'origin/main',
     '--agent', 'codex', '--agent-id', 'unpushed-thread', '--purpose', '未推送即进入验收',
@@ -2724,8 +2734,54 @@ test('未推送或无远端主干时自动武装 fail-soft，touch 本身仍然�
   assert.match(output, /已更新/);
   assert.match(output, /watch 未武装/);
   assert.match(output, /尚未完整 push/);
-  assert.equal(recordFor(fixture, 'unpushed-review').task_status, 'ready_for_review');
-  assert.equal(recordFor(fixture, 'unpushed-review').auto_reclaim ?? null, null);
+  let record = recordFor(fixture, 'unpushed-review');
+  assert.equal(record.task_status, 'ready_for_review');
+  assert.equal(record.auto_reclaim ?? null, null);
+  assert.equal(record.review_watch.policy, 'auto');
+  assert.equal(record.review_watch.state, 'pending');
+  assert.match(record.review_watch.reason, /尚未完整 push/);
+  let doctor = JSON.parse(manager(fixture.repo, ['doctor', '--json']));
+  assert.equal(doctor.findings.some((finding) => finding.code === 'AUTO_RECLAIM_NOT_ARMED'), true);
+
+  const blocked = JSON.parse(manager(fixture.repo, ['resume-all', '--json']));
+  assert.equal(blocked.resumed.length, 0);
+  assert.equal(blocked.skipped.length, 1);
+  assert.match(blocked.skipped[0].reason, /not fully pushed/);
+
+  git(worktree, ['push', '-u', 'origin', 'HEAD']);
+  const resumed = JSON.parse(manager(fixture.repo, ['resume-all', '--json']));
+  assert.equal(resumed.resumed.length, 1);
+  record = recordFor(fixture, 'unpushed-review');
+  assert.equal(record.review_watch.state, 'armed');
+  assert.equal(record.auto_reclaim.state, 'watching');
+  doctor = JSON.parse(manager(fixture.repo, ['doctor', '--json']));
+  assert.equal(doctor.findings.some((finding) => finding.code === 'AUTO_RECLAIM_NOT_ARMED'), false);
+});
+
+test('legacy 评审态缺少 watch intent 时 doctor 和 resume-all 都不得静默忽略', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+  const task = 'legacy-watch-intent';
+  prepareReviewTask(fixture, task);
+  const record = recordFor(fixture, task);
+  appendTraceEvent({
+    commonDir: join(fixture.repo, '.git'),
+    worktreeId: record.worktree_id,
+    eventType: 'legacy_watch_intent_fixture',
+    actor: record.agent,
+    mutate(current) {
+      const next = structuredClone(current);
+      delete next.review_watch;
+      return next;
+    },
+  });
+
+  const doctor = JSON.parse(manager(fixture.repo, ['doctor', '--json']));
+  assert.equal(doctor.findings.some((finding) => finding.code === 'AUTO_RECLAIM_INTENT_MISSING'), true);
+  const resumed = JSON.parse(manager(fixture.repo, ['resume-all', '--json']));
+  assert.equal(resumed.resumed.length, 0);
+  assert.equal(resumed.skipped.length, 1);
+  assert.match(resumed.skipped[0].reason, /intent missing/);
 });
 
 test('watcher 区分 target 前进的干净预判，refresh-review 可暂停门禁后精确 push 并重冻结', async (t) => {
@@ -3050,8 +3106,10 @@ test('[P1-2] 冻结 head 过期且无法重冻结时解除旧 watcher，不让�
   const record = recordFor(fixture, task);
   assert.equal(record.auto_reclaim.state, 'disarmed');
   assert.equal(record.auto_reclaim.disarm_reason, 'stale_frozen_head');
+  assert.equal(record.review_watch.state, 'pending');
   const audit = JSON.parse(manager(fixture.repo, ['audit', task, '--json']));
-  assert.equal(audit.events.length, auditBefore.events.length + 1, '状态更新与 watcher 失效必须由同一条原子 event 完成');
+  assert.equal(audit.events.length, auditBefore.events.length + 2, '原子 disarm 后应另记一条可恢复 pending intent');
+  assert.deepEqual(audit.events.slice(-2).map((event) => event.event_type), ['auto_reclaim_disarmed', 'review_watch_pending']);
   const disarm = audit.events.filter((event) => event.event_type === 'auto_reclaim_disarmed').at(-1);
   assert.equal(disarm.details.source, 'auto_touch_head_drift');
   assert.equal(disarm.details.stale_head_sha, firstHead);

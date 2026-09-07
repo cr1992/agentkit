@@ -2,6 +2,11 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
+## Unreleased
+
+- `manage-worktrees` 持久化评审 watcher 的 pending/disabled 意图，让 `doctor` 与 `resume-all` 不再忽略未武装记录。
+- 新增 macOS `watch-service` LaunchAgent，为已登记 watcher 提供跨 Agent 会话与重启后的自动恢复触发。
+
 ## 1.0.0 - 2026-09-04
 
 - 将四个 Agent 工程 Skill 收敛为一个零依赖 Node.js CLI 与四个薄壳。
