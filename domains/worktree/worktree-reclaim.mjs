@@ -281,19 +281,49 @@ export function createCommands(deps) {
     return refs.out.split('\n').filter(Boolean).filter((ref) => ref !== ownBranch).sort();
   }
 
+  /**
+   * 回收可以从目标 worktree 自身发起。目标目录一旦被移除，命令启动时的 current_worktree
+   * 就不再是合法 cwd；后续仓库级 Git 操作必须固定使用不会被本次回收删除的 primary worktree。
+   * @param {ReturnType<typeof loadRepositoryProfile>} loaded
+   */
+  function repositoryGitCwd(loaded) {
+    return loaded.context.primary_worktree ?? loaded.context.current_worktree;
+  }
+
+  /**
+   * `git show-ref --verify --quiet` 的退出码 1 才表示 ref 不存在。ENOENT、权限错误或其他
+   * operational failure 不能降级成 absent，否则会产生“branch=absent”假成功。
+   * @param {ReturnType<typeof loadRepositoryProfile>} loaded
+   * @param {Record<string,any>} record
+   */
+  function inspectLocalBranch(loaded, record) {
+    if (!record.branch) return { state: 'absent', reason: null };
+    const checked = gitTry(
+      ['show-ref', '--verify', '--quiet', `refs/heads/${record.branch}`],
+      repositoryGitCwd(loaded),
+    );
+    if (checked.ok) return { state: 'exists', reason: null };
+    const status = checked.error && typeof checked.error === 'object' && 'status' in checked.error
+      ? checked.error.status
+      : null;
+    if (status === 1) return { state: 'absent', reason: null };
+    return {
+      state: 'error',
+      reason: commandFailureReason(checked, `unable to inspect local branch ${record.branch}`),
+    };
+  }
+
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} record */
   function localBranchExists(loaded, record) {
-    return Boolean(record.branch) && gitTry(
-      ['show-ref', '--verify', '--quiet', `refs/heads/${record.branch}`],
-      loaded.context.current_worktree,
-    ).ok;
+    return inspectLocalBranch(loaded, record).state !== 'absent';
   }
 
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} record @param {string} pushed */
   function attemptLocalBranchCleanup(loaded, record, pushed) {
     const checkedAt = new Date().toISOString();
     const previousAttempts = Number(record.branch_cleanup?.attempts ?? 0);
-    if (!record.branch || !localBranchExists(loaded, record)) {
+    const branchState = inspectLocalBranch(loaded, record);
+    if (branchState.state === 'absent') {
       return {
         status: 'absent',
         branch: record.branch ?? null,
@@ -302,7 +332,17 @@ export function createCommands(deps) {
         reason: null,
       };
     }
-    if (!gitTry(['merge-base', '--is-ancestor', record.branch, pushed], loaded.context.current_worktree).ok) {
+    if (branchState.state === 'error') {
+      return {
+        status: 'failed',
+        branch: record.branch,
+        attempts: previousAttempts + 1,
+        checked_at: checkedAt,
+        reason: branchState.reason,
+      };
+    }
+    const cwd = repositoryGitCwd(loaded);
+    if (!gitTry(['merge-base', '--is-ancestor', record.branch, pushed], cwd).ok) {
       return {
         status: 'failed',
         branch: record.branch,
@@ -311,7 +351,7 @@ export function createCommands(deps) {
         reason: `local branch tip is not merged into pushed sha: ${pushed}`,
       };
     }
-    const removed = gitTry(['branch', '-D', '--', record.branch], loaded.context.current_worktree);
+    const removed = gitTry(['branch', '-D', '--', record.branch], cwd);
     if (removed.ok) {
       return {
         status: 'deleted',
@@ -332,8 +372,8 @@ export function createCommands(deps) {
 
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} record @param {string} pushed */
   function reconcileReclaimedBranchCleanup(loaded, record, pushed) {
-    const branchExists = localBranchExists(loaded, record);
-    if (['deleted', 'absent'].includes(record.branch_cleanup?.status) && !branchExists) {
+    const branchState = inspectLocalBranch(loaded, record);
+    if (['deleted', 'absent'].includes(record.branch_cleanup?.status) && branchState.state === 'absent') {
       return { record, branch_cleanup: record.branch_cleanup, changed: false };
     }
     const cleanup = attemptLocalBranchCleanup(loaded, record, pushed);
@@ -511,7 +551,8 @@ export function createCommands(deps) {
         branch_cleanup_changed: terminal.changed || reconciled.changed,
       };
     }
-    const registeredAtStart = parseWorktrees(loaded.context.current_worktree)
+    const repositoryCwd = repositoryGitCwd(loaded);
+    const registeredAtStart = parseWorktrees(repositoryCwd)
       .find((worktree) => worktree.path === canonicalSelectorPath(record.path));
     if (!registeredAtStart && existsSync(record.path)) {
       return {
@@ -538,14 +579,14 @@ export function createCommands(deps) {
       }, { pushed, evidence: options.evidence ?? null });
     }
 
-    const live = parseWorktrees(loaded.context.current_worktree).find((worktree) => worktree.path === canonicalSelectorPath(record.path));
+    const live = parseWorktrees(repositoryCwd).find((worktree) => worktree.path === canonicalSelectorPath(record.path));
     if (live) {
       const submodules = reclaimSubmodules(live.path);
       if (submodules.reason) return { reclaimed: false, reason: submodules.reason, record };
-      const removed = gitTry(['worktree', 'remove', live.path], loaded.context.current_worktree);
+      const removed = gitTry(['worktree', 'remove', live.path], repositoryCwd);
       if (!removed.ok) {
         const detail = commandFailureReason(removed, 'git worktree remove refused');
-        const stillRegistered = parseWorktrees(loaded.context.current_worktree)
+        const stillRegistered = parseWorktrees(repositoryCwd)
           .some((worktree) => worktree.path === canonicalSelectorPath(record.path));
         const residue = !stillRegistered && existsSync(record.path)
           ? '; Git registration was removed but the physical directory remains'
@@ -569,7 +610,7 @@ export function createCommands(deps) {
         };
       }
     }
-    gitTry(['worktree', 'prune'], loaded.context.current_worktree);
+    gitTry(['worktree', 'prune'], repositoryCwd);
     const branchCleanup = attemptLocalBranchCleanup(loaded, record, pushed);
     record = appendReclaimEvent(loaded.context.common_dir, record, 'reclaimed', (next) => {
       const completedAt = new Date().toISOString();
@@ -659,6 +700,7 @@ export function createCommands(deps) {
     }
     if (result.branch_cleanup?.status === 'failed') {
       log(`目录已回收 ${result.record.worktree_id.slice(0, 8)}；本地分支 ${result.record.branch} 清理待重试: ${result.branch_cleanup.reason}`);
+      process.exitCode = 1;
       return;
     }
     const recovery = result.record.evidence_archive?.archive_ref

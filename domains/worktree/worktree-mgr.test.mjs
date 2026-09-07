@@ -1096,6 +1096,33 @@ test('reclaim_ready 后目录和分支已消失仍可幂等收尾', (t) => {
   assert.equal(reclaimed.branch_cleanup.status, 'absent');
 });
 
+test('从目标 worktree 自身执行 reclaim 仍使用 primary cwd 清理分支并验证后置条件', (t) => {
+  const fixture = makeRepo();
+  t.after(fixture.cleanup);
+  manager(fixture.repo, ['spawn', 'self-cwd-cleanup', '--agent', 'codex', '--agent-id', 'self-cwd-1', '--purpose', 'reclaim from target worktree']);
+  const record = recordFor(fixture, 'self-cwd-cleanup');
+  const worktree = record.path;
+  writeFileSync(join(worktree, 'self-cwd.txt'), 'self cwd cleanup\n');
+  git(worktree, ['add', 'self-cwd.txt']);
+  git(worktree, ['commit', '-m', 'feat: self cwd cleanup fixture']);
+  git(fixture.repo, ['merge', '--no-ff', '--no-edit', record.branch]);
+  const pushed = git(fixture.repo, ['rev-parse', 'HEAD']);
+
+  const output = manager(worktree, ['reclaim', 'self-cwd-cleanup', '--pushed', pushed]);
+  assert.match(output, /已回收.*branch=deleted/);
+  assert.equal(existsSync(worktree), false);
+  assert.throws(() => git(fixture.repo, ['show-ref', '--verify', `refs/heads/${record.branch}`]));
+
+  const listed = JSON.parse(manager(fixture.repo, ['list', '--all', '--json']));
+  const reclaimed = listed.records.find((item) => item.worktree_id === record.worktree_id);
+  assert.equal(reclaimed.worktree_state, 'reclaimed');
+  assert.equal(reclaimed.branch_cleanup.status, 'deleted');
+  assert.equal(reclaimed.branch_cleanup.attempts, 1);
+  const doctor = JSON.parse(manager(fixture.repo, ['doctor', '--json']));
+  assert.equal(doctor.findings.some((item) =>
+    item.worktree_id === record.worktree_id && item.code === 'LOCAL_BRANCH_CLEANUP_FAILED'), false);
+});
+
 test('本地分支删除失败不伪装完整收尾，doctor/list 持续可见且 reclaim 可幂等重试', (t) => {
   const fixture = makeRepo();
   t.after(fixture.cleanup);
@@ -1120,7 +1147,7 @@ test('本地分支删除失败不伪装完整收尾，doctor/list 持续可见�
 
   const holder = join(fixture.sandbox, 'branch-holder');
   git(fixture.repo, ['worktree', 'add', holder, record.branch]);
-  const firstOutput = manager(fixture.repo, ['reclaim', 'branch-cleanup', '--pushed', pushed]);
+  const firstOutput = managerKeep(fixture.repo, ['reclaim', 'branch-cleanup', '--pushed', pushed]);
   assert.match(firstOutput, /目录已回收.*本地分支.*清理待重试/);
 
   let listed = JSON.parse(manager(fixture.repo, ['list', '--all', '--json']));
@@ -1144,7 +1171,7 @@ test('本地分支删除失败不伪装完整收尾，doctor/list 持续可见�
   git(holder, ['add', 'late-work.txt']);
   git(holder, ['commit', '-m', 'feat: late branch work']);
   git(holder, ['switch', '--detach']);
-  const refusedRetry = manager(fixture.repo, ['reclaim', 'branch-cleanup', '--pushed', pushed]);
+  const refusedRetry = managerKeep(fixture.repo, ['reclaim', 'branch-cleanup', '--pushed', pushed]);
   assert.match(refusedRetry, /清理待重试.*not merged into pushed sha/);
   assert.equal(git(fixture.repo, ['show-ref', '--verify', `refs/heads/${record.branch}`]).length > 0, true);
   listed = JSON.parse(manager(fixture.repo, ['list', '--all', '--json']));

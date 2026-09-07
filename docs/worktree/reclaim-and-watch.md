@@ -20,6 +20,11 @@ agentkit worktree reclaim <task-or-id> --pushed <sha-or-unique-prefix>
 final_snapshot -> reclaim_ready -> git worktree remove -> branch cleanup -> reclaimed
 ```
 
+命令可以从待回收 worktree 自身发起；runtime 在删除目录前冻结 primary worktree 作为后续仓库级 Git
+操作的稳定 cwd。branch probe 只有在 `show-ref` 明确返回“不存在”时才记为 `absent`，cwd、权限或其他
+执行错误一律 fail closed。目录已删除但 branch cleanup 未完成时保留 `BRANCH_PENDING`，命令返回非零，
+从任一仍存在的 worktree 重跑同一 `reclaim` 完成对账。
+
 终态事件将非 `abandoned` 任务收敛为 `done`，并以最终 source HEAD 闭合 ownership epoch。旧版本若留下
 `reclaimed` 但状态或 epoch 未闭合，重复同一命令会追加 reconciliation event 后再对账。
 
@@ -88,7 +93,8 @@ agentkit worktree reclaim old-task \
 
 - `abandoned` 只冻结写入，不等于已回收；`doctor` 持续报告残留树和断裂替代关系。
 - 禁止 `rm -rf`、`git worktree remove --force` 和 `branch -D`。
-- branch cleanup 失败时保留 `BRANCH_PENDING`；修复占用后重跑相同 `reclaim`，工具重新验证 branch tip。
+- branch cleanup 失败时保留 `BRANCH_PENDING` 并返回非零；修复占用后从仍存在的 worktree 重跑相同
+  `reclaim`，工具重新验证 branch tip。
 - `git worktree remove` 失败返回非零 `KEEP` 并记录原始错误。即使 Git 登记已解除，物理目录仍在也不能
   标为 `reclaimed`；先恢复权限或登记关系，不用强删掩盖孤儿目录。
 - 含 submodule 的树逐个验证已初始化工作区干净，再自动 deinit 并清理该树私有元数据。submodule 脏、
