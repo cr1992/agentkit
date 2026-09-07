@@ -11,7 +11,7 @@
 其内部再按有效能力、任务规模、本地模型配置和验收证据选择轻量或完整运行方式及后续重路由。
 各 provider 仍可独立使用，并通过冻结的 Artifact、Binding 和 Evidence envelope 按需组合。
 
-[Agent Skills 协作契约与安全边界（v1.0.0）](./docs/architecture/skill-system-architecture.md)
+[Agent Skills 协作契约与安全边界（v1.1.0）](./docs/architecture/skill-system-architecture.md)
 
 ## 包含的 Skill
 
