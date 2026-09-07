@@ -1210,7 +1210,9 @@ CLI `--help`、`init` 的 `ledger` / `state_root` 回显与 state root 误传指
   rerere 配置、结果落账和展示阶段；
 - `worktree-review-watch.mjs` / `worktree-review-refresh.mjs`：分别负责 submit/watch/worker 与显式
   review refresh 补偿事务，后台 watcher 不持有 refresh 权限；
-- `worktree-reclaim.mjs`：回收证明、submodule 检查、目录和 branch 两阶段清理；
+- `worktree-reclaim.mjs`：回收证明、submodule 检查、目录和 branch 两阶段清理；允许从目标 worktree
+  自身发起回收，但删除目录后的仓库级 Git 操作固定使用 primary worktree 作为稳定 cwd；branch probe
+  区分明确 absent 与 operational failure，`BRANCH_PENDING` 返回非零并保留幂等重试；
 - `worktree-archive.mjs`：`archive` 命令——只对目录已不存在、分支已删除或已合入、且未武装监听的
   历史 record 追加 `archived` event；纯 trace 元数据操作，不写任何 Git 对象或 ref，与
   `worktree-reclaim.mjs` 的职责边界严格分离；
