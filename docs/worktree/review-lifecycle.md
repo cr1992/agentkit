@@ -17,6 +17,13 @@ agentkit worktree touch <selector> --status ready_for_review
 则持久登记 `disabled`，与启动失败严格区分。`doctor` 对 pending、缺失 intent 和显式退出分别报告
 `AUTO_RECLAIM_NOT_ARMED`、`AUTO_RECLAIM_INTENT_MISSING` 与 `AUTO_RECLAIM_DISABLED`。
 
+`--no-watch` 只用于两种情况：change request 确定不会合入（与 `unwatch` 同一判据）；或该树的合入在结构上
+无法被 watcher 观测且原因是永久的（例如仓库没有可刷新的远端 target），此时留在 pending 只会积一条永远清不
+掉的 `AUTO_RECLAIM_NOT_ARMED`（error），按强制流程会挡住后续 `spawn/adopt`。除此之外一律不要关：watcher
+活不过当前会话是 `watch-service` 要解决的问题，不是关 watcher 的理由；也不能拿它临时压后台进程数——
+`disabled` 是持久策略，`resume-all` 不重试，没有“解除节流”这一步。dirty、未 push、网络等**可恢复**原因
+导致的武装失败，留在 pending 等重试，不要转成 `disabled`。
+
 进程级 watcher 只保证当前宿主允许后台进程存活期间的即时回收。需要跨 Agent 会话或机器重启：
 
 ```bash

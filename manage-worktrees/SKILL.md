@@ -58,7 +58,7 @@ manager 的 trace/common-dir 状态只应由受信 operator/controller 与 runti
 
 | 阶段 | 最小命令面 | 硬门禁与按需文档 |
 |---|---|---|
-| 恢复/盘点 | `resume-all` → `list` → `doctor` | `list/doctor` 只读；`UNTRACKED` 不等于无人使用；`EPHEMERAL` 优先 commit+push；任何 error 都暂停 `spawn/adopt` |
+| 恢复/盘点 | `watch-service status` → `resume-all` → `list` → `doctor` | 常驻服务未安装时只报告并建议 `watch-service install`，不得用 `--no-watch` 顶替；`list/doctor` 只读；`UNTRACKED` 不等于无人使用；`EPHEMERAL` 优先 commit+push；任何 error 都暂停 `spawn/adopt` |
 | 碰撞扫描 | `scan --target <paths>` | `COLLIDE`、范围不确定或重做昂贵时隔离；`CLEAR` 仅在 owner 明确且改动小时共享；低置信后缀匹配先人工核对路径基准 |
 | 交付身份 | 选择复用/并存/替代 | branch、MR 或目录名不同不能单独证明独立交付；同一 agent 有存量树或需要替代时读交付身份（`agentkit docs worktree delivery-identity`） |
 | 创建/接管 | `spawn <semantic-slug>` / `adopt <path>` | 使用真实 agent-id，不猜身份；task 至少两个 lowercase 语义分词；base、root、堆叠、rebase/retarget 读创建与堆叠（`agentkit docs worktree spawn-and-stack`） |
@@ -67,9 +67,9 @@ manager 的 trace/common-dir 状态只应由受信 operator/controller 与 runti
 | 批量集成 | `plan-batch` → `batch-integrate` → `batch-step` → `batch-result` | 同仓同 target：≥3 默认聚合，2 个仅在碰撞时；只合成冻结 SHA，不代跑门禁；合同/顺序/target 变化即重规划；读批量集成（`agentkit docs worktree batch-integration`） |
 | 回收 | `reclaim` / `archive` | 必须有远端/其他 ref 可达证明或明确 archive evidence；dirty、stash、submodule、权限或 branch-tip 异常一律 `KEEP`；替代树默认先归档，`--discard` 需人工明确授权；读回收与看护（`agentkit docs worktree reclaim-and-watch`） |
 
-`resume-all` 只提供当次恢复。需要跨 Agent 会话、注销或重启后仍自动恢复 watcher 时，先检查
-`agentkit worktree watch-service status`；macOS 可由用户一次性显式执行 `watch-service install`。
-未安装常驻维护器时不得把进程级 watcher 描述成跨会话保证。
+`resume-all` 只提供当次恢复。跨 Agent 会话、注销或重启后仍要自动恢复 watcher，靠的是常驻维护器：
+macOS 由用户一次性显式执行 `watch-service install`。未安装时不得把进程级 watcher 描述成跨会话保证，
+也不得因此改用 `--no-watch`（判据见评审生命周期）——那只会把待回收的树变成无人看护。
 
 不得按目录年龄、名称或“看起来干净”删除。禁止 `rm -rf`、`git worktree remove --force`、`branch -D`
 和 feature owner 手工 rebase。watcher 的 `merge-tree` 结果只是目标前进后的只读成本预判，不保证逐

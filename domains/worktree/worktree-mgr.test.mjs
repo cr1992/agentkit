@@ -3646,3 +3646,66 @@ test('archive 对目录仍存在、分支未合入、watcher 武装分别 KEEP�
   const absentOutput = manager(fixture.repo, ['archive', 'archive-branch-absent', '--reason', 'branch already deleted']);
   assert.match(absentOutput, /basis=branch_absent/);
 });
+
+test('doctor 对已回收 record 不再生成需要活树才能收敛的 metadata finding', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+
+  manager(fixture.repo, [
+    'spawn', 'stack-parent-reclaim-noise', '--base', 'origin/main',
+    '--agent', 'codex', '--agent-id', 'reclaim-noise-parent', '--purpose', '堆叠父任务',
+  ]);
+  const parent = worktreeFor(fixture, 'stack-parent-reclaim-noise');
+  writeFileSync(join(parent, 'parent.txt'), 'parent v1\n');
+  git(parent, ['add', 'parent.txt']);
+  git(parent, ['commit', '-m', 'feat: parent v1']);
+  git(parent, ['push', '-u', 'origin', 'HEAD']);
+  manager(fixture.repo, ['touch', 'stack-parent-reclaim-noise']);
+  const parentBranch = branchFor(fixture, 'stack-parent-reclaim-noise');
+
+  manager(fixture.repo, [
+    'spawn', 'stack-child-reclaim-noise', '--base', `origin/${parentBranch}`, '--base-reason', '依赖父任务',
+    '--agent', 'codex', '--agent-id', 'reclaim-noise-child', '--purpose', '堆叠子任务',
+  ]);
+  const child = worktreeFor(fixture, 'stack-child-reclaim-noise');
+  const childId = recordFor(fixture, 'stack-child-reclaim-noise').worktree_id;
+  writeFileSync(join(child, 'child.txt'), 'child v1\n');
+  git(child, ['add', 'child.txt']);
+  git(child, ['commit', '-m', 'feat: child v1']);
+
+  // 父任务 HEAD 前进。树还活着时这是真信号（managed rebase / retarget 都做得到），必须照报。
+  writeFileSync(join(parent, 'parent-next.txt'), 'parent v2\n');
+  git(parent, ['add', 'parent-next.txt']);
+  git(parent, ['commit', '-m', 'feat: parent v2']);
+  git(parent, ['push', 'origin', 'HEAD']);
+  manager(fixture.repo, ['touch', 'stack-parent-reclaim-noise']);
+
+  const live = JSON.parse(manager(fixture.repo, ['doctor', '--json'])).findings
+    .filter((finding) => finding.worktree_id === childId);
+  assert.equal(
+    live.some((finding) => finding.code === 'STACK_PARENT_ADVANCED'),
+    true,
+    '活树上父 HEAD 前进仍然必须照报，guard 不能把真信号一起吃掉',
+  );
+
+  const childBranch = branchFor(fixture, 'stack-child-reclaim-noise');
+  git(fixture.repo, ['merge', '--no-ff', '--no-edit', childBranch]);
+  const pushed = git(fixture.repo, ['rev-parse', 'HEAD']);
+  manager(fixture.repo, ['reclaim', 'stack-child-reclaim-noise', '--pushed', pushed]);
+
+  // 目录已删除：下面这些 finding 的补救动作全都需要活树，对已回收 record 只会是永远清不掉的噪声，
+  // 其中 error 级的还会按「任何 error 都暂停 spawn/adopt」把后续派工钉死。
+  const after = JSON.parse(manager(fixture.repo, ['doctor', '--json'])).findings
+    .filter((finding) => finding.worktree_id === childId);
+  for (const code of [
+    'EPHEMERAL_WORKTREE',
+    'MANAGED_HISTORY_OPERATION_PENDING',
+    'REVIEW_REFRESH_PENDING',
+    'STACK_PARENT_MISSING',
+    'STACK_PARENT_BRANCH_MISMATCH',
+    'STACK_PARENT_ADVANCED',
+    'BASE_OVERRIDE',
+  ]) {
+    assert.equal(after.some((finding) => finding.code === code), false, `已回收 record 不得再报 ${code}`);
+  }
+});
