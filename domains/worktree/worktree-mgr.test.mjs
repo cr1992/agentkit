@@ -3709,3 +3709,60 @@ test('doctor 对已回收 record 不再生成需要活树才能收敛的 metadat
     assert.equal(after.some((finding) => finding.code === code), false, `已回收 record 不得再报 ${code}`);
   }
 });
+
+test('已回收 record 不再报挂起的托管操作：reclaim 不清 review_refresh，doctor 不能靠它卡住派工', async (t) => {
+  const fixture = makeRemoteRepo();
+  const task = 'reclaim-pending-refresh';
+  t.after(() => {
+    try { manager(fixture.repo, ['unwatch', task]); } catch {}
+    fixture.cleanup();
+  });
+  manager(fixture.repo, [
+    'spawn', task, '--base', 'origin/main',
+    '--agent', 'codex', '--agent-id', 'reclaim-pending-refresh-thread', '--purpose', '回收时仍挂起的评审刷新',
+  ]);
+  const worktree = worktreeFor(fixture, task);
+  writeFileSync(join(worktree, 'feature.txt'), 'feature\n');
+  git(worktree, ['add', 'feature.txt']);
+  git(worktree, ['commit', '-m', 'feat: pending refresh']);
+  git(worktree, ['push', '-u', 'origin', 'HEAD']);
+  manager(fixture.repo, ['touch', task, '--status', 'ready_for_review', '--interval-ms', '100', '--notify', 'off']);
+
+  writeFileSync(join(fixture.repo, 'target-next.txt'), 'target\n');
+  git(fixture.repo, ['add', 'target-next.txt']);
+  git(fixture.repo, ['commit', '-m', 'feat: advance target cleanly']);
+  git(fixture.repo, ['push', 'origin', 'HEAD:main']);
+  const targetHead = git(fixture.repo, ['rev-parse', 'HEAD']);
+  await waitFor(
+    () => recordFor(fixture, task).auto_reclaim?.target_advance?.target_sha === targetHead,
+    'watcher 未记录 target advance',
+  );
+
+  // 暂停在 push 前：托管操作挂起，但工作树是干净的——reclaimPreflight 只挡 git 层面的操作态
+  // （rebase-merge/MERGE_HEAD 之类），挡不住 agentkit 自己的 review_refresh 字段。
+  manager(fixture.repo, [`refresh-review`, task, '--pause-before-push']);
+  const record = recordFor(fixture, task);
+  assert.equal(record.review_refresh.state, 'rebased');
+  assert.equal(
+    JSON.parse(manager(fixture.repo, ['doctor', '--json'])).findings
+      .some((finding) => finding.worktree_id === record.worktree_id && finding.code === 'REVIEW_REFRESH_PENDING'),
+    true,
+    '活树上挂起的刷新是真信号，必须照报',
+  );
+
+  git(fixture.repo, ['merge', '--no-ff', '--no-edit', record.branch]);
+  const pushed = git(fixture.repo, ['rev-parse', 'HEAD']);
+  manager(fixture.repo, ['reclaim', task, '--pushed', pushed]);
+  const reclaimed = recordFor(fixture, task, true);
+  assert.equal(reclaimed.worktree_state, 'reclaimed');
+  assert.ok(reclaimed.review_refresh, 'reclaim 不清 review_refresh：噪声的来源就是这条残留');
+
+  // 残留字段是既有行为，本用例只钉死 doctor 的口径：目录没了就不能再报一条谁也 finalize
+  // 不掉的 error，否则「任何 error 都暂停 spawn/adopt」会把整条派工链钉死。
+  assert.equal(
+    JSON.parse(manager(fixture.repo, ['doctor', '--json'])).findings
+      .some((finding) => finding.worktree_id === record.worktree_id && finding.code === 'REVIEW_REFRESH_PENDING'),
+    false,
+    '已回收 record 不得再报 REVIEW_REFRESH_PENDING',
+  );
+});
