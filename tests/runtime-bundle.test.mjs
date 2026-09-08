@@ -13,7 +13,7 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 test('shell manifest 与 package、CLI、四个 Skill 及全部兼容入口闭合', () => {
   const report = validateShellManifest(ROOT);
   assert.equal(report.package_name, '@cr1992/agentkit');
-  assert.equal(report.package_version, '1.1.0');
+  assert.equal(report.package_version, '1.1.1');
   assert.deepEqual(Object.keys(report.manifest.skills).sort(), [
     'manage-worktrees', 'orchestrate-subagents', 'run-agent-verify-loop', 'verify-agent-output',
   ]);
