@@ -4,6 +4,16 @@
 
 ## Unreleased
 
+- 修复 `doctor` 对已回收 record 仍生成需要活树才能收敛的 metadata finding。`stack_parent`、
+  `history_operation` 和 `review_refresh` 三个分支缺少 `worktree_state` 过滤，对已删除目录报
+  `STACK_PARENT_ADVANCED` 等提示，其补救动作（managed rebase/retarget、`rebase --continue`、
+  `refresh-review`）在回收后都无法执行，噪声永远清不掉；其中 error 级的还会按「任何 error 都暂停
+  `spawn/adopt`」把后续派工钉死。生命周期与 watcher 两个收集器早已是这个口径，本次补齐 metadata。
+- `manage-worktrees` 补齐 `--no-watch` 的使用判据：只用于确定不会合入，或武装失败原因为永久性
+  （否则 pending 会积一条清不掉的 `AUTO_RECLAIM_NOT_ARMED`）。明确禁止因 watcher 活不过会话或
+  为压后台进程数而关闭——前者是 `watch-service` 的职责，后者不成立（`disabled` 持久且不重试）。
+- `watch-service status` 进入强制流程表的「恢复/盘点」行，不再只以表外散文形式存在。
+
 - 四个 SKILL.md 对 `docs/<域>/` 的引用从相对链接改为 `agentkit docs <域> <主题>` 命令。宿主把 Skill
   基目录报成安装路径（常为软链），Read 工具按词法折叠 `..`，原 `../docs/...` 链接在安装态全部不可达，
   agent 只剩摘要表。`validate-skills` 新增安装态检查：SKILL.md 相对链接越出 Skill 目录即报错，

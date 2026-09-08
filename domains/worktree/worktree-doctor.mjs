@@ -39,7 +39,14 @@ export function createCommands(deps) {
   } = deps;
 
   function collectDoctorRecordMetadataFindings(loaded, listing, recordsById, record, findings) {
-    if (record.storage_class === 'ephemeral' && record.worktree_state !== 'reclaimed') findings.push({ code: 'EPHEMERAL_WORKTREE', severity: 'warning', worktree_id: record.worktree_id, path: record.path });
+    // 本收集器的每条 finding 都要求一棵活树才能收敛：commit+push、rebase --continue、
+    // refresh-review --continue/--abort、managed rebase 或 retarget、补记 base_reason。
+    // record 一旦 reclaimed，目录已经删除，这些提示既没有补救动作也永远不会消失；其中 error 级的
+    // （MANAGED_HISTORY_OPERATION_PENDING / REVIEW_REFRESH_PENDING / STACK_PARENT_*）还会按
+    // SKILL 的「任何 error 都暂停 spawn/adopt」把后续派工钉死。生命周期与 watcher 两个收集器
+    // 已经是这个口径，这里补齐；archived 更早一步在调用方 continue，所以只需排除 reclaimed。
+    if (record.worktree_state === 'reclaimed') return;
+    if (record.storage_class === 'ephemeral') findings.push({ code: 'EPHEMERAL_WORKTREE', severity: 'warning', worktree_id: record.worktree_id, path: record.path });
     if (record.history_operation) {
       findings.push({
         code: 'MANAGED_HISTORY_OPERATION_PENDING',
@@ -103,7 +110,6 @@ export function createCommands(deps) {
       }
     }
     if (
-      record.worktree_state !== 'reclaimed' &&
       loaded.profile.default_base &&
       record.base_ref &&
       record.base_ref !== loaded.profile.default_base
