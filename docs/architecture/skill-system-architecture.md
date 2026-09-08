@@ -1739,7 +1739,10 @@ assurance:
 - `package.json` 与 `bin/`：提供零依赖 ESM 的 `agentkit` 命令映射，不生成编译产物；
 - `shell-manifest.json`：绑定包版本、CLI 入口、四个 Skill shell、兼容入口、domain 目标与只读命令边界；
 - `core/`、`domains/` 与 `schemas/`：共享原语、四个领域运行时与 canonical schema 真源；
-- `docs/orchestrate/`、`docs/worktree/`、`docs/verify/`、`docs/loop/`：由 `agentkit docs` 按需读取；
+- `docs/orchestrate/`、`docs/worktree/`、`docs/verify/`、`docs/loop/`：由 `agentkit docs` 按需读取。SKILL.md
+  只能以 `agentkit docs <域> <主题>` 命令引用这些文档，不得写 `../docs/...` 相对链接：宿主把 Skill
+  基目录报成安装路径（可能是软链），Read 工具按词法折叠 `..`，跨目录链接在安装态必断，
+  `tools/validate-skills.mjs` 对此 fail closed；
 - `LICENSE`：MIT，随发布一起分发；
 - `tests/`：四个 Skill 的共享测试，使安装侧可以在自己的环境上复验安装矩阵与跨 Skill 契约；
 - `tools/validate-skills.mjs`：Skill 规范校验入口，供安装侧独立复跑。

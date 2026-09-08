@@ -38,7 +38,7 @@ controller 始终拥有闭环对象、完成标准、任务图、依赖/barrier�
 
 派生后维护“活跃 Agent”“本批已完成”，存在并行时再维护“工作进展”；在派发、批次收口、用户询问
 和最终答复时更新，无活跃 worker 明示为 0，不虚构百分比。字段与状态变换见
-[编排运行时](../docs/orchestrate/orchestration-runtime.md)「派发台账的三张表」。台账也是回收清单：收口前
+编排运行时（`agentkit docs orchestrate orchestration-runtime`）「派发台账的三张表」。台账也是回收清单：收口前
 确认没有孤儿 worker/worktree/运行时资源。任务图与台账只写仓库外会话状态；完整档用 mechanical
 ledger，轻量档用单一 JSON 快照，闭环后清理。
 
@@ -48,7 +48,7 @@ ledger，轻量档用单一 JSON 快照，闭环后清理。
 只有 `allowed` 可用。输入已随合同完整提供、节点不依赖额外宿主能力时 requirements 可为空，
 此时记 `not_required` 及依据即可。同机、本地或过去恒过都不构成豁免。探针只在比 controller 自做或
 缩小节点更便宜时派发，并计入 worker 与 Token 预算。能力键前缀、binding 与复用规则、反应矩阵见
-[编排运行时](../docs/orchestrate/orchestration-runtime.md)「Worker 有效能力预检」。
+编排运行时（`agentkit docs orchestrate orchestration-runtime`）「Worker 有效能力预检」。
 
 ### 显式轻量档
 
@@ -59,7 +59,7 @@ ledger，轻量档用单一 JSON 快照，闭环后清理。
 轻量档仍冻结每个节点的目标、范围、事实/假设、输出合同、验收、证据和停止条件，并在仓库外维护
 单一 JSON 快照；它只记录事实，不伪造 journal。资格失效时停止新派发，把现状和产物收养进完整 ledger。
 Reflection 使用 `agentkit orchestrate reflection record/propose`，通用 Skill 缺口不得写入宿主能力缓存。
-快照 schema、收养步骤和 Reflection 约束见 [编排运行时](../docs/orchestrate/orchestration-runtime.md)。
+快照 schema、收养步骤和 Reflection 约束见 编排运行时（`agentkit docs orchestrate orchestration-runtime`）。
 
 ### 完整档机械台账工具
 
@@ -68,7 +68,7 @@ review-view / diff` 固定公共 Task Contract，再以仓库外 state root 初�
 脚本不直接派发 Agent，controller 把宿主回执写入 `dispatch-record`。节点必须选择
 `worker_self_check`、`controller_recheck`、`independent_evidence`，只读 critic/scout 用
 `not_applicable`；依赖/barrier 未通过不派下游。命令、schema、`--expected-revision`、state root 信任
-边界和批级熔断见 [编排运行时](../docs/orchestrate/orchestration-runtime.md)。
+边界和批级熔断见 编排运行时（`agentkit docs orchestrate orchestration-runtime`）。
 Reflection 只记证据化观察，Improvement Proposal 永远保持 `proposed`，不能改变当前运行。
 
 ## 1. 先过闸门
@@ -81,7 +81,7 @@ Reflection 只记证据化观察，Improvement Proposal 永远保持 `proposed`�
 
 规模来自真正独立且单个上下文装不下的工作块，不来自话题数；删掉不影响答案的节点。常规盘点/审计
 一轮总 Agent 数 `≤10`。扫描与核验配比、
-合并判据与各档规模见 [任务类型剧本](../docs/orchestrate/task-playbooks.md)。
+合并判据与各档规模见 任务类型剧本（`agentkit docs orchestrate task-playbooks`）。
 
 ## 3. 派发前决定环境
 
@@ -98,7 +98,7 @@ Reflection 只记证据化观察，Improvement Proposal 永远保持 `proposed`�
 
 仓库 dirty、任务大或包含新文件本身都不足以要求隔离；先确认第二写入者、归属冲突或路径相交。
 裁决隔离后使用 `manage-worktrees`，它不改变任务图、权限或验收。不可用时必须先读
-[无 manage-worktrees 时的隔离下限](../docs/orchestrate/isolation-fallback.md)。
+无 manage-worktrees 时的隔离下限（`agentkit docs orchestrate isolation-fallback`）。
 
 共享树中 worker 不得切换分支，只按路径 stage / commit；禁止 `git add -A`、`git commit -am`、裸 `stash`、`reset --hard`、`checkout -- .` 和并发 merge，controller 是唯一 integrator。
 
@@ -107,7 +107,7 @@ Reflection 只记证据化观察，Improvement Proposal 永远保持 `proposed`�
 2-3 个独立任务用宿主轻量并行；循环、条件、逐项管线或预算驱动才使用结构化编排。多 stage 默认逐条
 pipeline，只有跨条去重、聚合、比较或早退才设 barrier。截断、采样或不重试必须披露覆盖缺口。
 barrier、critic 面板与 loop-until-dry 的具体用法见
-[编排运行时](../docs/orchestrate/orchestration-runtime.md)「编排原语选择」。具体 API 服从宿主编排工具说明。
+编排运行时（`agentkit docs orchestrate orchestration-runtime`）「编排原语选择」。具体 API 服从宿主编排工具说明。
 
 ## 5. 派发可验收的任务契约
 
@@ -118,17 +118,17 @@ stop_conditions`；写任务再冻结权限、精确仓库/workdir/branch 和 wr
 controller 圆场。
 
 派发写 worker、完整档、独立 Evidence 或失败后重派前，必须读取
-[节点派发合同](../docs/orchestrate/dispatch-contract.md) 并使用完整 envelope。轻量只读节点可只使用上述最小合同。
+节点派发合同（`agentkit docs orchestrate dispatch-contract`） 并使用完整 envelope。轻量只读节点可只使用上述最小合同。
 
 ## 6. 控制运行态与升级
 
 用户可见台账只用 `运行中 / 阻塞 / 待验收`；`partial` 由 controller 决定继续、转阻塞或停止后判
 未通过。只有 controller 能给出 `通过 / 未通过 / 取消`。台账术语不进用户汇报，对外说法见
-[面向用户的汇报词表](../docs/orchestrate/user-facing-reporting.md)。
+面向用户的汇报词表（`agentkit docs orchestrate user-facing-reporting`）。
 
 只在结论交付、需要输入、scope/写入冲突、预算将尽、新依赖、失败或置信不足时介入；“等待中”不是
 状态包。能力故障、业务失败、中断与 contract gap 分开处理，不按失败次数机械升档。失败、重派、中断
-或 controller 接手时读取[失败路由与恢复](../docs/orchestrate/failure-routing-and-recovery.md)。合同失真、
+或 controller 接手时读取失败路由与恢复（`agentkit docs orchestrate failure-routing-and-recovery`）。合同失真、
 新授权、不可逆动作、资源/结论冲突或重试耗尽必须升级，不得自行扩 scope。
 
 ## 7. 验证、收敛与停止
@@ -139,7 +139,7 @@ controller 圆场。
 复核记录；`independent_evidence` 绑定唯一 Artifact 与标准 Evidence；只读 critic/scout 用
 `not_applicable`，附一份 report 即收口。失败、不可判定、安全阻塞、
 human gate 或错绑 Evidence 均不能通过。节点专属验收合同只能用 `agentkit contract project` 从公共
-合同切出 acceptance 子集；完整门禁见 [编排运行时](../docs/orchestrate/orchestration-runtime.md)「合同投影」。
+合同切出 acceptance 子集；完整门禁见 编排运行时（`agentkit docs orchestrate orchestration-runtime`）「合同投影」。
 
 快速演进分支的迭代期只读 review 最多算 `controller_recheck`；到 RC/合入候选才冻结唯一 Artifact，
 运行 `verify-agent-output` 生成 `independent_evidence`。
@@ -153,7 +153,7 @@ human gate 或错绑 Evidence 均不能通过。节点专属验收合同只能�
 独立 reviewer 是高成本资源，不与 worker 1:1 配对。对同一 Artifact 默认只允许一次 primary review；
 第二次必须由 `undecidable`、证据冲突或协议歧义触发，使用不同 lens 且可能改变处置。smoke 未通过、
 同 lens 重复、输入超出预算或已有 `blocked_safety` 时不派。考虑任何 critic/reviewer 时必须读取
-[Reviewer 数量与 Token 预算](../docs/orchestrate/review-budget.md)，冻结 `extensions.review_policy`，并在派发前运行
+Reviewer 数量与 Token 预算（`agentkit docs orchestrate review-budget`），冻结 `extensions.review_policy`，并在派发前运行
 `agentkit orchestrate review-budget evaluate`。提高 reviewer 数量或输入上限属于 re-contract。
 
 最终答复前用 `闭环项 / 标准 / 证据 / 结果` 审计：闭环对象与外部状态已重查；必要节点已验收且活跃
@@ -163,11 +163,11 @@ human gate 或错绑 Evidence 均不能通过。节点专属验收合同只能�
 ## 8. 模型路由与宿主自适配
 
 controller 持续掌握目标、任务图、re-plan、失败分类和最终验收；worker 不自选模型或下一次配置。
-派发、首次建 tier、失败后调档或切模型时读[模型路由](../docs/orchestrate/model-routing-config.md)，按任务类型
-选档再读[任务剧本](../docs/orchestrate/task-playbooks.md)：使用本地配置中最低可靠 tier，model/effort 只取
+派发、首次建 tier、失败后调档或切模型时读模型路由（`agentkit docs orchestrate model-routing-config`），按任务类型
+选档再读任务剧本（`agentkit docs orchestrate task-playbooks`）：使用本地配置中最低可靠 tier，model/effort 只取
 用户配置与实时 schema，每次保存精确配置、attempt lineage、理由和预算；扩大授权或显著增费先确认。
 
 `agents/openai.yaml` 和缓存都不是能力证明。runtime/path/tool 要求先做有效能力预检；能力快照的创建、
-刷新和复用读[宿主能力缓存](../docs/orchestrate/host-capability-cache.md)。实时 schema 优先，unknown 不能被
+刷新和复用读宿主能力缓存（`agentkit docs orchestrate host-capability-cache`）。实时 schema 优先，unknown 不能被
 缓存补成 allowed，缓存不能扩大授权。`protocol_version`、`runtime_version`、`content_digest` 分别表示
 协议兼容性、实现版本和精确安装内容，不得互相替代。
