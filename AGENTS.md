@@ -20,3 +20,4 @@
 - Git tag、GitHub Release 与 npm 包使用同一个 semver。
 - `main` 上通过 CI 的提交才可打 tag；tag 后发布物必须能从 registry 反装并通过 `agentkit doctor`。
 - 首发时先在本地冻结 tag 与 tarball；只有 npm 发布成功并从 registry 反装通过，才推送 tag 和创建 GitHub Release。
+- 发布由 `.github/workflows/release.yml` 手动触发（`workflow_dispatch`，输入待发布版本号），流水线按上述顺序执行门禁、npm 发布、registry 反装自检、推 tag 与建 Release。不要改成 tag push 触发：那会先产生 tag 再发布，发布失败即留下指向未发布版本的 tag。

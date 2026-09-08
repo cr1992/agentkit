@@ -27,6 +27,10 @@
 5. 同一个 commit 使用同一个 semver 创建 Git tag、GitHub Release 与 npm 包。
 6. 从 npm registry 安装该精确版本，运行 `agentkit doctor` 和安装矩阵测试，保存发布证据。
 
+第 4-6 步由 `.github/workflows/release.yml` 执行：手动触发并输入版本号，流水线校验分支、版本号与
+`package.json` 一致、该版本尚未发布，跑完 Node.js 22/24 门禁与 tarball 干净安装，再发布、反装自检，
+最后才推 tag 和建 Release。发布顺序不可颠倒。
+
 ## 本机开发安装
 
 需要验证未发布改动时，可从仓库根目录建立本地 CLI 链接：
