@@ -31,8 +31,8 @@ controller 必须先提供：
 4. clean workdir，`HEAD == artifact_sha`；
 5. 新上下文 reviewer，或由用户中继的第二会话。只有当前实现者上下文时停止，不得伪造独立验收。
 
-详细 envelope 与字段规则见 [Evidence schema](../docs/verify/evidence-schema.md)。进入 L1 前必须完整读取
-[验收协议](../docs/verify/verification-protocol.md)。
+详细 envelope 与字段规则见 Evidence schema（`agentkit docs verify evidence-schema`）。进入 L1 前必须完整读取
+验收协议（`agentkit docs verify verification-protocol`）。
 
 ## 标准流程
 
@@ -56,7 +56,7 @@ agentkit verify validate --run <run-dir>
 ```
 
 所有子命令支持 `--help`；写命令支持 `--expected-revision`。尚未准备输入、happy path 失败或需要完整
-诊断时，先读 [输入准备与诊断命令](../docs/verify/input-preparation.md)。readiness/preflight 失败属于环境
+诊断时，先读 输入准备与诊断命令（`agentkit docs verify input-preparation`）。readiness/preflight 失败属于环境
 前提，不得记录为 Artifact verdict。
 
 ## 状态与裁决

@@ -51,8 +51,8 @@ verification run，消费其标准 Evidence Package。Loop 不执行或复制完
 - runtime 只生成 `embedded_verification_record`，不能导出、转换或冒充 Evidence Package；
 - 无独立 reviewer 时停止，不用实现者自审产生 pass。
 
-进入 embedded L1 前读取 [内嵌 review 适配器](../docs/loop/embedded-review-adapter.md)。
-verifier 行为语义以 [验收协议](../docs/verify/verification-protocol.md) 为唯一真源；独立安装本 Skill
+进入 embedded L1 前读取 内嵌 review 适配器（`agentkit docs loop embedded-review-adapter`）。
+verifier 行为语义以 验收协议（`agentkit docs verify verification-protocol`） 为唯一真源；独立安装本 Skill
 时，adapter 只携带绑定和最低输入要求，不重定义 verdict。
 
 ## Runtime 流程
@@ -79,8 +79,8 @@ run-embedded-l0 → 新上下文 reviewer → record-embedded-review
 ```
 
 所有状态写命令可带 `--expected-revision <n>`；revision 不匹配时拒绝写入。详细状态迁移见
-[Loop 状态机](../docs/loop/loop-state-machine.md)，恢复和熔断见
-[恢复与熔断](../docs/loop/recovery-and-fuses.md)。只有发生复制/移动、journal 恢复、
+Loop 状态机（`agentkit docs loop loop-state-machine`），恢复和熔断见
+恢复与熔断（`agentkit docs loop recovery-and-fuses`）。只有发生复制/移动、journal 恢复、
 reflection 或提案时才使用 `adopt-root / record-reflection / convergence-report / propose-improvement --help`。
 
 ## 决策规则

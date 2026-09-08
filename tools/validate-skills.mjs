@@ -10,6 +10,8 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'tests', 'docs', 'tools', '.worktrees']);
 const MAX_DESCRIPTION = 1024;
 const WARN_SKILL_LINES = 500;
+// 与 bin/cli.mjs 的 DOC_DOMAINS 保持一致：`agentkit docs <域> <主题>` 可用的文档域。
+const DOC_DOMAINS = new Set(['orchestrate', 'worktree', 'verify', 'loop']);
 
 const errors = [];
 const warnings = [];
@@ -111,8 +113,23 @@ for (const dir of skillDirs) {
       for (const m of text.matchAll(/\]\(([^)]+)\)/g)) {
         const target = m[1].split('#')[0].trim();
         if (!target || /^(https?:|mailto:|@)/.test(target)) continue;
-        if (!existsSync(resolve(dirname(file), target))) {
+        const resolved = resolve(dirname(file), target);
+        if (!existsSync(resolved)) {
           errors.push(`${frel}: 相对链接失效 → ${target}`);
+        } else if (basename(file) === 'SKILL.md' && !resolved.startsWith(dir + '/')) {
+          // 安装态视角：宿主把 Skill 基目录报成安装路径（可能是软链），Read 工具按词法折叠 `..`，
+          // 指向 Skill 目录之外的相对链接在源仓可解析、安装后必断。跨目录内容一律改走 `agentkit docs`。
+          errors.push(`${frel}: 相对链接越出 Skill 目录（安装后不可达）→ ${target}，改用 agentkit docs <域> <主题>`);
+        }
+      }
+    }
+    if (basename(file) === 'SKILL.md') {
+      // SKILL.md 里引用的按需文档必须真实存在于 docs/<域>/，否则 agent 执行命令只会拿到索引。
+      for (const m of text.matchAll(/`agentkit docs ([a-z]+) ([a-z0-9-]+)`/g)) {
+        const [, domain, topic] = m;
+        if (!DOC_DOMAINS.has(domain)) { errors.push(`${frel}: agentkit docs 未知文档域「${domain}」`); continue; }
+        if (!existsSync(join(ROOT, 'docs', domain, `${topic}.md`))) {
+          errors.push(`${frel}: agentkit docs ${domain} ${topic} 指向不存在的 docs/${domain}/${topic}.md`);
         }
       }
     }
