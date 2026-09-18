@@ -24,6 +24,7 @@ init --contract <json> [--state-root <dir>] [--ledger-id <id>]
 add-node / add-edge / dispatch-record / update / attach
 batch-init / batch-record / batch-status / batch-fuse
 record-reflection / propose-improvement
+close [--abandon --reason <text>]
 status / inspect / rebuild / doctor / capabilities
 ```
 
@@ -203,6 +204,61 @@ Evidence 必须为 `terminal_outcome: pass` 且不再要求 human gate。节点�
   不是 `independent_evidence` 的**实现节点**；只读评审节点没有交付物，不进这份名单。声明了
   provider 时为空数组，改看 `uncovered_implementation_nodes`。
 
+`status.summary.unmet_completion_conditions` 把上面三条判据里当前没过的逐条列出来，`close` 被拒时
+给的是同一份文案——两处读的是同一个完成判定，不可能各自漂移。
+
+## ledger 生命周期与终态
+
+ledger 有且只有两种终态，都由 `close` 写入，并在事件链上追加 `closed` / `abandoned` 事件：
+
+```text
+close --ledger <dir> [--expected-revision <n>]
+close --ledger <dir> --abandon --reason <text> [--expected-revision <n>]
+```
+
+- 正常 `close` 要求 `status.summary.completion_ready` 为 `true`（含上面三条判据）。不满足时非零退出，
+  并逐条列出未满足的条件：未 `passed` 的 `required` 节点（带当前 state）、未被独立验证覆盖的实现节点，
+  或"图里没有任何 required 节点"。
+- `--abandon` 记录放弃，`--reason` 必填且非空；`--reason` 不能脱离 `--abandon` 单独使用。
+
+快照新增可选字段 `lifecycle`，缺省表示 ledger 仍然活跃：
+
+```json
+{
+  "lifecycle": {
+    "state": "closed | abandoned",
+    "closed_at": "RFC3339",
+    "reason": "abandoned 必填非空；closed 固定为 null",
+    "closed_by_content_digest": "sha256:... 写入终态时的 runtime 内容摘要",
+    "skill_drift_at_close": false
+  }
+}
+```
+
+**close 只冻结任务图。** 终态之后 `add-node`、`add-edge`、`dispatch-record`、`update`、`attach`、
+`batch-init`、`batch-record` 与再次 `close` 一律非零退出。白名单是 `record-reflection`、
+`propose-improvement`、`rebuild`、`doctor`、`status`、`inspect`、`batch-status`、`batch-fuse`：
+架构 §15.2 列出的高优先级反思触发按定义都发生在完成之后，已关闭的 ledger 也仍然需要 `rebuild` 做
+崩溃修复，而 `batch-fuse` 只按已记录的 records 重算熔断判定、不写事件链，与 `batch-status` 同列。
+冻结集合由 CLI_SPEC 全集减白名单推导，新增的修改命令默认落进冻结集合。
+
+**drift 与终态。** `skill_drift` 指冻结的 `skill_provenance.content_digest` 与当前 runtime 的分发内容
+摘要不一致，`mutate`、`doctor`、`status` / `inspect` 共用同一个比较：
+
+| 命令 | 有 drift 时 |
+|---|---|
+| `close`（正常完成） | 拒绝。"完成"是按冻结的协议判定的，换了 runtime 就不能再替旧协议下结论 |
+| `close --abandon` | **允许。** 它不推进任务图，也不按协议做任何判定，只记录"这个 ledger 不再继续" |
+| 其余修改命令（含 `record-reflection` / `propose-improvement`） | 保持拒绝 |
+
+`close --abandon` 是 drift 检查的唯一豁免点。它写入的终态事件里 `skill_drift_at_close: true`，且
+`closed_by_content_digest` 是写入时的 runtime 摘要，与快照里冻结的摘要不同——这条终态由 drift 的
+runtime 写入这件事留在事件链上，冻结摘要本身不被改写。跨版本的反思记到新 ledger，不为反思开豁免。
+
+`status` 与 `inspect` 输出 `skill_drift: true | false`；为 `true` 时 `skill_drift_remediation` 写明
+这个 ledger 只剩两条路：`close --abandon --reason <text>`，或用当前 runtime re-contract 一个新 ledger。
+终态本身不会让 `doctor` 报 unhealthy。
+
 **Token 消耗与成本核算（v1.2）**：`update` 支持记录节点消耗的 `tokens`（非负安全整数，或字段完整的 `{ input_tokens, output_tokens, total_tokens }`，其中 `total_tokens = input_tokens + output_tokens`）及非负安全整数 `duration_ms`。`status` 命令在 `summary.token_accounting` 中自动汇总总 Token 与按角色分级的消耗分布，支持计算多 Agent 分发相比全量顶配模型的 Token 节省率；`doctor` 使用同一校验器复核持久化节点。
 
 **合同投影（v1.2）**：Evidence 的合同绑定有两条合法路径，缺省仍是全等——verify-agent-output
@@ -253,9 +309,9 @@ ledger 目录里的 `contract.json`，使用前先要求 `envelopeDigest(contrac
 否则换掉那份文件就能给私货投影背书。因此投影只能**收窄**验收面，不能改写或扩张它——仍然不要通过
 复制改写公共合同来伪造"等值"，那会破坏合同摘要的审计意义。
 
-`add-node` 必须显式给出 `verification`，没有缺省档。Ledger v1 schema 可以读取任何旧快照，但
-Skill content digest 已变化的旧 ledger 只允许审计，继续写入前必须 re-contract，不做原地补字段或
-静默升级。
+`add-node` 必须显式给出 `verification`，没有缺省档。Ledger v1 schema 可以读取任何旧快照——`lifecycle`
+是可选新增字段，没有它的旧快照仍然合法。Skill content digest 已变化的旧 ledger 只允许审计与
+`close --abandon`，继续推进任务图前必须 re-contract，不做原地补字段或静默升级。
 
 批级熔断属于此 ledger；每个 Loop 仍只维护自己的单个收敛对象。
 

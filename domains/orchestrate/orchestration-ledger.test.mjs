@@ -6,10 +6,11 @@ import { join } from 'node:path';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { envelopeDigest, projectContract } from './contract-tool.mjs';
-import { LedgerError, main, skillContentDigest } from './orchestration-ledger.mjs';
+import { canonicalJson, envelopeDigest, projectContract } from './contract-tool.mjs';
+import { DRIFT_BLOCKED_COMMANDS, FROZEN_AFTER_TERMINAL, LedgerError, main, skillContentDigest } from './orchestration-ledger.mjs';
 
 const LEDGER_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'orchestration-ledger.mjs');
+const LEDGER_SCHEMA = join(dirname(dirname(dirname(fileURLToPath(import.meta.url)))), 'schemas', 'orchestration-ledger-v1.schema.json');
 
 const SELF_CHECK = { requirement: 'worker_self_check', provider: 'none', artifact_scope: 'node_output' };
 const CONTROLLER_RECHECK = { requirement: 'controller_recheck', provider: 'none', artifact_scope: 'node_output' };
@@ -731,5 +732,209 @@ test('未声明 provider 的契约逐个列出未经独立验证的节点，assu
     // 覆盖规则只对声明了 provider 的契约生效。
     assert.deepEqual(summary.uncovered_implementation_nodes, []);
     assert.equal(summary.completion_ready, false);
+  } finally { f.cleanup(); }
+});
+
+// ——— ledger 生命周期：终态、drift 下的放弃、status/inspect 报告 drift ———
+
+// 把一个 required 节点推到 passed，使 ledger 达到 completion_ready。
+function passNode(f, id) {
+  main(['add-node', '--ledger', f.ledger_dir, '--input', f.input(`${id}-node.json`, node({ node_id: id, objective: `完成 ${id}` }))]);
+  main(['dispatch-record', '--ledger', f.ledger_dir, '--node', id, '--input', f.input(`${id}-dispatch.json`, dispatch(id))]);
+  main(['attach', '--ledger', f.ledger_dir, '--node', id, '--type', 'report', '--input', f.input(`${id}-report.json`, { report_id: `report-${id}` })]);
+  main(['update', '--ledger', f.ledger_dir, '--node', id, '--input', f.input(`${id}-pass.json`, { state: 'passed' })]);
+}
+
+// 制造 skill_drift：把冻结的 content_digest 改成另一个值并重签整条事件链，等价于「这份 ledger 是在另一个 runtime 上冻结的」。
+// 不动 core/ 的真实文件，因此不影响当前进程算出的分发摘要，也不污染其他用例。
+function driftLedger(f) {
+  const frozen = `sha256:${'0'.repeat(64)}`;
+  const journalPath = join(f.ledger_dir, 'events.ndjson');
+  const events = readFileSync(journalPath, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  let previous = null;
+  const rewritten = events.map((event) => {
+    const next = { ...event, previous_event_digest: previous, snapshot: { ...event.snapshot, skill_provenance: { ...event.snapshot.skill_provenance, content_digest: frozen } } };
+    delete next.event_digest;
+    next.event_digest = envelopeDigest(next, 'event_digest');
+    previous = next.event_digest;
+    return next;
+  });
+  writeFileSync(journalPath, `${rewritten.map((event) => canonicalJson(event)).join('\n')}\n`);
+  writeFileSync(join(f.ledger_dir, 'snapshot.json'), `${JSON.stringify(rewritten.at(-1).snapshot, null, 2)}\n`);
+  return frozen;
+}
+
+// 只接受"命令确实 fail closed"，并把错误文案交给调用方逐条核对。
+function refusal(argv) {
+  try { main(argv); } catch (error) { return error.message; }
+  throw new assert.AssertionError({ message: `命令本应 fail closed：${argv.join(' ')}` });
+}
+
+test('close 之后任务图冻结：冻结集合里每个命令 fail closed，白名单命令照常可用', () => {
+  const f = makeFixture();
+  const L = f.ledger_dir;
+  try {
+    passNode(f, 'done');
+    main(['add-node', '--ledger', L, '--input', f.input('aux.json', node({ node_id: 'aux', objective: '非必要节点', required: false }))]);
+    main(['batch-init', '--ledger', L, '--input', f.input('lifecycle-batch.json', { batch_id: 'batch', loop_ids: ['l1', 'l2'] })]);
+
+    assert.equal(main(['status', '--ledger', L]).skill_drift, false);
+    const closed = main(['close', '--ledger', L]);
+    assert.equal(closed.lifecycle.state, 'closed');
+    assert.equal(closed.lifecycle.reason, null);
+    assert.equal(closed.lifecycle.skill_drift_at_close, false);
+    assert.equal(closed.lifecycle.closed_by_content_digest, skillContentDigest());
+    assert.equal(JSON.parse(readFileSync(join(L, 'events.ndjson'), 'utf8').split('\n').filter(Boolean).at(-1)).kind, 'closed');
+
+    // 冻结集合直接取自 runtime（CLI_SPEC 减白名单）：新增修改命令没进这张表时用例先失败，不靠手抄清单。
+    const frozen = {
+      'add-node': ['add-node', '--ledger', L, '--input', f.input('late-node.json', node({ node_id: 'late', objective: '终态之后新增' }))],
+      'add-edge': ['add-edge', '--ledger', L, '--input', f.input('late-edge.json', { from: 'done', to: 'aux', kind: 'dependency' })],
+      'dispatch-record': ['dispatch-record', '--ledger', L, '--node', 'aux', '--input', f.input('late-dispatch.json', dispatch('aux'))],
+      update: ['update', '--ledger', L, '--node', 'aux', '--input', f.input('late-update.json', { state: 'cancelled' })],
+      attach: ['attach', '--ledger', L, '--node', 'aux', '--type', 'report', '--input', f.input('late-report.json', { report_id: 'late' })],
+      'batch-init': ['batch-init', '--ledger', L, '--input', f.input('late-batch.json', { batch_id: 'late', loop_ids: ['l9'] })],
+      'batch-record': ['batch-record', '--ledger', L, '--batch', 'batch', '--input', f.input('late-record.json', { loop_id: 'l1', state: 'completed' })],
+      close: ['close', '--ledger', L],
+    };
+    assert.deepEqual(Object.keys(frozen).sort(), [...FROZEN_AFTER_TERMINAL].sort(), 'CLI_SPEC 的冻结集合与用例表不一致');
+    for (const [command, argv] of Object.entries(frozen)) assert.match(refusal(argv), /已处于终态：lifecycle\.state=closed/u, command);
+
+    // 白名单：只读回看、崩溃修复，以及按定义发生在完成之后的反思写入。
+    assert.equal(main(['status', '--ledger', L]).lifecycle.state, 'closed');
+    assert.equal(main(['inspect', '--ledger', L]).lifecycle.state, 'closed');
+    assert.equal(main(['batch-status', '--ledger', L, '--batch', 'batch']).state, 'active');
+    // batch-fuse 只按已记录的 records 重算熔断判定，不写事件链，与 batch-status 同列在白名单里。
+    assert.equal(main(['batch-fuse', '--ledger', L, '--batch', 'batch']).fuse, null);
+    assert.equal(main(['rebuild', '--ledger', L]).rebuilt, true);
+    const health = main(['doctor', '--ledger', L]);
+    assert.deepEqual(health.findings, [], '终态本身不应产生 finding');
+    assert.equal(health.healthy, true);
+    const reflected = main(['record-reflection', '--ledger', L, '--input', f.input('post-close-reflection.json', { classification: 'inefficiency', observation: '闭环后复盘发现并行没有降低关键路径', impact: 'medium', recommended_disposition: 'continue' })]);
+    const proposal = main(['propose-improvement', '--ledger', L, '--reflection', reflected.reflection_refs[0].reflection_id, '--input', f.input('post-close-proposal.json', { problem_type: 'inefficiency', proposed_change: '缩小无效并行范围', affected_scope: ['routing'], validation_plan: { replay_cases: ['graph'], regression_suites: ['ledger'] } })]);
+    assert.equal(proposal.lifecycle.state, 'closed', '反思写入不得抹掉终态');
+    assert.equal(main(['doctor', '--ledger', L]).healthy, true);
+  } finally { f.cleanup(); }
+});
+
+test('completion_ready 为 false 时 close 逐条列出未满足条件，空 ledger 与未覆盖实现节点同样 fail closed', () => {
+  const f = makeFixture();
+  const L = f.ledger_dir;
+  try {
+    // 空 ledger：没有任何 required 节点。
+    const empty = refusal(['close', '--ledger', L]);
+    assert.match(empty, /summary\.completion_ready=false/u);
+    assert.match(empty, /没有任何 required 节点/u);
+    assert.match(empty, /close --abandon --reason/u);
+
+    main(['add-node', '--ledger', L, '--input', f.input('waiting.json', node({ node_id: 'waiting', objective: '还没跑完' }))]);
+    const pending = refusal(['close', '--ledger', L]);
+    assert.match(pending, /nodes\[\]\.state/u);
+    assert.ok(pending.includes('waiting(state=pending)'), pending);
+    assert.equal(main(['status', '--ledger', L]).summary.unmet_completion_conditions.length, 1);
+    assert.equal(main(['status', '--ledger', L]).lifecycle, undefined);
+  } finally { f.cleanup(); }
+
+  // 声明了 verify-agent-output provider 却没有集成验证节点：required 实现节点未被覆盖。
+  const g = makeFixture({ independent: true });
+  try {
+    passNode(g, 'impl');
+    assert.equal(main(['status', '--ledger', g.ledger_dir]).summary.completion_ready, false);
+    const uncovered = refusal(['close', '--ledger', g.ledger_dir]);
+    assert.match(uncovered, /uncovered_implementation_nodes/u);
+    assert.ok(uncovered.includes('impl'), uncovered);
+  } finally { g.cleanup(); }
+});
+
+test('drift 的 ledger 只剩 close --abandon：其余修改命令（含正常 close）全部 fail closed', () => {
+  const f = makeFixture();
+  const L = f.ledger_dir;
+  try {
+    passNode(f, 'done');
+    main(['add-node', '--ledger', L, '--input', f.input('aux.json', node({ node_id: 'aux', objective: '非必要节点', required: false }))]);
+    main(['batch-init', '--ledger', L, '--input', f.input('lifecycle-batch.json', { batch_id: 'batch', loop_ids: ['l1', 'l2'] })]);
+    assert.equal(main(['status', '--ledger', L]).summary.completion_ready, true);
+    const frozenDigest = driftLedger(f);
+
+    // status / inspect 与 doctor 用同一个比较，drift 在冷启动第一眼就可见，并写明只剩的两条路。
+    for (const command of ['status', 'inspect']) {
+      const view = main([command, '--ledger', L]);
+      assert.equal(view.skill_drift, true, command);
+      assert.match(view.skill_drift_remediation, /close --abandon --reason/u, command);
+      assert.match(view.skill_drift_remediation, /re-contract 一个新 ledger/u, command);
+    }
+    assert.ok(main(['doctor', '--ledger', L]).findings.includes('skill_drift'));
+
+    const drifted = {
+      'add-node': ['add-node', '--ledger', L, '--input', f.input('drift-node.json', node({ node_id: 'later', objective: 'drift 之后新增' }))],
+      'add-edge': ['add-edge', '--ledger', L, '--input', f.input('drift-edge.json', { from: 'done', to: 'aux', kind: 'dependency' })],
+      'dispatch-record': ['dispatch-record', '--ledger', L, '--node', 'aux', '--input', f.input('drift-dispatch.json', dispatch('aux'))],
+      update: ['update', '--ledger', L, '--node', 'aux', '--input', f.input('drift-update.json', { state: 'cancelled' })],
+      attach: ['attach', '--ledger', L, '--node', 'aux', '--type', 'report', '--input', f.input('drift-report.json', { report_id: 'drift' })],
+      'batch-init': ['batch-init', '--ledger', L, '--input', f.input('drift-batch.json', { batch_id: 'drift', loop_ids: ['l9'] })],
+      'batch-record': ['batch-record', '--ledger', L, '--batch', 'batch', '--input', f.input('drift-record.json', { loop_id: 'l1', state: 'completed' })],
+      'record-reflection': ['record-reflection', '--ledger', L, '--input', f.input('drift-reflection.json', { classification: 'inefficiency', observation: 'drift 之后不该写入', impact: 'medium', recommended_disposition: 'continue' })],
+      'propose-improvement': ['propose-improvement', '--ledger', L, '--reflection', 'missing-reflection', '--input', f.input('drift-proposal.json', { problem_type: 'inefficiency', proposed_change: '缩小无效并行范围', affected_scope: ['routing'], validation_plan: { replay_cases: [], regression_suites: [] } })],
+      close: ['close', '--ledger', L],
+    };
+    assert.deepEqual(Object.keys(drifted).sort(), [...DRIFT_BLOCKED_COMMANDS].sort(), 'CLI_SPEC 的 drift 冻结集合与用例表不一致');
+    for (const [command, argv] of Object.entries(drifted)) assert.match(refusal(argv), /skill_drift：必须 re-contract/u, command);
+
+    // 唯一豁免点：不推进任务图，也不按冻结协议下结论，只记录"这个 ledger 不再继续"。
+    const abandoned = main(['close', '--ledger', L, '--abandon', '--reason', '升级后在途任务不再继续']);
+    assert.equal(abandoned.lifecycle.state, 'abandoned');
+    assert.equal(abandoned.lifecycle.reason, '升级后在途任务不再继续');
+    assert.equal(abandoned.lifecycle.skill_drift_at_close, true);
+    assert.equal(abandoned.lifecycle.closed_by_content_digest, skillContentDigest());
+    assert.notEqual(abandoned.lifecycle.closed_by_content_digest, frozenDigest);
+    assert.equal(abandoned.skill_provenance.content_digest, frozenDigest, '终态不得改写冻结摘要');
+    const lastEvent = JSON.parse(readFileSync(join(L, 'events.ndjson'), 'utf8').split('\n').filter(Boolean).at(-1));
+    assert.equal(lastEvent.kind, 'abandoned');
+    assert.equal(lastEvent.snapshot.lifecycle.closed_by_content_digest, skillContentDigest());
+
+    // 事件链校验通过；快照丢失后 rebuild 重放，终态仍在。
+    unlinkSync(join(L, 'snapshot.json'));
+    assert.equal(main(['rebuild', '--ledger', L]).rebuilt, true);
+    assert.equal(main(['status', '--ledger', L]).lifecycle.state, 'abandoned');
+    // doctor 只报 drift 这一条，不因终态本身多出 finding。
+    assert.deepEqual(main(['doctor', '--ledger', L]).findings, ['skill_drift']);
+    assert.match(refusal(['close', '--ledger', L, '--abandon', '--reason', '再放弃一次']), /已处于终态：lifecycle\.state=abandoned/u);
+  } finally { f.cleanup(); }
+});
+
+test('--abandon 的 reason 必填非空，--reason 不能脱离 --abandon', () => {
+  const f = makeFixture();
+  const L = f.ledger_dir;
+  try {
+    assert.match(refusal(['close', '--ledger', L, '--abandon']), /--abandon 必须同时给出非空 --reason/u);
+    assert.match(refusal(['close', '--ledger', L, '--abandon', '--reason', '   ']), /--abandon 必须同时给出非空 --reason/u);
+    assert.match(refusal(['close', '--ledger', L, '--reason', '理由']), /--reason 只属于 --abandon/u);
+    assert.equal(main(['status', '--ledger', L]).lifecycle, undefined);
+    assert.equal(main(['close', '--ledger', L, '--abandon', '--reason', '需求取消']).lifecycle.state, 'abandoned');
+  } finally { f.cleanup(); }
+});
+
+test('lifecycle 是向后兼容的可选新增字段：旧快照没有它仍然合法，终态快照字段落在 schema 内', () => {
+  const schema = JSON.parse(readFileSync(LEDGER_SCHEMA, 'utf8'));
+  assert.equal(schema.additionalProperties, false);
+  assert.equal(schema.required.includes('lifecycle'), false, 'lifecycle 必须是可选字段，否则旧快照失效');
+  assert.ok(Object.hasOwn(schema.properties, 'lifecycle'));
+  assert.equal(schema.$defs.lifecycle.additionalProperties, false);
+
+  const f = makeFixture();
+  const L = f.ledger_dir;
+  try {
+    const legacy = JSON.parse(readFileSync(join(L, 'snapshot.json'), 'utf8'));
+    assert.equal(Object.hasOwn(legacy, 'lifecycle'), false);
+    for (const key of Object.keys(legacy)) assert.ok(Object.hasOwn(schema.properties, key), `旧快照字段 ${key} 不在 schema.properties 里`);
+    for (const key of schema.required) assert.ok(Object.hasOwn(legacy, key), `旧快照缺少 required 字段 ${key}`);
+    assert.equal(main(['status', '--ledger', L]).ledger_id, 'ledger');
+    assert.equal(main(['doctor', '--ledger', L]).healthy, true);
+
+    passNode(f, 'done');
+    const lifecycle = main(['close', '--ledger', L]).lifecycle;
+    assert.deepEqual(Object.keys(lifecycle).sort(), [...schema.$defs.lifecycle.required].sort());
+    for (const key of Object.keys(lifecycle)) assert.ok(Object.hasOwn(schema.$defs.lifecycle.properties, key), key);
+    assert.match(lifecycle.closed_by_content_digest, new RegExp(schema.$defs.lifecycle.properties.closed_by_content_digest.pattern, 'u'));
   } finally { f.cleanup(); }
 });
