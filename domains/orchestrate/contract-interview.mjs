@@ -71,12 +71,25 @@ export function routeFinding(finding) {
   return FINDING_ROUTES.find((route) => route.match.test(finding))?.field ?? null;
 }
 
+/**
+ * 可以走 assumption 的字段。
+ *
+ * permissions / objective / acceptance **不在此列**：这三项必须有 source: "user" 的作答记录。
+ * 否则模型可以先把 objective 写进草稿，再记一条"用户说都行"，在没有任何用户选择的情况下把契约冻掉——
+ * 这正是访谈要防的"模型替用户回答"，而且是机制拦得住的那一部分。
+ *
+ * 剩下三项都是列表字段，assumption 的内容能原样落进字段，执行方读得到。
+ */
+const DEFERRABLE_FIELDS = new Set(['scope.include', 'scope.exclude', 'stop_conditions']);
+
 export const INTERVIEW_ANSWER_SPEC = [
   `每题必须给出 ${MIN_OPTIONS}–${MAX_OPTIONS} 个互不相同的非空选项；0 或 1 个选项按开放式问题拒绝。`,
   '选项由你根据用户诉求和仓库现状生成，命令不生成选项，也不替用户选。',
   'selected 是选项下标，或者 "custom" 配 custom_value 写用户原话；source 只能是 "user"。',
-  '用户回答"都行"或拒答时不要替他选：把该题写成 { field, options, deferred: true, assumed }，字段保留当前默认值，命令记进 assumptions[]。',
-  '"无所谓"不等于"排除"：deferred 不会往 scope.exclude 写任何内容。',
+  `permissions / objective / acceptance 必须由用户在给出的选项中作答，不接受 deferred：这三项没有 assumption 这条路。`,
+  `用户回答"都行"或拒答时，只有 ${[...DEFERRABLE_FIELDS].join(' / ')} 可以写成 { field, options, deferred: true, assumed }。`,
+  'assumed 是字符串数组（单条可直接写字符串），命令把它原样写进该字段并记进 assumptions[]；执行方读的是契约字段，不是 extensions。',
+  'assumed 可以是空数组，表示"没有要排除的 / 没有额外终止条件"；此时 write 模式的 warning 保留，不影响冻结。',
 ];
 
 /** 单值字段：再次作答会替换上一条记录，而不是并存——并存会让完成判据第 3 条必然不成立。 */
@@ -112,6 +125,24 @@ function selectedText(answer) {
   return Number.isSafeInteger(answer?.selected) && answer.selected >= 0 && answer.selected < options.length ? options[answer.selected] : null;
 }
 
+/** 三个可 deferred 字段都是列表字段，assumption 整段落在这里。 */
+function fieldList(contract, field) {
+  if (field === 'scope.include') return Array.isArray(contract?.scope?.include) ? contract.scope.include : [];
+  if (field === 'scope.exclude') return Array.isArray(contract?.scope?.exclude) ? contract.scope.exclude : [];
+  if (field === 'stop_conditions') return Array.isArray(contract?.stop_conditions) ? contract.stop_conditions : [];
+  return null;
+}
+
+/**
+ * 完成判据第 3 条对 assumption 同样生效：字段当前值必须与 assumed 逐项相等。
+ * assumption 是整段替换写进字段的，所以这里按顺序全等判定，事后手改字段就不成立。
+ */
+function assumptionHolds(contract, field, assumed) {
+  const current = fieldList(contract, field);
+  if (current === null || !Array.isArray(assumed)) return false;
+  return current.length === assumed.length && current.every((item, index) => item === assumed[index]);
+}
+
 /**
  * 完成判据第 3 条：记录的 field 在契约里的当前值要与 selected 对应的内容一致。
  * 列表字段按"包含"判定：同一字段可以多轮追加，每条记录各自对应一个元素。
@@ -130,8 +161,10 @@ function fieldHolds(contract, field, text) {
 /**
  * 三条完成判据，同时满足才允许冻结：
  * 1. core/contract-substance.mjs 的创建入口判据 error 为零（warning 允许保留：用户可以明确回答"没有要排除的"）；
- * 2. 每道必问题都有 source: "user" 的作答记录，或一条 assumption；
- * 3. 每条作答记录的 field 在契约里的当前值与 selected 对应内容一致——事后手改字段而不更新记录则不成立。
+ * 2. 每道必问题都有 source: "user" 的作答记录；scope.include / scope.exclude / stop_conditions
+ *    可以改由一条 user_deferred 的 assumption 满足，permissions / objective / acceptance 不行；
+ * 3. 每条作答记录的 field 在契约里的当前值与 selected 对应内容一致，每条 assumption 的字段当前值与
+ *    assumed 逐项相等——事后手改字段而不更新记录则不成立。
  * @param {any} contract
  */
 export function completion(contract) {
@@ -145,12 +178,30 @@ export function completion(contract) {
 
   const answeredFields = new Set();
   for (const answer of state.answers) if (answer?.source === 'user' && typeof answer?.field === 'string') answeredFields.add(answer.field);
-  for (const assumption of state.assumptions) if (typeof assumption?.field === 'string') answeredFields.add(assumption.field);
+  for (const assumption of state.assumptions) if (typeof assumption?.field === 'string' && DEFERRABLE_FIELDS.has(assumption.field)) answeredFields.add(assumption.field);
   for (const field of requiredFields(contract)) {
     if (!answeredFields.has(field)) {
-      missing.push({ criterion: 'missing_answer', field, detail: `${field}：缺少 source: "user" 的作答记录，也没有 user_deferred 的 assumption` });
+      const detail = DEFERRABLE_FIELDS.has(field)
+        ? `${field}：缺少 source: "user" 的作答记录，也没有 user_deferred 的 assumption`
+        : `${field}：缺少 source: "user" 的作答记录，该字段必须由用户在给出的选项中作答`;
+      missing.push({ criterion: 'missing_answer', field, detail });
     }
   }
+
+  state.assumptions.forEach((assumption, index) => {
+    const field = assumption?.field;
+    if (typeof field !== 'string' || !DEFERRABLE_FIELDS.has(field)) {
+      missing.push({ criterion: 'assumption_invalid', field: field ?? null, detail: `extensions.interview.assumptions[${index}].field = ${quote(field ?? null)}：该字段必须由用户在给出的选项中作答，不接受 assumption` });
+      return;
+    }
+    if (assumption?.reason !== 'user_deferred') {
+      missing.push({ criterion: 'assumption_invalid', field, detail: `extensions.interview.assumptions[${index}].reason = ${quote(assumption?.reason ?? null)}：只接受 "user_deferred"` });
+      return;
+    }
+    if (!assumptionHolds(contract, field, assumption.assumed)) {
+      missing.push({ criterion: 'assumption_field_mismatch', field, detail: `extensions.interview.assumptions[${index}]：假定内容 ${quote(assumption.assumed ?? null)} 与 ${field} 的当前值不一致，记录与契约已经脱钩` });
+    }
+  });
 
   state.answers.forEach((answer, index) => {
     if (answer?.source !== 'user' || typeof answer?.field !== 'string') {
@@ -180,7 +231,7 @@ export function outstandingFields(contract) {
   const report = contractSubstance(contract);
   const answered = new Set();
   for (const answer of state.answers) if (answer?.source === 'user' && typeof answer?.field === 'string') answered.add(answer.field);
-  for (const assumption of state.assumptions) if (typeof assumption?.field === 'string') answered.add(assumption.field);
+  for (const assumption of state.assumptions) if (typeof assumption?.field === 'string' && DEFERRABLE_FIELDS.has(assumption.field)) answered.add(assumption.field);
 
   const pending = new Set(requiredFields(contract).filter((field) => !answered.has(field)));
   // error 指向的字段一律重问：填了一轮文字不等于问完了，占位还在就说明这道题没答。
@@ -216,6 +267,8 @@ export function ask(contract) {
       field,
       question: FIELD_QUESTION[field],
       field_semantics: FIELD_SEMANTICS[field],
+      // deferrable=false 的题只有一条路：用户在选项里选。模型不能替他记一条 assumption。
+      deferrable: DEFERRABLE_FIELDS.has(field),
       options: [],
       selected: null,
       source: 'user',
@@ -239,6 +292,30 @@ function validateOptions(entry, index) {
   });
   if (new Set(cleaned).size !== cleaned.length) throw new InterviewError(`answers[${index}].options 存在重复项：选项必须互不相同，否则这道题没有在做选择`);
   return options;
+}
+
+/**
+ * assumed 的形状：字符串数组，单条可直接写字符串。
+ * 空数组是合法的——它表示"没有要排除的 / 没有额外终止条件"，这时 write 模式的 warning 保留。
+ */
+function normalizeAssumed(entry, index) {
+  const raw = entry?.assumed;
+  const list = typeof raw === 'string' ? [raw] : raw;
+  if (!Array.isArray(list)) {
+    throw new InterviewError(`answers[${index}].assumed = ${quote(raw ?? null)}：deferred 必须写明替用户假定进该字段的内容，字符串数组；空数组表示"没有"`);
+  }
+  list.forEach((item, position) => {
+    if (typeof item !== 'string' || !item.trim()) throw new InterviewError(`answers[${index}].assumed[${position}] 为空：假定内容必须是非空字符串`);
+  });
+  if (new Set(list).size !== list.length) throw new InterviewError(`answers[${index}].assumed 存在重复项`);
+  return [...list];
+}
+
+/** deferred 整段替换字段：assumption 与字段是一一对应的，追加会让完成判据第 3 条无从判定。 */
+function applyDeferral(contract, field, assumed) {
+  if (field === 'scope.include') { contract.scope.include = [...assumed]; return; }
+  if (field === 'scope.exclude') { contract.scope.exclude = [...assumed]; return; }
+  contract.stop_conditions = [...assumed];
 }
 
 /** permissions 是唯一取值受限的字段：它决定后续必问题清单，不能是自由文本。 */
@@ -306,14 +383,19 @@ export function answer(draft, answers) {
     validateOptions(entry, index);
 
     if (entry.deferred === true) {
-      // 不替用户选：字段保留当前默认值，只记一条 assumption。
-      // "无所谓"不等于"排除"，所以这里一个字都不往字段里写。
-      if (typeof entry.assumed !== 'string' || !entry.assumed.trim()) {
-        throw new InterviewError(`answers[${index}].assumed 为空：deferred 必须写明保留下来的默认值是什么，否则 assumption 无从复核`);
+      if (!DEFERRABLE_FIELDS.has(field)) {
+        throw new InterviewError(`answers[${index}].field = ${quote(field)}：该字段必须由用户在给出的选项中作答，不接受 deferred；可以 deferred 的只有 ${[...DEFERRABLE_FIELDS].join(' / ')}`);
       }
+      // 不替用户选，但也不让契约自相矛盾：assumed 原样写进字段。
+      // 执行方读的是契约字段而不是 extensions，字段为空、extensions 里却写着"假定排除 X"，
+      // 是一份自己跟自己打架的契约。
+      const assumed = normalizeAssumed(entry, index);
+      applyDeferral(contract, field, assumed);
+      const record = { field, assumed, reason: 'user_deferred' };
       const existing = nextAssumptions.findIndex((item) => item?.field === field);
-      const record = { field, assumed: entry.assumed.trim(), reason: 'user_deferred' };
       if (existing >= 0) nextAssumptions[existing] = record; else nextAssumptions.push(record);
+      // 整段替换会冲掉此前作答写进该字段的值，留着旧记录会让完成判据第 3 条必然不成立。
+      for (let position = nextAnswers.length - 1; position >= 0; position -= 1) if (nextAnswers[position]?.field === field) nextAnswers.splice(position, 1);
       return;
     }
 

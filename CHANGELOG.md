@@ -11,6 +11,10 @@
   `permissions` 必问且最先问——`scope.exclude` / `stop_conditions` 的判据只在 write 模式下生效，
   而 scaffold 默认 `read_only`，不先问权限，写任务会一路走完却从没被问到边界和刹车。
   轮次与作答记录写在契约草稿自己的 `extensions.interview` 里，并进入 `contract_digest`；上限 3 轮。
+  `permissions` / `objective` / `acceptance` 必须有 `source: "user"` 的作答记录，不接受 assumption——
+  否则模型可以先把 `objective` 写进草稿，再记一条"用户说都行"，在没有任何用户选择的情况下把契约冻掉。
+  只有 `scope.include` / `scope.exclude` / `stop_conditions` 可以 `deferred`，`assumed` 会原样写进对应字段
+  （执行方读的是契约字段而不是 `extensions`），`assumed` 允许是空数组表示"没有"。
   用法见 `agentkit docs orchestrate contract-interview`。
 - 新增 `agentkit contract scaffold` 别名。契约骨架下沉到 `core/contract-scaffold.mjs`，
   与 `agentkit verify scaffold --kind contract` 同源，两边只在 `skill_set` 上分叉

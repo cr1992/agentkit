@@ -46,6 +46,8 @@ verify 侧冻结 `verify-agent-output`。
 | `remaining_criteria[]` | 仍缺的完成判据，每条带 `criterion` / `field` / `detail` |
 | `required_fields[]` | 本次权限模式下的必问题清单 |
 
+每道题带一个 `deferrable` 布尔位：`false` 的题只有一条路——用户在选项里选（见下）。
+
 `options` 是空槽——命令不生成选项。
 
 ### `contract interview-answer --input <草稿> --answers <作答文件>`
@@ -55,15 +57,32 @@ verify 侧冻结 `verify-agent-output`。
 ```jsonc
 { "field": "permissions", "options": ["read_only", "write"], "selected": 1, "source": "user" }
 { "field": "objective",   "options": ["A", "B"], "selected": "custom", "custom_value": "用户原话", "source": "user" }
-{ "field": "scope.exclude", "options": ["A", "B"], "deferred": true, "assumed": "保留 scaffold 的空 exclude" }
+{ "field": "scope.exclude", "options": ["A", "B"], "deferred": true, "assumed": ["schemas/", "四个 SKILL.md"] }
 ```
 
 命令把选中的内容写进对应字段，追加 `extensions.interview.answers[]`，重新校验，
 输出下一批问题（`next`）或 `complete: true`。
 
-`deferred` 用于用户回答"都行"或拒答：**不替用户选**——字段保留当前默认值，一个字都不往里写，
-只在 `extensions.interview.assumptions[]` 记下 `{ field, assumed, reason: "user_deferred" }`。
-**"无所谓"不等于"排除"**，所以 `deferred` 永远不会往 `scope.exclude` 里加内容。带 assumption 的字段视为已作答。
+### `deferred`：用户回答"都行"或拒答
+
+只有 **`scope.include` / `scope.exclude` / `stop_conditions`** 可以 `deferred`。
+每道题的 `deferrable` 字段直接标出它走不走得了这条路。
+
+`permissions` / `objective` / `acceptance` **必须有 `source: "user"` 的作答记录**，不接受 assumption。
+否则模型可以先把 `objective` 写进草稿，再记一条"用户说都行"，在没有任何用户选择的情况下把契约冻掉——
+这正是访谈要防的"模型替用户回答"，而且是机制拦得住的那一部分。对这三个字段提交 `deferred`，
+`interview-answer` 直接拒绝。
+
+`deferred` 时命令把 `assumed` **原样写进该字段**（整段替换），并记下
+`{ field, assumed, reason: "user_deferred" }`。字段而不是 `extensions` 才是执行方会读的东西：
+字段留空、`extensions` 里却写着"假定排除 X"，是一份自己跟自己打架的契约。
+
+- `assumed` 是字符串数组，单条可直接写字符串；
+- `assumed` **可以是空数组**，表示"没有要排除的 / 没有额外终止条件"。这时 write 模式的 warning 保留，
+  不影响冻结；
+- 完成判据第 3 条对 assumption 同样生效：字段当前值必须与 `assumed` 逐项相等，事后手改就不成立；
+- `scope.include` 的 `assumed` 若仍含 scaffold 占位，实质性判据照常拦住，这里不特判；
+- 带 assumption 的字段视为已作答。
 
 ### `contract interview-freeze --input <草稿>`
 
@@ -98,10 +117,13 @@ error 指向的字段一律重问——填了一轮文字不等于问完了；wa
 三条同时满足才冻结：
 
 1. **实质性判据的创建入口 error 为零。** warning 允许保留：用户可以明确回答"没有要排除的"，
-   这时 `scope.exclude` 为空的 warning 仍在，但该字段已有作答记录。
-2. **每道必问题都有一条作答记录**（`source: "user"`），或一条 `user_deferred` 的 assumption。
-3. **每条作答记录的 `field` 在契约里的当前值，与 `selected` 对应的内容一致。**
-   单值字段（`permissions` / `objective`）按相等判定，列表字段（`acceptance` / `scope.*` / `stop_conditions`）按包含判定。
+   这时 `scope.exclude` 为空的 warning 仍在，但该字段已有作答记录或 assumption。
+2. **每道必问题都有一条作答记录**（`source: "user"`）。
+   `scope.include` / `scope.exclude` / `stop_conditions` 可以改由一条 `user_deferred` 的 assumption 满足；
+   `permissions` / `objective` / `acceptance` 不行。
+3. **每条记录与契约当前值一致。** 作答记录看 `selected` 对应的内容：单值字段
+   （`permissions` / `objective`）按相等判定，列表字段（`acceptance` / `scope.*` / `stop_conditions`）
+   按包含判定。assumption 看 `assumed`：整段按顺序全等判定。
 
 第 3 条是这台状态机的实际门禁：事后手改字段而不更新记录，冻结就不成立。
 
@@ -117,7 +139,7 @@ error 指向的字段一律重问——填了一轮文字不等于问完了；wa
       { "field": "objective", "options": ["A", "B"], "selected": "custom", "custom_value": "用户原话", "source": "user" }
     ],
     "assumptions": [
-      { "field": "scope.exclude", "assumed": "保留 scaffold 的空 exclude", "reason": "user_deferred" }
+      { "field": "scope.exclude", "assumed": ["schemas/", "四个 SKILL.md"], "reason": "user_deferred" }
     ]
   }
 }
@@ -126,7 +148,10 @@ error 指向的字段一律重问——填了一轮文字不等于问完了；wa
 - `options` 是当时给出的 2–4 个选项原文，**逐字保留**；
 - `selected` 是选项下标，或 `"custom"` 配 `custom_value` 写用户原话；
 - `source` 只能是 `"user"`；
-- 单值字段再次作答会**替换**旧记录——两条记录只有一条能与字段当前值一致，留着另一条会让判据 3 永远不成立。
+- `assumptions[].field` 只能是三个可 deferred 字段之一，`assumed` 是字符串数组，`reason` 只能是 `"user_deferred"`；
+- 单值字段再次作答会**替换**旧记录——两条记录只有一条能与字段当前值一致，留着另一条会让判据 3 永远不成立；
+- 对一个字段 `deferred` 会**整段替换**该字段并丢掉它此前的作答记录；反过来，对已 deferred 的字段作答会移除那条 assumption。
+  同一个字段不会同时挂着作答记录和 assumption。
 
 `extensions.interview` **进入 `contract_digest`**。这是预期的：作答记录是契约的一部分，冻结后不可变。
 

@@ -177,6 +177,7 @@ const CLI_NOTES = [
   '--items 是逗号分隔的 acceptance contract_item_id 列表，投影合同只能收窄这些条目。',
   'interview 是"多次调用、文件往返"的状态机：ask 出题 → 你把选项填进题目并交给用户选 → answer 回填 → freeze 冻结。',
   'interview-answer 的 --answers 是 { "answers": [...] } 或裸数组；每题 2–4 个互不相同的非空选项，selected 为下标或 "custom"。',
+  'permissions / objective / acceptance 必须由用户在选项中作答；只有 scope.include / scope.exclude / stop_conditions 可以 deferred，assumed 会原样写进字段。',
   '轮次与作答记录写在契约草稿自己的 extensions.interview 里，会进入 contract_digest；上限 3 轮。',
   '用法与完成判据见 agentkit docs orchestrate contract-interview。',
 ];

@@ -148,33 +148,118 @@ test('作答记录与字段当前值不一致时不冻结', () => {
   } finally { box.cleanup(); }
 });
 
-test('"都行"进 assumptions[]，不进 scope.exclude，且视为已作答', () => {
+test('"都行"的 scope.exclude：assumed 写进字段、进 assumptions[]、视为已作答；事后手改则不冻结', () => {
   const box = sandbox();
   try {
     const scaffold = contractMain(['scaffold', '--workdir', box.dir]);
     const first = answerRound(box, scaffold, FIRST_ROUND, 'r1');
     const second = answerRound(box, first.payload.contract, [
-      { field: 'scope.exclude', options: ['schemas/ 与四个 SKILL.md', 'tests/'], deferred: true, assumed: '保留 scaffold 的空 exclude，不预设任何禁止面' },
+      { field: 'scope.exclude', options: ['schemas/ 与四个 SKILL.md', 'tests/'], deferred: true, assumed: ['schemas/', '四个 SKILL.md'] },
       SECOND_ROUND[1],
     ], 'r2');
     assert.equal(second.status, 0, second.stderr);
     const contract = second.payload.contract;
     assert.deepEqual(contract.extensions.interview.assumptions, [
-      { field: 'scope.exclude', assumed: '保留 scaffold 的空 exclude，不预设任何禁止面', reason: 'user_deferred' },
+      { field: 'scope.exclude', assumed: ['schemas/', '四个 SKILL.md'], reason: 'user_deferred' },
     ]);
-    // "无所谓"不等于"排除"：assumed 的原话一个字都没写进 scope.exclude。
-    assert.deepEqual(contract.scope.exclude, []);
+    // 执行方读的是契约字段而不是 extensions：assumed 原样落进 scope.exclude，
+    // 字段为空却在 extensions 里写着"假定排除 X"，是一份自己跟自己打架的契约。
+    assert.deepEqual(contract.scope.exclude, ['schemas/', '四个 SKILL.md']);
+    // 走的是 assumption 这条路，不伪造成用户作答记录。
     assert.equal(contract.extensions.interview.answers.some((item) => item.field === 'scope.exclude'), false);
-    // 带 assumption 的字段视为已作答：exclude 为空的 warning 仍在，但不再拦住冻结。
     assert.equal(second.payload.complete, true);
-    assert.equal(second.payload.warnings.length, 1);
-    assert.match(second.payload.warnings[0], /scope\.exclude 为空/u);
     assert.deepEqual(outstandingFields(contract), []);
 
     const path = box.write('deferred.json', contract);
     const freeze = run(['contract', 'interview-freeze', '--input', path]);
     assert.equal(freeze.status, 0, freeze.stderr);
+
+    // 完成判据第 3 条对 assumption 同样生效：事后手改字段而不更新记录 → 不冻结。
+    const tampered = structuredClone(contract);
+    tampered.scope.exclude = ['被事后改写的排除项'];
+    delete tampered.contract_digest;
+    const tamperedPath = box.write('deferred-tampered.json', tampered);
+    const rejected = run(['contract', 'interview-freeze', '--input', tamperedPath]);
+    assert.notEqual(rejected.status, 0);
+    assert.match(JSON.parse(rejected.stderr).message, /与 scope\.exclude 的当前值不一致/u);
+    assert.deepEqual(completion(tampered).missing.map((item) => item.criterion), ['assumption_field_mismatch']);
+  } finally { box.cleanup(); }
+});
+
+test('assumed 为空数组的 scope.exclude deferred 可以冻结，write 模式的 warning 保留', () => {
+  const box = sandbox();
+  try {
+    const scaffold = contractMain(['scaffold', '--workdir', box.dir]);
+    const first = answerRound(box, scaffold, FIRST_ROUND, 'r1');
+    const second = answerRound(box, first.payload.contract, [
+      { field: 'scope.exclude', options: ['schemas/ 与四个 SKILL.md', '没有要排除的'], deferred: true, assumed: [] },
+      SECOND_ROUND[1],
+    ], 'r2');
+    assert.equal(second.status, 0, second.stderr);
+    const contract = second.payload.contract;
+    // 空数组表示"没有要排除的"：字段留空是与 assumption 一致的，不是脱钩。
+    assert.deepEqual(contract.scope.exclude, []);
+    assert.deepEqual(contract.extensions.interview.assumptions, [{ field: 'scope.exclude', assumed: [], reason: 'user_deferred' }]);
+    assert.equal(second.payload.complete, true);
+    // warning 允许保留：它只说明"边界没划出来"，划不划得对判据判断不了。
+    assert.equal(second.payload.warnings.length, 1);
+    assert.match(second.payload.warnings[0], /scope\.exclude 为空/u);
+
+    const freeze = run(['contract', 'interview-freeze', '--input', box.write('empty-deferred.json', contract)]);
+    assert.equal(freeze.status, 0, freeze.stderr);
     assert.match(JSON.parse(freeze.stdout).warnings[0], /scope\.exclude 为空/u);
+  } finally { box.cleanup(); }
+});
+
+test('permissions / objective / acceptance 不接受 deferred，只能由用户在选项中作答', () => {
+  const box = sandbox();
+  try {
+    const scaffold = contractMain(['scaffold', '--workdir', box.dir]);
+    for (const field of ['permissions', 'objective', 'acceptance']) {
+      const result = answerRound(box, scaffold, [
+        { field, options: ['A 选项', 'B 选项'], deferred: true, assumed: ['模型替他定的值'] },
+      ], `deferred-${field.replace('.', '-')}`);
+      assert.notEqual(result.status, 0, `${field} 的 deferred 本应被拒绝`);
+      const message = JSON.parse(result.stderr).message;
+      assert.match(message, new RegExp(`answers\\[0\\]\\.field = "${field}"`, 'u'), `${field}：错误文案未写明字段路径`);
+      assert.match(message, /该字段必须由用户在给出的选项中作答/u);
+    }
+  } finally { box.cleanup(); }
+});
+
+test('模型预填 objective 但没有用户作答记录时不冻结，且不提 assumption 这条路', () => {
+  const box = sandbox();
+  try {
+    // 模型先把 objective 写进草稿，再手工记一条"用户说都行"——这正是要拦住的那条路。
+    const contract = contractMain(['scaffold', '--workdir', box.dir]);
+    contract.objective = '模型自己写进去的目标';
+    contract.scope.include = ['core/'];
+    contract.acceptance = [{ contract_item_id: 'acceptance-1', requirement: '模型自己写进去的要求' }];
+    contract.extensions.interview = {
+      schema_version: 1,
+      round: 1,
+      answers: [{ field: 'permissions', options: ['read_only', 'write'], selected: 0, source: 'user' }],
+      assumptions: [
+        { field: 'objective', assumed: ['模型自己写进去的目标'], reason: 'user_deferred' },
+        { field: 'acceptance', assumed: ['模型自己写进去的要求'], reason: 'user_deferred' },
+      ],
+    };
+    assert.deepEqual(contractSubstance(contract).errors, []);
+
+    const freeze = run(['contract', 'interview-freeze', '--input', box.write('prefilled.json', contract)]);
+    assert.notEqual(freeze.status, 0);
+    const message = JSON.parse(freeze.stderr).message;
+    for (const field of ['objective', 'acceptance']) {
+      assert.match(message, new RegExp(`${field}：缺少 source: "user" 的作答记录，该字段必须由用户在给出的选项中作答`, 'u'), `${field} 未被要求用户作答`);
+      assert.match(message, new RegExp(`assumptions\\[\\d+\\]\\.field = "${field}"：该字段必须由用户在给出的选项中作答，不接受 assumption`, 'u'));
+    }
+    // 核心三项的 remaining_criteria 不再提 user_deferred 这条路；可 deferred 的字段仍然提。
+    const blocked = completion(contract).missing.filter((item) => item.criterion === 'missing_answer');
+    assert.deepEqual(blocked.map((item) => item.field), ['objective', 'acceptance', 'scope.include']);
+    for (const item of blocked) {
+      if (item.field === 'scope.include') assert.match(item.detail, /user_deferred 的 assumption/u);
+      else assert.doesNotMatch(item.detail, /user_deferred/u, `${item.field} 不应再给出 assumption 这条路`);
+    }
   } finally { box.cleanup(); }
 });
 
