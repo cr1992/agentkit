@@ -33,9 +33,10 @@ import { atomicWriteJson, atomicWriteText, writeNewJson } from '../../core/atomi
 import { createDigestKit } from '../../core/digest.mjs';
 import { distributionDigest, skillDistributionRoots } from '../../core/content-digest.mjs';
 import {
-  SCAFFOLD_ARGV, SCAFFOLD_CHECK_ID, SCAFFOLD_OBJECTIVE, SCAFFOLD_REQUIREMENT, SCAFFOLD_SCOPE_ITEM,
+  SCAFFOLD_ARGV, SCAFFOLD_CHECK_ID,
   contractSubstance, coverageSubstance, profileSubstance, substanceWarnings,
 } from '../../core/contract-substance.mjs';
+import { buildScaffoldContract } from '../../core/contract-scaffold.mjs';
 
 export const RUNTIME_VERSION = '1.3.0';
 export const PROTOCOL_VERSION = 1;
@@ -844,20 +845,18 @@ function addDigest(value, field) {
   return output;
 }
 
-/** @param {string} workdir */
+/**
+ * 契约骨架住在 core/contract-scaffold.mjs：orchestrate 域的 `contract scaffold` 别名用的是同一份，
+ * 两边只在 skill_set 上分叉（各自冻结自己域的 content digest）。骨架抄两份就会各自漂移，
+ * 而 interview 出的题、core/contract-substance.mjs 的占位判据都以这份骨架为前提。
+ * @param {string} workdir
+ */
 function scaffoldContract(workdir) {
-  return addDigest({
-    schema_version: 1,
-    contract_id: randomUUID(),
-    objective: SCAFFOLD_OBJECTIVE,
-    scope: { include: [SCAFFOLD_SCOPE_ITEM], exclude: [] },
-    acceptance: [{ contract_item_id: 'acceptance-1', requirement: SCAFFOLD_REQUIREMENT }],
-    permissions: { mode: 'read_only', writable_paths: [] },
-    environment: { repository: resolve(workdir), isolation: 'caller_supplied' },
-    skill_set: [{ name: 'verify-agent-output', version: RUNTIME_VERSION, content_digest: skillContentDigest(), provider_mode: 'primary' }],
-    stop_conditions: [],
-    extensions: {},
-  }, 'contract_digest');
+  return addDigest(buildScaffoldContract({
+    workdir,
+    contractId: randomUUID(),
+    skillSet: [{ name: 'verify-agent-output', version: RUNTIME_VERSION, content_digest: skillContentDigest(), provider_mode: 'primary' }],
+  }), 'contract_digest');
 }
 
 function scaffoldProfile() {

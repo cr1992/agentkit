@@ -7,23 +7,16 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ContractError, canonicalJson, envelopeDigest, parseJsonStrict, sha256, validateContract } from './contract-tool.mjs';
-import { ORCHESTRATION_PROTOCOL_VERSION, ORCHESTRATION_RUNTIME_VERSION } from './orchestration-metadata.mjs';
+import { ORCHESTRATION_PROTOCOL_VERSION, ORCHESTRATION_RUNTIME_VERSION, skillContentDigest } from './orchestration-metadata.mjs';
 import { isHelpRequest, renderCliHelp, specOptionNames } from '../../core/cli-help.mjs';
 import { writeNewJson } from '../../core/atomic-fs.mjs';
 import { createReflectionKit } from '../../core/reflection.mjs';
-import { distributionDigest, skillDistributionRoots } from '../../core/content-digest.mjs';
 import { substanceWarnings } from '../../core/contract-substance.mjs';
 
 const { buildProposal, buildReflection } = createReflectionKit({ strict: true });
 
-const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'orchestrate-subagents');
-// 摘要覆盖 Skill 目录 + 共享 core + canonical schemas：执行真正依赖的全部分发内容。
-// PACKAGE_ROOT 是模块常量，传入自定义 root 只替换 Skill 目录那一段，便于测试摘要与安装路径无关。
-const PACKAGE_ROOT = resolve(SKILL_ROOT, '..');
-const DOMAIN_ROOT = dirname(fileURLToPath(import.meta.url));
-export function skillContentDigest(root = SKILL_ROOT) {
-  return distributionDigest(skillDistributionRoots({ packageRoot: PACKAGE_ROOT, skillRoot: root, domainRoot: DOMAIN_ROOT, docsRoot: join(PACKAGE_ROOT, 'docs', 'orchestrate') }));
-}
+// 摘要真源在 orchestration-metadata.mjs；这里继续导出，既有调用方（含测试）不受搬迁影响。
+export { skillContentDigest };
 
 const NODE_STATES = new Set(['pending', 'running', 'blocked', 'awaiting_verification', 'passed', 'failed', 'cancelled']);
 const TERMINAL_NODE_STATES = new Set(['passed', 'failed', 'cancelled']);

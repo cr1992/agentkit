@@ -109,7 +109,7 @@ function helpText() {
     '',
     '域：',
     '  worktree <命令>              Git worktree 隔离与生命周期（含 worktree scan）',
-    '  contract <命令>              任务契约规范化、校验、摘要与投影',
+    '  contract <命令>              任务契约 scaffold、访谈、规范化、校验、摘要与投影',
     '  orchestrate <工具> <命令>    ledger | preflight | review-budget | reflection',
     '  host <工具> <命令>           cache | model-policy',
     '  verify <命令>                冻结 Artifact 的一次性独立验收',

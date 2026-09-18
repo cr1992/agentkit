@@ -85,6 +85,18 @@ test('docs 只输出参考文档原文，缺主题时列索引', () => {
   assert.equal(index.status, 0);
   assert.deepEqual(index.stdout.trim().split('\n'), ['evidence-schema', 'input-preparation', 'verification-protocol']);
 
+  // orchestrate 的主题清单同样钉死：新增一份参考文档而没接进索引，或索引里留下断头主题，都在这里失败。
+  const orchestrate = run([CLI, 'docs', 'orchestrate']);
+  assert.equal(orchestrate.status, 0);
+  assert.deepEqual(orchestrate.stdout.trim().split('\n'), [
+    'contract-interview', 'dispatch-contract', 'failure-routing-and-recovery', 'host-capability-cache',
+    'isolation-fallback', 'model-routing-config', 'orchestration-runtime', 'review-budget',
+    'task-playbooks', 'user-facing-reporting',
+  ]);
+  const interview = run([CLI, 'docs', 'orchestrate', 'contract-interview']);
+  assert.equal(interview.status, 0);
+  assert.equal(interview.stdout, readFileSync(join(ROOT, 'docs', 'orchestrate', 'contract-interview.md'), 'utf8'));
+
   const raw = run([CLI, 'docs', 'verify', 'evidence-schema']);
   assert.equal(raw.status, 0);
   assert.equal(raw.stdout, readFileSync(join(ROOT, 'docs', 'verify', 'evidence-schema.md'), 'utf8'));
