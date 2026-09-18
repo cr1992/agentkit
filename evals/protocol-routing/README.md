@@ -53,7 +53,22 @@ claude -p <prompt> --output-format stream-json --verbose
 
 所以驱动器**默认拒绝启动真实会话**，必须显式加 `--allow-bypass-permissions`；
 未加时 `run.mjs` 非零退出并打印原因，也不会留下输出目录。CI 的 `live` 段显式加了这个 flag，
-理由是 GitHub runner 是一次性环境。本机跑之前请确认自己在容器或虚拟机里。
+理由是 GitHub runner 是一次性环境。本机跑请走
+[「本机容器运行（订阅 token）」](#本机容器运行订阅-token)，不要在开发机上直接跑。
+
+宿主 CLI 自己也钉着同一条线：**`bypassPermissions` 在 uid 0 下会被直接拒绝**。
+claude 2.1.251 的实现是
+
+```js
+if (permissionMode === "bypassPermissions" || …) {
+  if (process.getuid() === 0 && process.env.IS_SANDBOX !== "1" && !CLAUDE_CODE_BUBBLEWRAP)
+    console.error("--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons"),
+    process.exit(1);
+}
+```
+
+所以容器必须以非 root 用户跑（镜像用的是 `node:22-slim` 自带的 `node`，uid 1000）。
+`IS_SANDBOX=1` 那条逃生阀存在但没有文档背书，这里不用它。
 
 **为什么不能换一个更弱的权限模式**：`WRITE` 判据看的是 fixture 仓的 git 摘要变化。
 被门禁拒掉的写操作不会改变摘要，于是一次「本该写、却被权限门禁拦下」的会话会被记成 `NONE`——
@@ -69,10 +84,24 @@ claude -p <prompt> --output-format stream-json --verbose
 - 宿主跑起来必需的：`PATH`、`TERM`、`TMPDIR` / `TMP` / `TEMP`、`LANG` / `LANGUAGE` / `LC_*`、
   `NODE_EXTRA_CA_CERTS`、`NODE_OPTIONS`、`SSL_CERT_FILE` / `SSL_CERT_DIR`、
   `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`（含小写形式）；
-- Claude Code 自己的认证：`ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BASE_URL`。
-  `claude --help` 只点名了 `ANTHROPIC_API_KEY`；另两个是自建网关的常见配法，
+- Claude Code 自己的认证：`ANTHROPIC_API_KEY`、`CLAUDE_CODE_OAUTH_TOKEN`、
+  `ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BASE_URL`。
+  `HOME` 被重定向到会话目录，交互式 OAuth / keychain 那条路走不通，能用的只有
+  「由环境变量带进来」的两条，**二者同级**：
+
+  | 变量 | 来源 | 计费 | 用在哪 |
+  | --- | --- | --- | --- |
+  | `ANTHROPIC_API_KEY` | 控制台 API key | 按 token 计费 | CI 的 `live` 段 |
+  | `CLAUDE_CODE_OAUTH_TOKEN` | `claude setup-token` | 消耗 Claude 订阅额度 | 本机容器运行 |
+
+  变量名不是凭记忆写的：`claude setup-token --help` 说的是「Set up a long-lived
+  authentication token (requires Claude subscription)」，`CLAUDE_CODE_OAUTH_TOKEN`
+  这个键名在 claude 2.1.251 的二进制里能直接搜到。`claude --help` 的选项表里两个都没点名
+  （它只在 `--bare` 的说明里提了 `ANTHROPIC_API_KEY`）。
+  `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` 是自建网关的常见配法，
   **属于「拿不准但放进去了」**——若你的部署不需要，删掉即可。
-  `HOME` 被重定向到会话目录，OAuth / keychain 那条路走不通，实际可用的只有 API key。
+  `CLAUDE_CODE_*` 只放行 `CLAUDE_CODE_OAUTH_TOKEN` 这**一个键**，不是整类前缀：
+  别的 `CLAUDE_CODE_*` 会改变宿主行为，混进来就等于悄悄换了评测条件。
 
 第三方 provider（Bedrock / Vertex / Foundry）的 `AWS_*` / `GOOGLE_*` / `AZURE_*` **不在**白名单里。
 要用那些 provider 跑评测，得显式往 `INHERITED_ENV_KEYS` 里加，并且清楚自己在把什么交出去。
@@ -124,6 +153,13 @@ HOME=<会话 home> CLAUDE_CONFIG_DIR=<会话 home>/.claude \
 装完会校验四个 `SKILL.md` 都在；缺任何一个直接失败。`content_digest` 取自被测提交自己的
 `agentkit capabilities --json`，是报告里唯一能回溯到源码的锚点。
 
+**判据只看文件系统，不看安装器的退出码。** `--agent '*'` 会把 skill 铺给安装器认识的全部
+79 个 agent，其中只要有一个不支持全局安装（2026-09 实测：`Eve does not support global
+skill installation`），安装器就整体退出码 1，并把四个 skill 全标成 `failed`——
+而 `CLAUDE_CONFIG_DIR/skills/<name>/SKILL.md` 四份全都在。拿退出码当判据的话，
+每个会话都会在这里假失败，整套评测一条也跑不出来。安装器的原始回报（退出码 + JSON）
+记进 `observation.jsonl` 的 `meta.skill_installer`，只留档，不参与判定。
+
 ### `WRITE` 怎么判
 
 判据只有一条：**该事件之后 fixture 仓的 `git status --porcelain` + `HEAD` 摘要，相对上一事件是否变化**。
@@ -171,7 +207,119 @@ node evals/protocol-routing/run.mjs --driver replay \
   --runs 3 --out /tmp/pr-replay
 ```
 
-### 常规评测
+### 本机容器运行（订阅 token）
+
+两条真实评测路径，选一条：
+
+| 路径 | 一次性环境 | 认证 | 计费 |
+| --- | --- | --- | --- |
+| **本机容器**（本节） | `docker run --rm` 起的一次性容器 | `CLAUDE_CODE_OAUTH_TOKEN` | 消耗 Claude 订阅额度 |
+| GitHub Actions（见「CI」） | GitHub runner，跑完即销毁 | 仓库 secret `ANTHROPIC_API_KEY` | 按 token 计费 |
+
+容器就是 `bypassPermissions` 要求的那个一次性环境：被测会话能碰到的只有容器文件系统，
+仓库只读挂进来，唯一可写的宿主目录是结果目录。
+
+#### 从零开始
+
+**1. 拿一个长期 token（在你自己的终端里做）**
+
+```bash
+claude setup-token                      # 需要 Claude 订阅，会走一次浏览器授权
+export CLAUDE_CODE_OAUTH_TOKEN=<它打印出来的 token>
+```
+
+> ⚠️ 这个 token 等于你的订阅额度。**只该出现在你自己的 shell 里**——不要贴进任何 agent 会话、
+> 不要写进文件、不要提交。运行器只以 `-e CLAUDE_CODE_OAUTH_TOKEN`（不带取值）把它交给容器引擎，
+> 取值由引擎从你的环境继承，不进命令行、不进日志、不进结果目录。
+> 用完可以在 claude.ai 的设置里把这个 token 吊销。
+>
+> 没有订阅也能跑：改 `export ANTHROPIC_API_KEY=<控制台 key>`，两者都空则运行器拒绝启动。
+
+**2. 容器自检（零模型费用，不起任何会话）**
+
+```bash
+node evals/protocol-routing/container/run-in-container.mjs \
+  --selftest --out /tmp/pr-selftest
+```
+
+构建镜像，然后在容器里逐项证明：以非 root 跑（打印 `id`，uid 1000）、`/src` 确实只读、
+`/out` 可写、仓内 `node --test` 全绿、回放驱动器的两条平凡基线与本 README 记载一致、
+`npx skills add` 在容器里能把四个 skill 装进隔离配置目录。
+**它不起任何会话，因此不需要 token、不产生任何模型费用。**
+镜像、CLI 版本、引擎版本写进 `<out>/container.json`。
+
+**3. 冒烟（1 条用例 × 1 次）**
+
+```bash
+node evals/protocol-routing/container/run-in-container.mjs \
+  --out /tmp/pr-smoke --model <模型 ID> --cases 1 --runs 1
+```
+
+跑完先看这两项，再放开全量（理由见「已知盲区」第 1 条）：
+
+```bash
+test -s /tmp/pr-smoke/sessions/case-1/run-1/probe.jsonl && echo "probe.jsonl 非空"
+head -1 /tmp/pr-smoke/sessions/case-1/run-1/observation.jsonl \
+  | node -e 'process.stdin.on("data",(d)=>console.log("unpaired_tool_uses =", JSON.parse(d).unpaired_tool_uses))'
+```
+
+`probe.jsonl` 为空说明 PostToolUse hook 根本没触发，`unpaired_tool_uses` 不为 0 说明事件配对错位——
+两者任一成立，这一份结果都不能当数据点用。
+
+**4. 全量（11 条 × 3 次 = 33 个真实会话）**
+
+```bash
+node evals/protocol-routing/container/run-in-container.mjs \
+  --out /tmp/pr-eval --model <模型 ID> --runs 3
+```
+
+`--cases 7,8 --runs 10` 之类的参数原样透传给 `run.mjs`；`--allow-bypass-permissions` 由运行器
+无条件补上（容器就是它要求的那个一次性环境），不用自己加。
+`container/run-in-container.sh` 是等价的 shell 入口。
+
+#### 运行器自己的选项
+
+| 选项 | 默认 | 说明 |
+| --- | --- | --- |
+| `--out <目录>` | 必填 | 唯一以读写方式挂进容器的宿主目录 |
+| `--engine docker\|podman` | `docker` | 本机两者都有时按需选 |
+| `--image <name:tag>` | `agentkit-protocol-routing-eval:latest` | |
+| `--claude-version <版本>` | `latest` | 构建时钉住宿主 CLI 版本，复现用 |
+| `--repo <路径>` | 本仓库根 | 被测 checkout，只读挂载 |
+| `--memory` / `--pids-limit` | `4g` / `512` | 资源上限 |
+| `--no-build` | 关 | 跳过构建，直接用已有镜像 |
+| `--selftest` | 关 | 不需要模型的容器自检 |
+| 其余一切 | — | 原样透传给 `run.mjs` |
+
+#### 容器怎么起（安全面）
+
+```
+<engine> run --rm
+  --cap-drop ALL --security-opt no-new-privileges
+  --pids-limit 512 --memory 4g
+  -v <repo>:/src:ro          # 仓库只读
+  -v <out>:/out              # 唯一可写的宿主目录
+  -e CLAUDE_CODE_OAUTH_TOKEN # 不带取值，由引擎从调用者环境继承
+  -w /work --entrypoint /bin/bash <image> -euo pipefail -c '<脚本>'
+```
+
+容器内脚本先验 `/src` 确实写不进去，再把它拷到 `/work/repo`（排除 `.git` / `node_modules`）后
+才起 `run.mjs`。harness 的 fixture 仓、state root、会话 `HOME` 都落在 `/out` 下面，全在容器里。
+
+**不做的事**：不挂宿主 `HOME`、不挂 `docker.sock`、不加 `--privileged`、不用 `--network host`、
+不加回任何 capability。这几条不是风格问题——容器是 `bypassPermissions` 唯一的风险兜底，
+少一个 `:ro`、多一个 `--privileged`，容器就不再是一次性环境，而这类错误在真实评测里
+不会报错，只会安静地扩大爆炸半径。所以「拼容器命令行」被抽成纯函数，
+`tests/container.test.mjs` 对上面每一项各有一条断言，`npm test` 里跑，**不需要 docker**。
+
+#### 结果里记了什么
+
+`<out>/container.json`：引擎与版本、镜像名与 `image_id` / `RepoDigests`、镜像里实际装到的
+claude CLI 版本、请求的版本、只读仓库路径、完整的 `run` argv、认证变量的**键名**。
+它和 `report.json` 里已有的宿主版本、模型 ID、四个 skill 的 `content_digest` 并列，
+合起来才够复现一次评测。
+
+### 常规评测（直接跑，不经容器）
 
 ```bash
 node evals/protocol-routing/run.mjs \
@@ -181,6 +329,7 @@ node evals/protocol-routing/run.mjs \
 ```
 
 `--allow-bypass-permissions` 不加就直接拒绝启动，原因见上面「`bypassPermissions`：只在一次性环境里跑」。
+**只在本身就是一次性环境的地方这么跑**（CI runner、虚拟机）；在开发机上请走上面那条容器路径。
 
 **一次常规评测 = 11 条用例 × 3 次 = 33 个真实模型会话**，每个会话都要读四个 SKILL.md（21433 字符）
 并跑若干工具调用，费用按这个量级估。它的用途是发现 0/3 和 3/3 这类明显的失守或稳定，
@@ -203,6 +352,10 @@ node evals/protocol-routing/run.mjs --driver claude-headless \
 `replay` 段永远跑、零费用；`live` 段要 `run_live: true`、显式 `model` 和仓库 secret
 `ANTHROPIC_API_KEY`，缺任何一个**显式失败**而不是静默跳过。
 
+CI 这条路和本机容器那条路是并列的两个选项，互不替代：CI 用 API key、按 token 计费、
+一次性环境是 GitHub runner；本机用订阅 token、消耗订阅额度、一次性环境是容器。
+CI 不走容器——runner 本身跑完即销毁，再套一层容器只是多一层。
+
 ## 已知盲区
 
 按可能造成误判的严重程度排：
@@ -213,9 +366,12 @@ node evals/protocol-routing/run.mjs --driver claude-headless \
    这段代码应当按「未验证」对待；跑通后请把此条改掉。
    **已实测**的只有 skill 安装那一段（`npx skills add <本地路径> -g` 确实落进
    `CLAUDE_CONFIG_DIR`，四份 `SKILL.md` 都在）。回放驱动器与分类器不受影响——自测已覆盖。
-   第一次真实运行前建议先只跑一条用例（`--cases 1 --runs 1 --allow-bypass-permissions`，
-   在容器或虚拟机里），检查该会话目录下的 `probe.jsonl` 非空、`observation.jsonl` 的
+   第一次真实运行前先只跑一条用例（见「本机容器运行」第 3 步的冒烟），
+   检查该会话目录下的 `probe.jsonl` 非空、`observation.jsonl` 的
    `meta.unpaired_tool_uses` 为 0，再放开全量。
+   **容器运行器同样未经真实会话验证**：镜像、挂载、非 root、skill 安装这几段已经在容器里
+   实跑过（`--selftest`），但「容器里起得来一个真实的 `claude -p` 会话」这一步没验过，
+   订阅 token 那条认证路径也没验过——第一次跑冒烟时如果会话起不来，先看 `stderr.log`。
 2. **并行工具调用可能错位。** hook 按**完成**时间触发，`stream.jsonl` 按**发起**顺序排。
    配对优先用 `tool_use_id`（若 hook 载荷提供），否则退回按顺序配。宿主一次发起多个并行工具时，
    顺序配可能把摘要挂到相邻的事件上。`observation.jsonl` 的 `meta.pairing` 记录本次用的是哪种，
@@ -227,15 +383,30 @@ node evals/protocol-routing/run.mjs --driver claude-headless \
    （正向用例不能靠「看不清」拿分）。第 10 条方向相反：解析不到按**违规**处理（fail-closed）。
 5. **#13 尚未合入。** 第 7 条依赖的覆盖规则还在 `main` 之外，构造器没有依赖它。
    #13 落地后这条用例的现场可能需要重新设计。
-6. **评测现场不是沙箱。** `bypassPermissions` 是 `WRITE` 判据成立的前提（弱权限模式会让判据
-   静默失真，见上），代价是被测会话对运行者的整个文件系统有写权限。harness 能做的只有
-   「默认拒绝 + 显式同意 + 环境变量白名单」，真正的隔离得靠一次性环境。
-   在长期存活的开发机上跑，一次越界的会话就可能留下改不回去的东西——这条没有技术兜底。
-7. **环境白名单可能配少也可能配多。** 配少了：用自建网关或第三方 provider 时会话起不来
+6. **评测现场不是沙箱；容器只把爆炸半径收到容器里。** `bypassPermissions` 是 `WRITE` 判据
+   成立的前提（弱权限模式会让判据静默失真，见上），代价是被测会话对所在机器的整个文件系统
+   有写权限。harness 自己能做的只有「默认拒绝 + 显式同意 + 环境变量白名单」，
+   真正的隔离得靠一次性环境——这就是容器那条路径存在的理由。
+   **但容器不是安全边界的全部**：会话在容器里仍然有网，仍然能对 `/out`（也就是宿主的结果目录）
+   写任意内容，仍然能读到 `/src` 里被测提交的全部源码。不在容器里跑就完全没有这层兜底。
+
+7. **结果目录按敏感材料对待。** harness 这一侧已经做到取值不落盘：token 只经环境变量传递，
+   `command.json` 只记 `env_keys`（键名），`report.json` / `report.md` 写盘前还做一次字面替换
+   兜底（`lib/redact.mjs`，把环境里 `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` /
+   `ANTHROPIC_AUTH_TOKEN` 的取值换成 `«REDACTED:<键名>»`）。
+   **管不住的是被测会话自己的输出**：会话在 `bypassPermissions` 下可以直接
+   `echo $CLAUDE_CODE_OAUTH_TOKEN`，那行字会原样进 `stream.jsonl`。
+   所以整个结果目录按敏感材料对待——**贴进 issue / PR 时只贴 `report.md` 与 `report.json`**，
+   不要整包上传 `sessions/`。`tests/container.test.mjs` 有一条端到端断言：
+   拿一个假 token 值跑完回放路径后扫描整个输出目录，确认该取值一次都不出现。
+8. **环境白名单可能配少也可能配多。** 配少了：用自建网关或第三方 provider 时会话起不来
    （报错在 `stderr.log` 里）；配多了：多传的那一项就是一条外泄面。
    `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` 属于「拿不准但放进去了」，
-   `claude --help` 只点名了 `ANTHROPIC_API_KEY`。
-8. **prompt 的措辞本身是变量。** 11 条 prompt 都刻意不提任何 skill 名、域名或动词
+   `claude --help` 的选项表里 `ANTHROPIC_API_KEY` 与 `CLAUDE_CODE_OAUTH_TOKEN` 两个都没点名
+   （前者只出现在 `--bare` 的说明里，后者的键名是从 CLI 二进制里核出来的）。
+9. **`--engine podman` 未经实跑。** 参数拼装有断言覆盖，但本机只用 docker 实跑过自检。
+   podman 在 Linux + SELinux 上可能还需要给只读挂载补 `,Z`。
+10. **prompt 的措辞本身是变量。** 11 条 prompt 都刻意不提任何 skill 名、域名或动词
    （`tests/cases.test.mjs` 有一条断言钉着），但「同一情境的不同说法」会不会换来不同路由，
    这套 harness 测不了。改 prompt 等于换了评测，不能和旧结果直接比。
 
@@ -257,9 +428,15 @@ evals/protocol-routing/
 │   ├── preconditions.mjs       # 前置状态构造
 │   ├── skill-install.mjs       # 隔离配置目录安装四个 skill
 │   ├── session-env.mjs         # 传给被测会话的环境变量白名单
+│   ├── redact.mjs              # 报告写盘前的认证取值脱敏兜底
 │   ├── probe.mjs               # PostToolUse hook：逐事件仓库摘要
 │   ├── agentkit.mjs            # 调用被测提交自己的 agentkit
 │   └── report.mjs              # 逐条 k/n、两栏、平凡基线
+├── container/                  # 本机容器运行（订阅 token）
+│   ├── Dockerfile              # node:22-slim + git + claude CLI，以非 root 用户跑
+│   ├── run-in-container.mjs    # 运行器；拼命令行的部分是纯函数，有断言钉着安全面
+│   ├── run-in-container.sh     # 等价的 shell 入口
+│   └── selftest-skill-install.mjs  # 容器自检的一环：容器内装一遍四个 skill
 ├── fixtures/replay/            # 预录会话（合成的平凡基线）
 └── tests/                      # 自测，已接进 npm test
 ```
