@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { BUDGETS, DESCRIPTION_LIMIT_PER_SKILL, DESCRIPTION_LIMIT_TOTAL, TOTAL_BUDGET } from './skill-budgets.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const ARCHITECTURE = resolve(ROOT, 'docs', 'architecture', 'skill-system-architecture.md');
@@ -66,4 +67,24 @@ test('架构真源不再引用已迁走的 references runtime', () => {
   const text = readFileSync(ARCHITECTURE, 'utf8');
   assert.doesNotMatch(text, /(?:orchestrate-subagents|verify-agent-output|run-agent-verify-loop|manage-worktrees)\/references\//u);
   assert.doesNotMatch(text, /run-agent-verify-loop\/scripts\/loop-runtime\.mjs/u);
+});
+
+// 反查：架构真源 §3.8 预算表里写的每个数字，都必须和 tests/skill-budgets.mjs 里真正起约束作用的
+// BUDGETS 一致——防止两边再次分叉（issue #14）。BUDGETS 抽成独立模块而不是从
+// skill-context-budget.test.mjs 导出，是因为 node:test 下 import 一个测试文件会连带执行它的用例。
+test('架构真源 §3.8 预算表的数字与 BUDGETS 真源一致', () => {
+  const text = readFileSync(ARCHITECTURE, 'utf8');
+
+  for (const [name, budget] of Object.entries(BUDGETS)) {
+    assert.ok(text.includes(`\`${name} <= ${budget}\``), `架构真源里 ${name} 的预算应为 ${budget}`);
+  }
+
+  assert.ok(text.includes(`<= ${TOTAL_BUDGET}\``), `架构真源里的合计预算应为 ${TOTAL_BUDGET}`);
+
+  const skillCount = Object.keys(BUDGETS).length;
+  assert.ok(text.includes(`\`<= ${DESCRIPTION_LIMIT_PER_SKILL}\``), `架构真源里 description 单项上限应为 ${DESCRIPTION_LIMIT_PER_SKILL}`);
+  assert.ok(
+    text.includes(`${skillCount} × ${DESCRIPTION_LIMIT_PER_SKILL} = ${DESCRIPTION_LIMIT_TOTAL}`),
+    `架构真源里 description 合计上限应为 ${skillCount} × ${DESCRIPTION_LIMIT_PER_SKILL} = ${DESCRIPTION_LIMIT_TOTAL}`,
+  );
 });

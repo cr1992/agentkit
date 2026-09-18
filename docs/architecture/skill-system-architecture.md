@@ -197,9 +197,19 @@ reference。reference 必须从入口说明“何时读取”，不得要求所�
 | `run-agent-verify-loop` | embedded、状态迁移、恢复/熔断分别读取已有专项 reference；正常 happy path 不加载恢复细节 |
 
 字符数是稳定、tokenizer-independent 的固定上下文代理，不冒充实际计费 Token。当前入口预算为：
-`orchestrate-subagents <= 10000`、`manage-worktrees <= 9000`、`verify-agent-output <= 5200`、
-`run-agent-verify-loop <= 5300`，合计 `<= 29500`；每个 description `<= 140` 字符且合计 `<= 500`。
-预算是回归上限，不是填充目标；超限时优先下沉真正条件化的细节，不能删除安全不变量来过测试。
+`orchestrate-subagents <= 8500`、`manage-worktrees <= 5200`、`verify-agent-output <= 4900`、
+`run-agent-verify-loop <= 5100`，合计 `<= 23700`（单文件预算之和，不单独写死总量）；每个 description
+`<= 140` 字符，合计 `<= 4 × 140 = 560`（skill 数量 × 140，随 SKILL.md 数量同步调整）。
+预算是回归上限，不是填充目标；超限时优先下沉真正条件化的细节，不能删除安全不变量来过测试。数字与
+[`tests/skill-budgets.mjs`](../../tests/skill-budgets.mjs) 保持一致，由
+`tests/architecture-consistency.test.mjs` 的反查断言锁定。
+
+撞线时按以下边界判断，不是撞线就抬预算：
+
+- 先问这段文字能不能变成命令、退出码或报错文案；能，就不进 `SKILL.md`。
+- 不能机制化、且每次触发该 skill 都要用到的内容，才算"该常驻"；这时才抬预算，并在 commit message
+  里写明抬的理由。
+- 只在某个分支场景才用到的细则，下沉到 `docs/<域>/`，正文只留一句指针。
 
 ## 4. 四个 Skill 的职责边界
 
