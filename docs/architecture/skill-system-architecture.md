@@ -702,27 +702,12 @@ assurance:
 
 ### 12.5 仓库与发布载荷
 
-本仓库直接维护四个 Skill 目录及以下同版本内容：
-
-- `package.json` 与 `bin/`：提供零依赖 ESM 的 `agentkit` 命令映射，不生成编译产物；
-- `shell-manifest.json`：绑定包版本、CLI 入口、四个 Skill shell、兼容入口、domain 目标与只读命令边界；
-- `core/`、`domains/` 与 `schemas/`：共享原语、四个领域运行时与 canonical schema 真源；
-- `docs/orchestrate/`、`docs/worktree/`、`docs/verify/`、`docs/loop/`：由 `agentkit docs` 按需读取。SKILL.md
-  只能以 `agentkit docs <域> <主题>` 命令引用这些文档，不得写 `../docs/...` 相对链接：宿主把 Skill
-  基目录报成安装路径（可能是软链），Read 工具按词法折叠 `..`，跨目录链接在安装态必断，
-  `tools/validate-skills.mjs` 对此 fail closed；
-- `LICENSE`：MIT，随发布一起分发；
-- `tests/`：四个 Skill 的共享测试，使安装侧可以在自己的环境上复验安装矩阵与跨 Skill 契约；
-- `tools/validate-skills.mjs`：Skill 规范校验入口，供安装侧独立复跑。
-
-仓库中的 `tests/`、domain 测试文件和仓库级校验工具用于持续复验，不进入 npm tarball；npm 包只
-携带运行时、schema、按需文档、四个 Skill shell、兼容入口、manifest、LICENSE，以及由发布仓维护的
-双语 README。
-包清单必须显式排除 `*.test.mjs`，并在 `publishConfig` 固定 public npm registry 与公开访问级别。
-
-仓库级 CI、README 与生成的协作图由本仓库自行维护。任何外部聚合仓只能消费固定 commit、tag 或
-npm 版本，不得向本仓库回写生成结果。发布流程在提交前必须校验载荷清单与内容摘要，使 tag、npm
-tarball、架构文档与四个 `SKILL.md` 可以事后证明来自同一 commit。
+载荷清单的机器真源是 [`package.json`](../../package.json) 的 `files` 与 `publishConfig`，入口与目标路径
+的清单真源是 [`shell-manifest.json`](../../shell-manifest.json)；两者由
+[`tests/package-distribution.test.mjs`](../../tests/package-distribution.test.mjs) 与
+[`tests/runtime-bundle.test.mjs`](../../tests/runtime-bundle.test.mjs) 在真实 `npm pack` tarball 上反查。
+仓库边界、变更流程与发布顺序的真源是
+[`docs/maintenance/source-of-truth.md`](../maintenance/source-of-truth.md)。本节只做导航。
 
 ## 13. 测试策略
 
