@@ -1,0 +1,120 @@
+name: protocol-routing-eval
+
+# 只手动触发，不挂 push / pull_request。
+# 原因写在 issue #15「运行」一节：一次常规评测 = 33 个真实模型会话，挂到每次 push 上没有意义。
+#
+# 两段：
+# - replay：回放自测，零模型费用，永远跑，任何人都能跑；
+# - live：真实评测，需要 `run_live: true` 且仓库已配置 ANTHROPIC_API_KEY。
+#   缺 secret 时**显式失败**，不静默跳过——静默跳过会让「绿勾」变成「没跑过」的同义词。
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_live:
+        description: '跑真实评测（会产生模型费用；需要 ANTHROPIC_API_KEY）'
+        type: boolean
+        default: false
+      model:
+        description: '模型 ID（真实评测必填，会原样记进报告）'
+        type: string
+        default: ''
+      cases:
+        description: '用例子集，例如 7,8；留空跑全部 11 条'
+        type: string
+        default: 'all'
+      runs:
+        description: '每条用例跑几次（常规评测 3；改动前后对比用 10）'
+        type: string
+        default: '3'
+      budget_usd:
+        description: '单会话的美元上限，留空不设'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: protocol-routing-eval-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  replay:
+    name: 回放自测（零模型费用）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: 分类器、平凡基线与前置状态构造器自测
+        run: node --test evals/protocol-routing/tests/*.test.mjs
+      - name: 端到端跑一遍回放驱动器
+        run: |
+          node evals/protocol-routing/run.mjs --driver replay \
+            --replay evals/protocol-routing/fixtures/replay/always-none \
+            --runs 3 --out "$RUNNER_TEMP/replay-none"
+          node evals/protocol-routing/run.mjs --driver replay \
+            --replay evals/protocol-routing/fixtures/replay/always-write \
+            --runs 3 --out "$RUNNER_TEMP/replay-write"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: protocol-routing-replay
+          path: ${{ runner.temp }}/replay-*/report.*
+
+  live:
+    name: 真实评测（产生模型费用）
+    needs: replay
+    if: ${{ inputs.run_live }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: 前置条件：模型 ID 与 API key 必须都在
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          missing=0
+          if [ -z "${{ inputs.model }}" ]; then
+            echo "::error::真实评测必须显式传 model：评测要固定模型并把模型 ID 记进报告。"
+            missing=1
+          fi
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::仓库 secret ANTHROPIC_API_KEY 未配置。真实评测需要它；这里显式失败，不静默跳过。"
+            missing=1
+          fi
+          [ "$missing" -eq 0 ]
+      - name: 安装宿主 CLI
+        run: npm install -g @anthropic-ai/claude-code
+      # --allow-bypass-permissions：被测会话在 bypassPermissions 下跑，不经确认就能执行任意命令，
+      # 对所在机器的整个文件系统有写权限。这里显式开，是因为 GitHub runner 是一次性环境，
+      # 跑完即销毁。本机跑评测时同样要显式加这个 flag，并确认自己在容器 / 虚拟机里。
+      - name: 跑评测
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          node evals/protocol-routing/run.mjs \
+            --driver claude-headless \
+            --allow-bypass-permissions \
+            --model '${{ inputs.model }}' \
+            --cases '${{ inputs.cases }}' \
+            --runs '${{ inputs.runs }}' \
+            ${{ inputs.budget_usd && format('--budget-usd {0}', inputs.budget_usd) || '' }} \
+            --out "$RUNNER_TEMP/live"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: protocol-routing-live
+          path: |
+            ${{ runner.temp }}/live/report.json
+            ${{ runner.temp }}/live/report.md
+            ${{ runner.temp }}/live/sessions/**/observation.jsonl
+            ${{ runner.temp }}/live/sessions/**/stream.jsonl
+            ${{ runner.temp }}/live/sessions/**/probe.jsonl
+            ${{ runner.temp }}/live/sessions/**/prompt.txt
+            ${{ runner.temp }}/live/sessions/**/command.json
