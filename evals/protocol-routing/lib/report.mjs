@@ -113,6 +113,7 @@ export function buildReport({ cases, runs, driver, sessions, invalidRuns = [] })
     validNByCase.set(item.id, n);
     return {
       id: item.id, category: item.category, title: item.title, expectation: item.expectation, setup: item.setup,
+      assert_scope: item.assert_scope ?? 'first_action',
       k, n, planned_n: runs, invalid: invalidByCase.get(item.id) ?? 0, runs: results,
     };
   });
@@ -205,6 +206,8 @@ export function renderMarkdown(report) {
     lines.push(`### #${item.id} ${item.title}（${item.category === 'positive' ? '正向' : '禁止'}，${item.k}/${item.n}）`, '');
     lines.push(`- 断言：${item.expectation}`);
     lines.push(`- 前置状态：${item.setup}`);
+    // 标了 whole_session 的用例不看「第一个观测量」，下面每行里的观测量只是信息，别当判据读。
+    if (item.assert_scope === 'whole_session') lines.push('- ⚠️ 这条用例的断言看**整条会话**，下面每行的观测量（第一个可观测动作）只作信息性记录，不参与判定');
     for (const run of item.runs) {
       const info = `加载 skill：${run.skill_loaded ? '是' : '否'}；主动发起独立验收：${run.initiated_independent_verification ? '是' : '否'}`;
       lines.push(`- run ${run.run}：观测量 \`${run.observation}\` → ${run.satisfied ? '符合' : '不符合'}；${run.reason}（信息性，不计分：${info}）`);

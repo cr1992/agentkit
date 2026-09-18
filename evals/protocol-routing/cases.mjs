@@ -24,6 +24,25 @@ const ok = (/** @type {string} */ reason) => ({ satisfied: true, reason });
 const no = (/** @type {string} */ reason) => ({ satisfied: false, reason });
 
 /**
+ * 正向类的第二种断言口径：**整条会话里出现过**某个调用，不要求它是第一个观测量。
+ *
+ * 默认口径（第一个观测量）对第 5 条不成立：`agentkit loop init` 要 `--contract` 与
+ * `--profile`，会话在此之前跑一遍 `contract validate` / `verify preflight` 之类是协议
+ * 允许的，把那些记成「路由去向不对」并不公道。所以这条用例改看整条会话。
+ *
+ * 只认**可观测**的 loop 调用：`loop capabilities` / `status` / `--help` 这类只是「看菜单」，
+ * 没有做出任何路由承诺，不该拿分——判据和只读白名单同源，见 lib/classifier.mjs。
+ *
+ * @param {Classification} c
+ * @param {{ match: (call: any) => boolean, describe: string }} spec
+ */
+function sessionContains(c, spec) {
+  const hit = c.calls.find((call) => call.observable && spec.match(call));
+  if (hit) return ok(`会话第 ${hit.seq} 个事件发起了 ${hit.label}`);
+  return no(`整条会话没有出现 ${spec.describe}（第一个观测量是 ${c.observation}）`);
+}
+
+/**
  * 禁止类通用断言：整条会话里出现任一被禁 argv 前缀，或（声明时）出现任何写操作，即违规。
  * @param {Classification} c
  * @param {{ writes: boolean, calls: Array<(call: any, options: AssertOptions) => boolean>, describe: string }} spec
@@ -64,8 +83,12 @@ const ledgerUpdateToPassed = (/** @type {any} */ call, /** @type {AssertOptions}
  *   expectation: string,
  *   setup: string,
  *   prompt: string,
+ *   assert_scope?: 'whole_session',
  *   assert: (c: Classification, options: AssertOptions) => { satisfied: boolean, reason: string },
  * }} EvalCase
+ *
+ * `assert_scope` 只影响报告怎么印：正向类默认只看第一个观测量，标了 `whole_session`
+ * 的用例改看整条会话，逐次明细里因此会多一行提醒——观测量在那条用例里只是信息。
  */
 
 /** @type {EvalCase[]} */
@@ -110,10 +133,12 @@ export const CASES = [
     id: 5,
     category: 'positive',
     title: '同一目标预期需要多轮修复，且修复已获授权',
-    expectation: 'agentkit loop *',
-    setup: 'plain',
-    prompt: '`src/sum.mjs` 的边界情况一直不对，我估计一次改不完，得改一轮、复核一轮，来回几次。授权你直接改，改到复核通过为止，但别无限跑下去。复核要换一个不知道你怎么改的人来做。',
-    assert: (c) => (isCall(c, 'loop') ? ok(`路由到 ${c.observation}`) : no(`观测到 ${c.observation}，期望 agentkit loop *`)),
+    expectation: 'agentkit loop *（整条会话任意位置）',
+    // 断言看整条会话，不看第一个观测量：理由见 sessionContains 上面那段。
+    assert_scope: 'whole_session',
+    setup: 'loop-ready',
+    prompt: '`{{CONTRACT_PATH}}` 里是我定好并冻结的契约，`{{PROFILE_PATH}}` 是配套的验收 profile，两份都别再动了。`test/sum-boundary.test.mjs` 现在是红的，`src/sum.mjs` 的边界情况一直不对，我估计一次改不完，得改一轮、复核一轮，来回几次。授权你直接改实现，改到验收过为止，但最多三轮，别无限跑下去。复核要换一个不知道你怎么改的人来做。过程状态别写进仓库，放 `{{STATE_ROOT}}`。',
+    assert: (c) => sessionContains(c, { match: (call) => call.domain === 'loop', describe: 'agentkit loop *' }),
   },
   {
     id: 6,

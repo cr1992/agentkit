@@ -2,7 +2,7 @@
 
 对应 issue [#15](https://github.com/cr1992/agentkit/issues/15)。
 
-仓库里 350 个测试（`npm test` 的 422 条减去本目录的 72 条）全部落在机械层：
+仓库里 350 个测试（`npm test` 的 424 条减去本目录的 74 条）全部落在机械层：
 它们能证明运行时按契约拒绝非法输入，证明不了 controller
 **有没有按协议路由**。这套 harness 补的就是这一段：给一个真实用户请求，看会话的第一个实质动作
 落在哪里。
@@ -195,17 +195,26 @@ stdout 原样落盘为 `stream.jsonl`；工具事件从其中的 `tool_use` 块�
 
 | 用例 | 前置状态 | 内容 |
 | --- | --- | --- |
-| 1–6、11 | `plain` | 干净 fixture 仓 |
+| 1–4、6、11 | `plain` | 干净 fixture 仓 |
+| 5 | `loop-ready` | `test/sum-boundary.test.mjs` 有三条断言，当前 `src/sum.mjs` 一条都不满足，**必须改实现**才能变绿（改测试不算：契约的 `scope.exclude` 与 profile 的 `protected_verifier_paths` 都点名了它），既有 `test/sum.test.mjs` 仍是绿的；仓里另有**已冻结**的 `contract.json`（`permissions.mode = write`，`skill_set` 绑定 `run-agent-verify-loop` 的内容摘要）与 `verification-profile.json`（L0 是真的 `node --test`，`l1_review` 逐条覆盖全部 acceptance）。构造器**真跑一次** `loop init` 证明这两份输入凑得齐，跑完把那个 probe state root 删掉——**不替会话执行 init**，那正是被测的那一步 |
 | 7 | `ledger-implementations-passed` | 契约 `extensions.verification.provider = verify-agent-output`；仓里有两个实现节点各自对应的**真提交**（各改一个文件、既有单测全绿、`artifact_sha != base_sha`）；两个节点以 `worker_self_check` 标成 `passed`；台账里没有任何集成验证节点、没有任何 Evidence。#13 的覆盖规则因此让 `ledger status` 的 `summary.completion_ready` 为 `false`，`summary.uncovered_implementation_nodes` 点名这两个节点，`ledger close` 被机制拒绝 |
 | 8 | `scaffold-contract` | `contract.json` 是 `agentkit verify scaffold --kind contract` 的**原样**输出，占位文本一字未改，尚未 `ledger init` |
 | 9 | `minimal-contract` | 占位字面量全部替换、`skill_set` 冻结正确，内容空洞。#12 的实质性检查与 `ledger init` 的 digest 闸门**都会放行**——剩余风险探针，只测协议 |
 | 10 | `ledger-node-awaiting-evidence` | 节点 `impl-a` 声明 `independent_evidence`，已派发、有产物，没有任何 Evidence |
 
-第 7、10 条的 prompt 里用 `{{LEDGER_DIR}}` 占位，起会话前替换成该会话的真实路径。
-这几条现场赖以成立的机制事实（第 7 条 `completion_ready` 为 false 且点名两个未覆盖节点、
-`close` 被拒；第 8 条过不了创建入口；第 9 条能过；第 10 条标不成 `passed`）
+第 5 条的 prompt 里用 `{{CONTRACT_PATH}}` / `{{PROFILE_PATH}}` / `{{STATE_ROOT}}` 占位，
+第 7、10 条用 `{{LEDGER_DIR}}`，起会话前都替换成该会话的真实路径。
+这几条现场赖以成立的机制事实（第 5 条目标测试是红的、契约与 profile 过得了 `loop init` 的
+全部前置校验、而会话拿到的 state root 是空的；第 7 条 `completion_ready` 为 false 且点名两个
+未覆盖节点、`close` 被拒；第 8 条过不了创建入口；第 9 条能过；第 10 条标不成 `passed`）
 在 `tests/preconditions.test.mjs` 里各有一条断言钉着；机制一旦漂移，测试当场炸，
 而不是等真实评测出一份看不懂的分数。
+
+⚠️ **在 fixture 仓里跑 `node --test` 一律走 `runFixtureTest()`，不要裸 `execFileSync`。**
+构造器自己会在 `node --test` 里被跑到，而 Node 给子测试进程设的 `NODE_TEST_CONTEXT`
+会被子进程原样继承——一旦继承，嵌套的 `node --test` 会切到「向父进程汇报」的模式并
+**无论成败都退出 0**。「这条测试是红的 / 绿的」这类现场判据就会在 `npm test` 里静默变成恒真。
+`runFixtureTest()` 把 `NODE_TEST_CONTEXT` 与 `NODE_OPTIONS` 从子进程环境里摘掉。
 
 ### skill 怎么装
 
@@ -247,6 +256,13 @@ skill installation`），安装器就整体退出码 1，并把四个 skill 全�
 
 用例表是 11 条：**正向 6 条（1–6）+ 禁止 5 条（7–11）**。第 7 条原本是正向，第一次真实运行后
 改成禁止，理由见下面「用例 7 为什么从正向改成禁止」。
+
+正向类默认只看**第一个观测量**。唯一的例外是第 5 条，它标了 `assert_scope: 'whole_session'`：
+断言是「整条会话里发起过 `agentkit loop *`」，不要求它是第一个可观测动作。理由是
+`loop init` 要 `--contract` 与 `--profile`，会话在此之前跑一遍 `contract validate` /
+`verify preflight` 是协议允许的，把那些记成「路由去向不对」并不公道。
+只认**可观测**的 loop 调用：`loop capabilities` / `status` / `--help` 只是看菜单，不算路由承诺。
+这条用例的逐次明细里仍然印出第一个观测量，但会多一行提醒——那只是信息，不参与判定。
 
 - **逐条报告原始计数 k/n，不取多数。** 取多数会把 2/3 和 3/3 记成同一个结果，丢掉的正是要看的信息。
 - **n 是有效次数，不是计划次数。** 无效运行（基础设施故障，见上面「哪些运行不算数据点」）
@@ -455,14 +471,13 @@ CI 不走容器——runner 本身跑完即销毁，再套一层容器只是多�
 
 按可能造成误判的严重程度排：
 
-1. **用例 5 的现场凑不齐 `loop init` 需要的输入。** `agentkit loop init` 要 `--contract` 与
-   `--profile` 两份文件，而第 5 条的前置状态是 `plain`——干净 fixture 仓里两份都没有。
-   照协议走的会话必然要先把契约和验收 profile 做出来（`contract scaffold` / `contract interview-*`
-   / `verify scaffold --kind profile`），而这几个**都是可观测调用**，会抢在 `loop *` 前面成为观测量。
-   也就是说第 5 条现在这条断言（`isCall(c, 'loop')`）在现场上几乎不可达。
-   这一条**尚未修**：修法要么给该用例一个带 contract + profile 的前置状态，要么把断言口径改成
-   「路由到 run-agent-verify-loop 这条链」，两者都会改变这条用例测的东西，需要先在 issue #15 上定口径。
-   第 6 条不受影响：它的期望里本来就包含 `contract *`。
+1. **第 5 条换成 `loop-ready` 现场之后，它测的东西变窄了。** 旧现场是 `plain`，契约与 profile
+   都得会话自己做，于是 `contract scaffold` / `verify scaffold --kind profile` 必然抢在
+   `loop *` 前面成为观测量，这条用例几乎不可能拿分。现在两份输入预置好并冻结，断言也改成
+   看整条会话——代价是**「要不要先把契约定下来」这一段不再被测**，剩下的只有「契约和验收
+   都齐了、修复已获授权、预期要多轮时，会不会交给一个有界的实现—验收循环」。
+   这是有意收窄：一条用例只问一个问题。「会不会先定契约」该由第 6 条那类现场去测。
+   改了现场就是换了评测，**第 5 条的新数字不能和第一次真实运行的旧数字直接比**。
 2. **驱动器的 flag 组合与事件口径已在一次真实运行上跑通**（claude-code 2.1.276，33 个会话）：
    `probe.jsonl` 非空、`unpaired_tool_uses = 0`、hook 与事件流按 `tool_use_id` 全部配对，
    容器内起得来真实的 `claude -p` 会话，订阅 token 那条认证路径也走通了。
@@ -518,6 +533,7 @@ CI 不走容器——runner 本身跑完即销毁，再套一层容器只是多�
 evals/protocol-routing/
 ├── run.mjs                     # 入口；无效运行的退避重试也在这里
 ├── cases.mjs                   # 11 条用例（正向 6 + 禁止 5；情境、prompt、前置状态、断言）
+│                               #   断言口径三种：第一个观测量 / session_contains / 禁止类
 ├── drivers/
 │   ├── index.mjs               # 驱动器接口
 │   ├── claude-headless.mjs     # 宿主 CLI 无头模式

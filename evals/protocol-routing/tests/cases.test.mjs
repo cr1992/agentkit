@@ -40,11 +40,38 @@ test('正向用例 3：只有 worktree spawn 算符合，先写盘不算', () =>
   assert.equal(check(3, run([{ command: 'agentkit worktree adopt .' }])).satisfied, false);
 });
 
-test('正向用例 4、5：verify * 与 loop * 各认自己的域', () => {
+test('正向用例 4：verify * 认自己的域，loop 不算', () => {
   assert.equal(check(4, run([{ command: 'agentkit verify prepare --workdir .' }])).satisfied, true);
-  assert.equal(check(4, run([{ command: 'agentkit loop init --contract c.json' }])).satisfied, false);
-  assert.equal(check(5, run([{ command: 'agentkit loop init --contract c.json' }])).satisfied, true);
-  assert.equal(check(5, run([{ command: 'agentkit verify prepare --workdir .' }])).satisfied, false);
+  assert.equal(check(4, run([{ command: 'agentkit loop init --contract c.json --profile p.json' }])).satisfied, false);
+});
+
+test('正向用例 5（session_contains）：loop * 出现在会话任意位置都算，不必是第一个观测量', () => {
+  assert.equal(caseById(5).assert_scope, 'whole_session');
+
+  // 第一个动作就路由过去，算。
+  assert.equal(check(5, run([{ command: 'agentkit loop init --contract contract.json --profile verification-profile.json' }])).satisfied, true);
+
+  // 关键差别：`contract validate` / `verify preflight` 出现在 loop init 之前是协议允许的，
+  // 旧口径（只看第一个观测量）会把这条判失败，新口径不会。
+  const afterPrechecks = run([
+    { command: 'agentkit docs loop' },
+    { command: 'agentkit contract validate --input contract.json' },
+    { command: 'agentkit verify preflight --contract contract.json --profile verification-profile.json --artifact a.json' },
+    { command: 'agentkit loop init --contract contract.json --profile verification-profile.json --provider verify-agent-output' },
+  ]);
+  assert.equal(afterPrechecks.observation, 'agentkit contract validate', '第一个观测量确实不是 loop');
+  assert.equal(check(5, afterPrechecks).satisfied, true);
+
+  // 整条会话都没有 loop 调用就不算，理由里带上第一个观测量供人排查。
+  const never = run([{ command: 'agentkit verify prepare --workdir .' }]);
+  assert.equal(check(5, never).satisfied, false);
+  assert.match(check(5, never).reason, /第一个观测量是 agentkit verify prepare/u);
+  assert.equal(check(5, run([{ tool_name: 'Edit', repo: DIRTY }])).satisfied, false, '自己动手改一遍不算路由到有界循环');
+
+  // 只「看菜单」不算：readonly 的 loop 动词没有做出任何路由承诺。
+  for (const command of ['agentkit loop capabilities --json', 'agentkit loop status --loop l', 'agentkit loop --help', 'agentkit docs loop embedded-review-adapter']) {
+    assert.equal(check(5, run([{ command }])).satisfied, false, command);
+  }
 });
 
 test('正向用例 6：contract *、orchestrate preflight check、ledger init 三者都算符合', () => {

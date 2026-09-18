@@ -4,6 +4,8 @@
 //
 // 除了「能建出来」，这里还钉死每条用例赖以成立的机制事实。这些事实一旦漂移，
 // 用例测的东西就变了，必须在测试里当场炸掉，而不是等真实评测出一份看不懂的分数：
+// - 第 5 条：目标测试确实是红的，预置的契约与 profile 凑得齐 `loop init` 的全部前置校验，
+//   而构造器**没有**替会话执行 init（会话的 state root 是空的）；
 // - 第 7 条：两个实现节点有真提交、以 worker_self_check 通过，#13 的覆盖规则让
 //   `completion_ready` 为 false 且点名两个未覆盖节点，`close` 因此被机制拒绝；
 // - 第 8 条：原样 scaffold 契约过不了 `ledger init`（#12 的实质性检查）；
@@ -12,7 +14,7 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,7 +22,7 @@ import test from 'node:test';
 import { CASES } from '../cases.mjs';
 import { agentkit } from '../lib/agentkit.mjs';
 import { createFixtureRepo, repoSummary } from '../lib/fixture-repo.mjs';
-import { SETUP_NAMES, buildPrecondition, renderPrompt } from '../lib/preconditions.mjs';
+import { SETUP_NAMES, buildPrecondition, renderPrompt, runFixtureTest } from '../lib/preconditions.mjs';
 
 /** 建一份会话现场，返回其路径与前置状态。测试自己负责清理。 */
 function site(setup) {
@@ -48,6 +50,46 @@ test('fixture 仓是独立的干净 git 仓，摘要可取', () => {
     const summary = repoSummary(s.repo);
     assert.equal(summary.status, '');
     assert.match(summary.head, /^[0-9a-f]{40}$/u);
+  } finally { s.cleanup(); }
+});
+
+test('第 5 条现场：测试确实是红的，契约与 profile 凑得齐 loop init，但 init 没有被替会话执行', () => {
+  const s = site('loop-ready');
+  try {
+    // 目标明确且确实不通过：必须改实现才能变绿。既有单测仍是绿的。
+    // ⚠️ 走 runFixtureTest 而不是裸 execFileSync：见它头上那段 NODE_TEST_CONTEXT 的说明，
+    // 裸调用在 `npm test` 里会恒退出 0，这两条断言会静默变成恒真。
+    assert.equal(runFixtureTest(s.repo, 'test/sum-boundary.test.mjs').green, false, '目标测试必须是红的');
+    assert.equal(runFixtureTest(s.repo, 'test/sum.test.mjs').green, true, '既有单测必须仍是绿的');
+
+    const contractPath = join(s.repo, 'contract.json');
+    const profilePath = join(s.repo, 'verification-profile.json');
+    const contract = JSON.parse(readFileSync(contractPath, 'utf8'));
+    const profile = JSON.parse(readFileSync(profilePath, 'utf8'));
+
+    // 非 scaffold 占位：L0 是真的测试命令，acceptance 每条都被 l1_review 覆盖。
+    assert.ok(profile.l0_checks.some((check) => check.argv.includes('--test')), 'L0 必须是真的测试命令');
+    assert.ok(!profile.l0_checks.some((check) => check.check_id === 'replace-with-real-check'));
+    const reviewed = new Set(profile.l1_review.map((item) => item.contract_item_id));
+    for (const item of contract.acceptance) assert.ok(reviewed.has(item.contract_item_id), `acceptance ${item.contract_item_id} 未被 l1_review 覆盖`);
+    // skill_set 必须冻结 run-agent-verify-loop 的内容摘要，否则 loop init 的绑定校验直接拒绝。
+    const bound = contract.skill_set.find((item) => item.name === 'run-agent-verify-loop');
+    assert.equal(bound?.content_digest, JSON.parse(agentkit(['loop', 'capabilities', '--json'])).content_digest);
+    assert.equal(contract.permissions.mode, 'write', '修复已获授权');
+
+    // 两份输入确实凑得齐：这里再跑一次 init（落在测试自己的 probe root 里）。
+    const probe = attempt(['loop', 'init', '--contract', contractPath, '--profile', profilePath,
+      '--provider', 'verify-agent-output', '--state-root', join(s.session, 'test-probe-state'), '--loop-id', 'probe']);
+    assert.equal(probe.ok, true, `预置的契约 / profile 必须过得了 loop init：${probe.message}`);
+
+    // 但构造器**没有**替会话执行 init：会话拿到的 state root 是空的。
+    assert.deepEqual(readdirSync(s.precondition.vars.STATE_ROOT), []);
+    assert.equal(existsSync(join(s.session, 'loop-init-probe')), false, '构造器的 probe state root 必须跑完即删');
+    assert.equal(repoSummary(s.repo).status, '', '前置状态建完之后工作区必须干净');
+
+    const rendered = renderPrompt(/** @type {any} */ (CASES.find((item) => item.id === 5)).prompt, s.precondition.vars);
+    assert.ok(rendered.includes('contract.json') && rendered.includes('verification-profile.json'));
+    assert.ok(!rendered.includes('{{'));
   } finally { s.cleanup(); }
 });
 
@@ -111,7 +153,7 @@ test('第 7 条现场：两个实现节点有真提交、以 worker_self_check �
     }
     const changed = execFileSync('git', ['diff', '--name-only', `${refs[0].base_sha}..${refs[0].artifact_sha}`], { cwd: s.repo, encoding: 'utf8' }).trim().split('\n').sort();
     assert.deepEqual(changed, ['src/greet.mjs', 'src/sum.mjs']);
-    execFileSync(process.execPath, ['--test', 'test/sum.test.mjs'], { cwd: s.repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    assert.equal(runFixtureTest(s.repo, 'test/sum.test.mjs').green, true, '两个实现提交之后既有单测必须全绿');
 
     assert.equal(JSON.parse(agentkit(['orchestrate', 'ledger', 'doctor', '--ledger', ledger])).healthy, true);
     assert.equal(repoSummary(s.repo).status, '', '前置状态建完之后工作区必须干净，否则基线摘要就把它当成写操作了');
