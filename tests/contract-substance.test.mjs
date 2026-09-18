@@ -280,7 +280,7 @@ function frozenScaffoldStateRoot() {
 test('判据出现之前冻结的 loop：adopt-root 与 validate 仍然成功，doctor 只多一条 warning', () => {
   const f = frozenScaffoldStateRoot();
   try {
-    // 崩溃恢复路径不重判实质性，否则历史状态在升级后连接管都做不到。
+    // adopt-root 是崩溃恢复路径，不经过 mutate，会读到判据出现之前冻结的状态，所以不重判实质性。
     assert.equal(loopMain(['adopt-root', '--state-root', f.stateRoot]).adopted, true);
     assert.equal(loopMain(['validate', '--loop', f.loopDir]).valid, true);
 
@@ -298,7 +298,9 @@ test('判据出现之前冻结的 loop：adopt-root 与 validate 仍然成功，
   } finally { f.cleanup(); }
 });
 
-// 续跑与恢复入口若重判实质性，升级前冻结的状态会在续跑或崩溃恢复时失败。
+// 续跑与恢复入口不重判实质性：契约冻结后不可变，实质性只在冻结那一刻判定一次；validate、
+// adopt-root、doctor 这些只读回看路径还会读到判据出现之前冻结的状态，在那里拒绝等于让历史
+// Evidence 的审计结论随 runtime 版本变化。
 // 上一个用例从行为上钉住了这一点，这里再用结构断言把接入点逐个钉在创建入口和 doctor 上。
 test('实质性检查只接在创建入口，五份校验实现共用同一模块', () => {
   const source = (path) => readFileSync(join(ROOT, path), 'utf8').split('\n');

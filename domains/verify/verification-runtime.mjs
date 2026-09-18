@@ -1563,8 +1563,8 @@ function doctor(options) {
     snapshot_matches_journal: !loaded.needsRepair,
     lock_present: existsSync(join(runDir, '.lock')),
     skill_drift: currentDigest !== loaded.snapshot.skill_provenance.content_digest,
-    // 冻结的两份文件就在 run 目录里，实质性判据都能重跑；但 doctor 只报不判，
-    // 否则判据出现之前冻结的历史 run 会在升级后突然变成 unhealthy。
+    // 冻结的两份文件就在 run 目录里，实质性判据都能重跑；但 doctor 是只读回看路径，只报不判，
+    // 否则判据出现之前冻结的历史 run 的审计结论会随 runtime 版本变化。
     substance_warnings: substanceWarnings(readJson(join(runDir, 'contract.json')), readJson(join(runDir, 'profile.json'))),
     // 旧 run 即使已漂移也要能只读检查：同时给出冻结时的摘要与当前摘要，便于判断漂移了什么。
     frozen_content_digest: loaded.snapshot.skill_provenance.content_digest,

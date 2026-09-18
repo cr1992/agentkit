@@ -49,7 +49,9 @@ class Parser {
 
 export function parseJsonStrict(text) { return new Parser(text).parse(); }
 // substance 只由创建入口打开（contract validate、ledger init）。add-node、doctor、投影等
-// 在已冻结契约上的操作保持形状校验，升级前冻结的 ledger 才能继续运行。
+// 在已冻结契约上的操作保持形状校验：契约冻结后不可变，实质性只在冻结那一刻判定一次；
+// doctor 这类只读回看路径还会读到判据出现之前冻结的 ledger，在那里拒绝等于让历史结论随
+// runtime 版本变化。
 // warnings 是出参数组：warning 不改变 valid 结论也不改变退出码，只能由调用方带进输出，
 // 因此不能走抛异常这条路，也不适合改 validateContract 的返回值（返回的是契约本身）。
 export function validateContract(contract, { requireDigest = true, substance = false, warnings = null } = {}) {

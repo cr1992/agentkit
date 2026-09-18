@@ -7,7 +7,14 @@
 //
 // 调用约定：
 // - 只在创建入口调用：contract validate、ledger init、verify preflight/init/prepare-run、loop init；
-// - 续跑与恢复入口只做形状校验，否则升级前已冻结的状态在续跑或崩溃恢复时会失败；
+// - 续跑与恢复入口只做形状校验，不重判实质性，理由有两条：
+//   (a) 契约冻结后不可变，实质性只在冻结那一刻判定一次，再判一次不会得到新信息；
+//   (b) verify validate、loop validate、adopt-root、各域 doctor 这些只读回看路径不经过 mutate，
+//       会读到本判据出现之前冻结的状态；在这些路径上拒绝，等于让历史 Evidence 的审计结论随
+//       runtime 版本变化；
+// - mutate 路径不需要这层保护：三个域的 mutate 都先比对 skill_provenance.content_digest，
+//   摘要范围含 core/ 与 schemas/。跨版本的在途状态在到达校验器之前就已经以 skill_drift 终止，
+//   同版本内的在途状态则已经过了创建入口；
 // - 三个域的 doctor 用 substanceWarnings 把同一批判据整体降级成 warning，不改变 healthy；
 // - 各入口直接使用这里给出的原因字符串，只套各自的错误类型，不改写措辞。
 //
@@ -109,7 +116,7 @@ export function coverageSubstance(contract, profile) {
 
 /**
  * doctor 口径：把手上能执行的全部判据整体降级成 warning。
- * 历史状态可能在判据出现之前就已冻结，而 doctor 是只读回看路径；在这里判 unhealthy，
+ * doctor 是只读回看路径，会读到本判据出现之前冻结的状态；在这里判 unhealthy，
  * 等于让同一份 Evidence 的审计结论随 runtime 版本变化。profile 传 null 时只出契约层判据。
  * @param {any} contract @param {any} [profile]
  * @returns {string[]}

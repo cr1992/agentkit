@@ -1010,7 +1010,8 @@ function doctor(options) {
   const drift = currentDigest !== loaded.snapshot.skill_provenance.content_digest;
   const lockPresent = existsSync(join(stateRoot, '.loop-runtime.lock'));
   const findings = identityError ? ['state_root_identity_invalid'] : [];
-  // 实质性问题不进 findings、不参与 healthy：判据出现之前冻结的 loop 在升级后仍然只是"多一条提示"。
+  // 实质性问题不进 findings、不参与 healthy：doctor 是只读回看路径，会读到判据出现之前冻结的 loop，
+  // 在这里判 unhealthy 等于让历史结论随 runtime 版本变化。
   const substance = substanceWarnings(readJson(join(loopDir, 'contract.json')), readJson(join(loopDir, 'profile.json')));
   return { healthy: !loaded.needsRepair && !lockPresent && !drift && !identityError, loop_id: loaded.snapshot.loop_id, revision: loaded.snapshot.revision, snapshot_matches_journal: !loaded.needsRepair, lock_present: lockPresent, skill_drift: drift, frozen_content_digest: loaded.snapshot.skill_provenance.content_digest, current_content_digest: currentDigest, state_root_identity_valid: !identityError, findings, substance_warnings: substance, diagnostics: identityError, recovery_command: identityError ? `adopt-root --state-root ${stateRoot}` : null };
 }
