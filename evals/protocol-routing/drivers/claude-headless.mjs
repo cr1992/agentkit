@@ -25,6 +25,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createAgentkitShim, prependToPath } from '../lib/agentkit-shim.mjs';
 import { createFixtureRepo, repoSummary } from '../lib/fixture-repo.mjs';
 import { buildPrecondition, renderPrompt } from '../lib/preconditions.mjs';
 import { installSkills } from '../lib/skill-install.mjs';
@@ -53,12 +54,23 @@ function hostVersion(bin) {
   catch (error) { throw new Error(`无法执行宿主 CLI「${bin}」：${/** @type {Error} */ (error).message}`); }
 }
 
-/** 从 stream-json 里按出现顺序取 tool_use 块。 */
-function toolUsesFromStream(text) {
+/**
+ * 最终文本只留有界前缀：它唯一的用途是「无效运行」判据与报告里那一行原因摘要
+ * （见 lib/run-validity.mjs）。不留全文——会话输出属于敏感材料，报告是要贴进 issue 的。
+ */
+const FINAL_TEXT_PREFIX_LIMIT = 200;
+
+/**
+ * 从 stream-json 里按出现顺序取 tool_use 块，并取回宿主自己的 result 事件。
+ * result 事件是判「这次会话算不算数据点」的唯一可靠信号，字段口径见 lib/run-validity.mjs。
+ */
+function parseStream(text) {
   /** @type {Array<{ id: string | null, tool_name: string, tool_input: any }>} */
   const uses = [];
   let model = null;
   let sessionId = null;
+  /** @type {import('../lib/run-validity.mjs').HostResult | null} */
+  let hostResult = null;
   for (const line of text.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed.startsWith('{')) continue;
@@ -71,8 +83,17 @@ function toolUsesFromStream(text) {
         if (block?.type === 'tool_use') uses.push({ id: block.id ?? null, tool_name: block.name, tool_input: block.input });
       }
     }
+    if (record.type === 'result') {
+      hostResult = {
+        subtype: record.subtype ?? null,
+        is_error: typeof record.is_error === 'boolean' ? record.is_error : null,
+        num_turns: typeof record.num_turns === 'number' ? record.num_turns : null,
+        api_error_status: typeof record.api_error_status === 'number' ? record.api_error_status : null,
+        final_text_prefix: typeof record.result === 'string' ? record.result.slice(0, FINAL_TEXT_PREFIX_LIMIT) : null,
+      };
+    }
   }
-  return { uses, model, sessionId };
+  return { uses, model, sessionId, hostResult };
 }
 
 /**
@@ -128,8 +149,10 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
     name: 'claude-headless',
     meta: { driver: 'claude-headless', host: 'claude-code', host_version: version, model },
     needsFixture: true,
-    async runSession({ evalCase, runIndex }) {
-      const session = join(outDir, 'sessions', `case-${evalCase.id}`, `run-${runIndex}`);
+    async runSession({ evalCase, runIndex, attempt = 1 }) {
+      // 重试落在自己的目录里，不覆盖上一次的留档——无效运行的现场是排障材料，不能被冲掉。
+      // 第 1 次尝试仍然叫 `run-<n>`，README 里那几条冒烟检查命令因此不用改。
+      const session = join(outDir, 'sessions', `case-${evalCase.id}`, attempt > 1 ? `run-${runIndex}-attempt-${attempt}` : `run-${runIndex}`);
       mkdirSync(session, { recursive: true });
       const { repo, head } = createFixtureRepo({ parent: session });
       const precondition = buildPrecondition(evalCase.setup, { repo, head, session });
@@ -137,6 +160,9 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
       const home = join(session, 'home');
       const configDir = join(home, '.claude');
       const installation = installSkills({ configDir, home });
+      // PATH 上的 `agentkit`：四个 SKILL.md 通篇指示调用它，真实安装态下由 `npm i -g` 提供，
+      // 评测现场没有。垫片转发到**被测 checkout** 的 bin/agentkit.mjs，见 lib/agentkit-shim.mjs。
+      const shim = createAgentkitShim({ dir: join(session, 'bin') });
 
       const probeFile = join(session, 'probe.jsonl');
       writeFileSync(probeFile, '');
@@ -168,6 +194,8 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
       // 白名单环境：不把运行者手上的凭据（GH_TOKEN、NPM_TOKEN、云厂商 key……）
       // 交给一个在 bypassPermissions 下运行、且有网的会话。见 lib/session-env.mjs。
       const env = buildSessionEnv(process.env, {
+        // PATH 是白名单里**继承**来的一项，所以垫片只能在覆盖项里拼回去（覆盖项优先级最高）。
+        PATH: prependToPath(shim.dir, process.env.PATH),
         HOME: home,
         CLAUDE_CONFIG_DIR: configDir,
         XDG_CONFIG_HOME: join(home, '.config'),
@@ -194,7 +222,7 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
       writeFileSync(join(session, 'stream.jsonl'), run.stdout);
       if (run.stderr) writeFileSync(join(session, 'stderr.log'), run.stderr);
 
-      const { uses, model: reportedModel, sessionId } = toolUsesFromStream(run.stdout);
+      const { uses, model: reportedModel, sessionId, hostResult } = parseStream(run.stdout);
       const probes = readFileSync(probeFile, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
       const paired = pairEvents(uses, probes);
 
@@ -202,6 +230,7 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
         meta: {
           case_id: evalCase.id,
           run: runIndex,
+          attempt,
           host: 'claude-code',
           host_version: version,
           model: reportedModel ?? model,
@@ -217,13 +246,16 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
           setup_vars: precondition.vars,
           repo,
           session_dir: session,
+          // 垫片留档：会话 PATH 最前的那个 agentkit 到底指向哪一份 checkout。
+          agentkit_shim: { dir: shim.dir, path: shim.path, target: shim.target },
           pairing: paired.pairing,
           unpaired_tool_uses: paired.unpaired,
         },
         initial_repo: initialRepo,
         events: paired.events,
         payloads: collectPayloads(paired.events),
-        end: { exit_code: run.code, error: run.stderr ? run.stderr.slice(0, 2000) : null },
+        // host_result 是「这次算不算数据点」的唯一可靠信号，见 lib/run-validity.mjs。
+        end: { exit_code: run.code, error: run.stderr ? run.stderr.slice(0, 2000) : null, host_result: hostResult },
       };
       writeFileSync(join(session, 'observation.jsonl'), serializeObservation(observation));
       return { ...observation, source: join(session, 'observation.jsonl') };
