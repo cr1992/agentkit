@@ -28,6 +28,9 @@
 5. 输出 fail、no_defect_found、undecidable 三态之一。无法获得会改变结论的真源或证据时必须
    undecidable，不用低保证结果替代。
 6. safety finding 不能被其他通过项抵消。
+7. 已成立的 finding 涉及结构调整时，expected 必须写出具名重构手法（例如提取函数、内联变量、
+   搬移函数、以多态取代条件式），且该手法只针对本条 finding 的 contract_item_id；给不出具名
+   手法的结构评价不写入 findings。
 ```
 
 视觉与主观结果仍须从设计稿、协议、计划等裁决真源独立推导。涉及图层合成时核对整组图层，按
