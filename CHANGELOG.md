@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- 升级影响：本批改动多数触及 `core/`、`schemas/`、各域 `domains/<域>/` 或 `docs/<域>/`，升级后
+  所有升级前 init 的在途 ledger、loop、verify run 都会判定为 `skill_drift`，需要先收尾在途任务
+  再升级。升级后 drift 的 ledger 可用 `agentkit orchestrate ledger close --abandon --reason <text>`
+  记为放弃；drift 但未放弃、未进入终态的 ledger 指针会一直保留，等待 `close --abandon` 或
+  re-contract。升级前 init 的 ledger 没有仓级指针，`agentkit status` 找不到它们，仍需手传
+  `--ledger <ledger 目录>`。
 - 新增 `agentkit contract interview-ask / interview-answer / interview-freeze`：一台由实质性判据的
   拒绝清单驱动提问、由自己的三条完成判据决定何时冻结的状态机。命令本身不调用任何模型，只出题、
   校验回填、冻结；选项由调用它的模型填，选哪个由用户定。提问顺序固定为
@@ -22,13 +28,17 @@
 - 契约、profile 的创建入口（`contract validate`、`ledger init`、`verify preflight / init / prepare-run`、
   `loop init`）新增实质性检查，原样照抄 `verify scaffold` 生成的占位契约或 profile 一律拒绝，
   报错给出字段路径与当前值但不给可以照抄的合规值；`prepare-run` 遇到该拒绝时紧凑输出也会带上
-  `errors`。续跑与恢复入口（`normalize`、`review-view`、`add-node`、`doctor`、
-  `adopt-root`、`validate` 等）不做实质性检查，行为不变。
-  同一批判据里，`write` 模式下每条 `acceptance[].contract_item_id` 必须至少被一条 `l1_review`
-  引用，否则在同时拿到契约与 profile 的创建入口报错拒绝；`write` 模式下 `scope.exclude` /
-  `stop_conditions` 为空只降级为 warning，不拒绝、退出码不变，通过 `contract validate` 新增的
-  `warnings` 输出键带出。`ledger / verify / loop doctor` 新增 `substance_warnings`：把手上能执行的
-  判据整体降级为 warning，不进 `findings`，不改变 `healthy`。
+  `errors`。续跑与恢复入口（`ledger add-node`、`verify record-review` / `validate`、
+  `loop adopt-root` / `record-embedded-review` / `validate`）不重判实质性，行为不变；`doctor`
+  单独在后面讲。
+  同一批判据里，每条 `acceptance[].contract_item_id` 必须至少被一条 `l1_review` 引用，不分权限
+  模式，只在同时拿到契约与 profile 的创建入口执行；`permissions.mode` 为 `write` 且
+  `scope.exclude` / `stop_conditions` 为空只降级为 warning，不拒绝、退出码不变。`warnings` 键仅
+  非空时出现：见 `contract validate`、`ledger init`、`verify init`、`loop init` 的返回值，以及
+  `preflight` 报告（该键恒在，可能是空数组）；`prepare-run` 把它放进完整报告的
+  `preflight.warnings`，默认紧凑输出不带，取证需加 `--verbose`。`ledger / verify / loop doctor`
+  新增 `substance_warnings`：恒在，把手上能执行的判据整体降级为 warning，不进 `findings`，
+  不改变 `healthy`。
 - 声明 `extensions.verification.provider === 'verify-agent-output'` 时，`completion_ready` 要求每个
   required 的实现节点（`verification.requirement !== 'not_applicable'`）要么自身是已通过的
   `independent_evidence` 节点，要么沿 `dependency` / `barrier` 边可达一个已通过、
@@ -81,21 +91,17 @@
   （原按英文字符数估算 token，在中英混排文本上系统性偏差较大）。`tests/skill-budgets.mjs`
   作为预算数字的共享真源，供架构文档反查比对。
 - 新增手动触发的发版流水线（`.github/workflows/release.yml`）：`verify`（限定从 `main` 发布、
-  版本号须与 `package.json` 一致、该版本不得已在 registry 上、`npm test` 与 tarball 干净安装验证）
-  → `publish`（`npm publish --provenance`）→ `attest`（从 registry 反装并跑 `agentkit doctor` 确认
-  版本一致）→ `tag-and-release`（同一 commit 对同一 semver 打 tag、建 GitHub Release，正文从本文件
-  对应小节程序化提取，缺小节即失败）。需要仓库 secret `NPM_TOKEN`。
+  版本号须与 `package.json` 一致、该版本不得已在 registry 上、`npm test` 与 tarball 干净安装验证，
+  Node 22/24 双版本矩阵）→ `publish`（`npm publish --provenance`）→ `attest`（从 registry 反装并跑
+  `agentkit doctor` 确认版本一致，同样跑 Node 22/24 双版本矩阵）→ `tag-and-release`（同一 commit
+  对同一 semver 打 tag、建 GitHub Release，正文从本文件对应小节程序化提取，缺小节即失败）。
+  `verify` 与 `attest` 两段的发布证据（`npm pack --dry-run` 文件清单、`agentkit doctor` 输出，
+  均带上 commit SHA 与版本号）按矩阵各存为一份 GitHub Actions 产物。需要仓库 secret `NPM_TOKEN`。
 - 新增 `evals/protocol-routing/`：协议路由评测 harness 与 11 条用例，用于衡量 agent 在给定提示下
   是否按预期路由到只读、`agentkit <域> <动词>` 或写操作。支持预录 JSONL 回放（接入 `npm test`）与
   两种真实评测运行方式——GitHub Actions + `ANTHROPIC_API_KEY`，或本机一次性容器
   （`evals/protocol-routing/container/`）+ `claude setup-token` 生成的订阅 token；容器以只读挂载
   仓库、非 root 用户、`--cap-drop ALL` 等收紧运行。均不进发布包，不在任何 Skill 内容摘要范围内。
-- 升级影响：本批改动多数触及 `core/`、`schemas/`、各域 `domains/<域>/` 或 `docs/<域>/`，升级后
-  所有升级前 init 的在途 ledger、loop、verify run 都会判定为 `skill_drift`，需要先收尾在途任务
-  再升级。升级后 drift 的 ledger 可用 `agentkit orchestrate ledger close --abandon --reason <text>`
-  记为放弃；drift 但未放弃、未进入终态的 ledger 指针会一直保留，等待 `close --abandon` 或
-  re-contract。升级前 init 的 ledger 没有仓级指针，`agentkit status` 找不到它们，仍需手传
-  `--ledger <ledger 目录>`。
 
 ## 1.1.1 - 2026-09-08
 
