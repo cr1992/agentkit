@@ -24,7 +24,7 @@
 - [12. 版本、兼容与安装](#12-版本兼容与安装)
 - [13. 测试策略](#13-测试策略)
 - [15. 反思、沉淀与受控改进](#15-反思沉淀与受控改进)
-- [17. 已确定的设计决策与待定 ADR](#17-已确定的设计决策与待定-adr)
+- [17. ADR](#17-adr)
 
 ## 1. 背景与核心判断
 
@@ -944,38 +944,28 @@ v1 包含：
 v1 不包含自动聚类、自动改 Skill、自动 accepted、自动发布或跨用户学习。它只把高质量改进输入
 生产出来，为未来独立改进层提供可靠接口。
 
-## 17. 已确定的设计决策与待定 ADR
+## 17. ADR
 
-### 17.1 已确定
+编号保留原值。ADR-1 与 ADR-5 已由实现回答，写明结论与真源；其余四条仍未决。
 
-1. 四个 Skill 均可独立使用。
-2. `verify-agent-output` 是独立的一次性验证 Skill。
-3. `run-agent-verify-loop` 继续保留，服务明确要求循环收敛，或在 freeze 前已合理预期同一目标会连续产生多轮新 Artifact 且修复已获授权的任务。
-4. 仅在第 5.4 节循环触发条件成立或显式调用时，`/run-agent-verify-loop + 目标` 才按第 5.5 节先冻结
-   合同再启动循环；普通任务与一次性验收不经过 Loop，普通 Loop 也不自动创建外部 Goal。
-5. Loop 可以 standalone embedded 运行，也可以消费 verifier provider。
-6. Verification Profile 是独立冻结 envelope，并承接现有验证 extension。
-7. full verifier protocol 只有一个真源；Loop 只维护 embedded adapter。
-8. 多 Skill 通过 envelope 联动，不跨目录 import。
-9. 能机械表达的保证必须由脚本实现。
-10. v1 以 Git commit 作为 Artifact。
-11. one-shot pass 与 Loop completed 都不自动等于外部 Goal / 全局任务完成。
-12. 目标 v1 中 Loop 不拥有批队列；批量由 orchestrator 组合多个独立 Loop，但迁移必须与
-    orchestration ledger 同批落地。
-13. Skill 是可质疑的版本化协议；当前任务冻结版本和内容摘要。
-14. 四个执行 Skill 只生成 proposed 改进候选，不能任务内自改或自行 accepted。
-15. Reflection 保存证据化结论，不保存 chain-of-thought，也不改变 Artifact verdict。
-16. 自动学习与自进化不进入 v1。
+- **ADR-1（已定）**：三个 state root 的默认布局是
+  `<系统临时目录>/orchestration-ledger-state/ledgers/<ledger-id>`、
+  `<系统临时目录>/verify-agent-output-state/runs/<run-id>` 与
+  `<系统临时目录>/run-agent-verify-loop-state/loops/<loop-id>`，目录以 `0700` 创建，state root 落在
+  业务仓库内时必须显式 `--allow-repository-state`。真源是
+  [`domains/orchestrate/orchestration-ledger.mjs`](../../domains/orchestrate/orchestration-ledger.mjs)、
+  [`domains/verify/verification-runtime.mjs`](../../domains/verify/verification-runtime.mjs) 与
+  [`domains/loop/loop-runtime.mjs`](../../domains/loop/loop-runtime.mjs) 的 `init`。
+- **ADR-2**：日志大小上限和脱敏配置格式。
+- **ADR-3**：standalone verifier 如何获得 clean pinned workdir，同时不复制 worktree 生命周期能力。
+- **ADR-4**：不依赖 `manage-worktrees` 时 repository identity 的跨 clone 语义。
+- **ADR-5（已定）**：canonical JSON 与 envelope 摘要采用零依赖的本地实现，不锁定版本依赖；真源是
+  [`core/digest.mjs`](../../core/digest.mjs)，零依赖由
+  [`tests/package-distribution.test.mjs`](../../tests/package-distribution.test.mjs) 锁定。本地实现必须
+  实现 RFC 8785 本身，不得另立一套 canonical 语义：重复 key 拒绝与跨 Skill digest 兼容分别由
+  `domains/verify/verification-runtime.test.mjs` 和
+  [`tests/content-digest.test.mjs`](../../tests/content-digest.test.mjs) 守住，RFC 官方测试向量仍需进入
+  回归集。
+- **ADR-6**：Reflection / Proposal 的默认 state root、保留周期、跨项目去重键和用户导出授权。
 
-### 17.2 待定 ADR
-
-1. orchestration ledger 与 verification / loop state root 的默认目录布局。
-2. 日志大小上限和脱敏配置格式。
-3. standalone verifier 如何获得 clean pinned workdir，同时不复制 worktree 生命周期能力。
-4. 不依赖 `manage-worktrees` 时 repository identity 的跨 clone 语义。
-5. RFC 8785 的 Node 实现采用经测试的本地实现还是锁定版本依赖；无论选择哪种，都必须通过
-   RFC 测试向量、重复 key 拒绝和跨 Skill digest 兼容测试。“优先标准库”不等于允许自创另一套
-   canonical 语义。
-6. Reflection / Proposal 的默认 state root、保留周期、跨项目去重键和用户导出授权。
-
-这些 ADR 可以影响实现细节，但不能推翻“独立可用、组合增强、脚本保证机械不变量”的总体边界。
+未决 ADR 可以影响实现细节，但不能推翻“独立可用、组合增强、脚本保证机械不变量”的总体边界。
