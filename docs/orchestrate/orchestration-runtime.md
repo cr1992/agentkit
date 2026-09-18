@@ -236,10 +236,11 @@ close --ledger <dir> --abandon --reason <text> [--expected-revision <n>]
 ```
 
 **close 只冻结任务图。** 终态之后 `add-node`、`add-edge`、`dispatch-record`、`update`、`attach`、
-`batch-init`、`batch-record`、`batch-fuse` 与再次 `close` 一律非零退出。白名单是
-`record-reflection`、`propose-improvement`、`rebuild`、`doctor`、`status`、`inspect`、`batch-status`：
+`batch-init`、`batch-record` 与再次 `close` 一律非零退出。白名单是 `record-reflection`、
+`propose-improvement`、`rebuild`、`doctor`、`status`、`inspect`、`batch-status`、`batch-fuse`：
 架构 §15.2 列出的高优先级反思触发按定义都发生在完成之后，已关闭的 ledger 也仍然需要 `rebuild` 做
-崩溃修复。冻结集合由 CLI_SPEC 全集减白名单推导，新增的修改命令默认落进冻结集合。
+崩溃修复，而 `batch-fuse` 只按已记录的 records 重算熔断判定、不写事件链，与 `batch-status` 同列。
+冻结集合由 CLI_SPEC 全集减白名单推导，新增的修改命令默认落进冻结集合。
 
 **drift 与终态。** `skill_drift` 指冻结的 `skill_provenance.content_digest` 与当前 runtime 的分发内容
 摘要不一致，`mutate`、`doctor`、`status` / `inspect` 共用同一个比较：

@@ -795,7 +795,6 @@ test('close 之后任务图冻结：冻结集合里每个命令 fail closed，�
       attach: ['attach', '--ledger', L, '--node', 'aux', '--type', 'report', '--input', f.input('late-report.json', { report_id: 'late' })],
       'batch-init': ['batch-init', '--ledger', L, '--input', f.input('late-batch.json', { batch_id: 'late', loop_ids: ['l9'] })],
       'batch-record': ['batch-record', '--ledger', L, '--batch', 'batch', '--input', f.input('late-record.json', { loop_id: 'l1', state: 'completed' })],
-      'batch-fuse': ['batch-fuse', '--ledger', L, '--batch', 'batch'],
       close: ['close', '--ledger', L],
     };
     assert.deepEqual(Object.keys(frozen).sort(), [...FROZEN_AFTER_TERMINAL].sort(), 'CLI_SPEC 的冻结集合与用例表不一致');
@@ -805,6 +804,8 @@ test('close 之后任务图冻结：冻结集合里每个命令 fail closed，�
     assert.equal(main(['status', '--ledger', L]).lifecycle.state, 'closed');
     assert.equal(main(['inspect', '--ledger', L]).lifecycle.state, 'closed');
     assert.equal(main(['batch-status', '--ledger', L, '--batch', 'batch']).state, 'active');
+    // batch-fuse 只按已记录的 records 重算熔断判定，不写事件链，与 batch-status 同列在白名单里。
+    assert.equal(main(['batch-fuse', '--ledger', L, '--batch', 'batch']).fuse, null);
     assert.equal(main(['rebuild', '--ledger', L]).rebuilt, true);
     const health = main(['doctor', '--ledger', L]);
     assert.deepEqual(health.findings, [], '终态本身不应产生 finding');
