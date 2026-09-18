@@ -28,8 +28,10 @@
 6. 从 npm registry 安装该精确版本，运行 `agentkit doctor` 和安装矩阵测试，保存发布证据。
 
 第 4-6 步由 `.github/workflows/release.yml` 执行：手动触发并输入版本号，流水线校验分支、版本号与
-`package.json` 一致、该版本尚未发布，跑完 Node.js 22/24 门禁与 tarball 干净安装，再发布、反装自检，
-最后才推 tag 和建 Release。发布顺序不可颠倒。
+`package.json` 一致、该版本尚未发布，在 Node.js 22/24 矩阵上跑完门禁与 tarball 干净安装，再发布、
+在 Node.js 22/24 矩阵上反装自检，最后才推 tag 和建 Release。发布顺序不可颠倒。门禁的 `npm pack
+--dry-run` 文件清单，以及门禁、反装两段的 `agentkit doctor` 输出，连同 commit SHA 与版本号，作为
+Actions 产物存档。
 
 ## 本机开发安装
 
