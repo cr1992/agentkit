@@ -45,6 +45,40 @@ claude -p <prompt> --output-format stream-json --verbose
 `--add-dir` 只在第 7、10 条那样需要读台账时开到 state root：会话不该顺手读到自己的
 `settings.json` 与 skill 安装目录，那会把探针本身变成上下文的一部分。
 
+#### ⚠️ `bypassPermissions`：只在一次性环境里跑
+
+被测会话在 `bypassPermissions` 下运行，**不经确认就能执行任意命令**，并且对运行者的
+**整个文件系统**有写权限。本 harness 重定向了 `HOME` / `CLAUDE_CONFIG_DIR` 并给每个会话
+一份全新 fixture 仓，但那只是隔离评测现场，**不是沙箱**——越界的写操作照样落在运行者的机器上。
+
+所以驱动器**默认拒绝启动真实会话**，必须显式加 `--allow-bypass-permissions`；
+未加时 `run.mjs` 非零退出并打印原因，也不会留下输出目录。CI 的 `live` 段显式加了这个 flag，
+理由是 GitHub runner 是一次性环境。本机跑之前请确认自己在容器或虚拟机里。
+
+**为什么不能换一个更弱的权限模式**：`WRITE` 判据看的是 fixture 仓的 git 摘要变化。
+被门禁拒掉的写操作不会改变摘要，于是一次「本该写、却被权限门禁拦下」的会话会被记成 `NONE`——
+评测量到的就不再是协议行为，而是权限配置。换句话说，弱权限模式会让整套判据静默失真，
+这比费用和风险更致命，所以只能靠「显式同意 + 一次性环境」来控风险。
+
+#### 传给会话的环境变量
+
+不传运行者的整个 `process.env`。会话既有 `bypassPermissions` 又有网，把运行者手上的
+`GH_TOKEN` / `NPM_TOKEN` / 云厂商 key 一并交进去，评测本身就成了外泄通道。
+`lib/session-env.mjs` 里是一份白名单常量，只放两类：
+
+- 宿主跑起来必需的：`PATH`、`TERM`、`TMPDIR` / `TMP` / `TEMP`、`LANG` / `LANGUAGE` / `LC_*`、
+  `NODE_EXTRA_CA_CERTS`、`NODE_OPTIONS`、`SSL_CERT_FILE` / `SSL_CERT_DIR`、
+  `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`（含小写形式）；
+- Claude Code 自己的认证：`ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BASE_URL`。
+  `claude --help` 只点名了 `ANTHROPIC_API_KEY`；另两个是自建网关的常见配法，
+  **属于「拿不准但放进去了」**——若你的部署不需要，删掉即可。
+  `HOME` 被重定向到会话目录，OAuth / keychain 那条路走不通，实际可用的只有 API key。
+
+第三方 provider（Bedrock / Vertex / Foundry）的 `AWS_*` / `GOOGLE_*` / `AZURE_*` **不在**白名单里。
+要用那些 provider 跑评测，得显式往 `INHERITED_ENV_KEYS` 里加，并且清楚自己在把什么交出去。
+`tests/session-env.test.mjs` 拿一份含 `GH_TOKEN` / `NPM_TOKEN` 的合成父环境断言它们传不下去。
+会话目录的 `command.json` 只留 `env_keys`（键名），不留取值。
+
 stdout 原样落盘为 `stream.jsonl`；工具事件从其中的 `tool_use` 块按出现顺序取。
 每个会话目录下留档：`command.json`（起会话的确切参数）、`prompt.txt`、`stream.jsonl`、
 `probe.jsonl`（逐事件仓库摘要）、`observation.jsonl`（判定的唯一输入）、`stderr.log`。
@@ -142,8 +176,11 @@ node evals/protocol-routing/run.mjs --driver replay \
 ```bash
 node evals/protocol-routing/run.mjs \
   --driver claude-headless --model <模型 ID> \
+  --allow-bypass-permissions \
   --runs 3 --out /tmp/pr-eval
 ```
+
+`--allow-bypass-permissions` 不加就直接拒绝启动，原因见上面「`bypassPermissions`：只在一次性环境里跑」。
 
 **一次常规评测 = 11 条用例 × 3 次 = 33 个真实模型会话**，每个会话都要读四个 SKILL.md（21433 字符）
 并跑若干工具调用，费用按这个量级估。它的用途是发现 0/3 和 3/3 这类明显的失守或稳定，
@@ -153,7 +190,8 @@ node evals/protocol-routing/run.mjs \
 
 ```bash
 node evals/protocol-routing/run.mjs --driver claude-headless \
-  --model <模型 ID> --cases 7,8 --runs 10 --out /tmp/pr-eval-before
+  --model <模型 ID> --allow-bypass-permissions \
+  --cases 7,8 --runs 10 --out /tmp/pr-eval-before
 ```
 
 只对受影响的用例加跑到每条 n ≥ 10，改动前后用同一模型、同一 fixture、同一 n。
@@ -175,8 +213,9 @@ node evals/protocol-routing/run.mjs --driver claude-headless \
    这段代码应当按「未验证」对待；跑通后请把此条改掉。
    **已实测**的只有 skill 安装那一段（`npx skills add <本地路径> -g` 确实落进
    `CLAUDE_CONFIG_DIR`，四份 `SKILL.md` 都在）。回放驱动器与分类器不受影响——自测已覆盖。
-   第一次真实运行前建议先只跑一条用例（`--cases 1 --runs 1`），检查该会话目录下的
-   `probe.jsonl` 非空、`observation.jsonl` 的 `meta.unpaired_tool_uses` 为 0，再放开全量。
+   第一次真实运行前建议先只跑一条用例（`--cases 1 --runs 1 --allow-bypass-permissions`，
+   在容器或虚拟机里），检查该会话目录下的 `probe.jsonl` 非空、`observation.jsonl` 的
+   `meta.unpaired_tool_uses` 为 0，再放开全量。
 2. **并行工具调用可能错位。** hook 按**完成**时间触发，`stream.jsonl` 按**发起**顺序排。
    配对优先用 `tool_use_id`（若 hook 载荷提供），否则退回按顺序配。宿主一次发起多个并行工具时，
    顺序配可能把摘要挂到相邻的事件上。`observation.jsonl` 的 `meta.pairing` 记录本次用的是哪种，
@@ -188,7 +227,15 @@ node evals/protocol-routing/run.mjs --driver claude-headless \
    （正向用例不能靠「看不清」拿分）。第 10 条方向相反：解析不到按**违规**处理（fail-closed）。
 5. **#13 尚未合入。** 第 7 条依赖的覆盖规则还在 `main` 之外，构造器没有依赖它。
    #13 落地后这条用例的现场可能需要重新设计。
-6. **prompt 的措辞本身是变量。** 11 条 prompt 都刻意不提任何 skill 名、域名或动词
+6. **评测现场不是沙箱。** `bypassPermissions` 是 `WRITE` 判据成立的前提（弱权限模式会让判据
+   静默失真，见上），代价是被测会话对运行者的整个文件系统有写权限。harness 能做的只有
+   「默认拒绝 + 显式同意 + 环境变量白名单」，真正的隔离得靠一次性环境。
+   在长期存活的开发机上跑，一次越界的会话就可能留下改不回去的东西——这条没有技术兜底。
+7. **环境白名单可能配少也可能配多。** 配少了：用自建网关或第三方 provider 时会话起不来
+   （报错在 `stderr.log` 里）；配多了：多传的那一项就是一条外泄面。
+   `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` 属于「拿不准但放进去了」，
+   `claude --help` 只点名了 `ANTHROPIC_API_KEY`。
+8. **prompt 的措辞本身是变量。** 11 条 prompt 都刻意不提任何 skill 名、域名或动词
    （`tests/cases.test.mjs` 有一条断言钉着），但「同一情境的不同说法」会不会换来不同路由，
    这套 harness 测不了。改 prompt 等于换了评测，不能和旧结果直接比。
 
@@ -209,6 +256,7 @@ evals/protocol-routing/
 │   ├── fixture-repo.mjs        # fixture 仓生成与摘要
 │   ├── preconditions.mjs       # 前置状态构造
 │   ├── skill-install.mjs       # 隔离配置目录安装四个 skill
+│   ├── session-env.mjs         # 传给被测会话的环境变量白名单
 │   ├── probe.mjs               # PostToolUse hook：逐事件仓库摘要
 │   ├── agentkit.mjs            # 调用被测提交自己的 agentkit
 │   └── report.mjs              # 逐条 k/n、两栏、平凡基线

@@ -91,12 +91,16 @@ jobs:
           [ "$missing" -eq 0 ]
       - name: 安装宿主 CLI
         run: npm install -g @anthropic-ai/claude-code
+      # --allow-bypass-permissions：被测会话在 bypassPermissions 下跑，不经确认就能执行任意命令，
+      # 对所在机器的整个文件系统有写权限。这里显式开，是因为 GitHub runner 是一次性环境，
+      # 跑完即销毁。本机跑评测时同样要显式加这个 flag，并确认自己在容器 / 虚拟机里。
       - name: 跑评测
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           node evals/protocol-routing/run.mjs \
             --driver claude-headless \
+            --allow-bypass-permissions \
             --model '${{ inputs.model }}' \
             --cases '${{ inputs.cases }}' \
             --runs '${{ inputs.runs }}' \

@@ -4,12 +4,20 @@
 // 会话怎么起：
 //   claude -p <prompt> --output-format stream-json --verbose --model <id>
 //          --permission-mode bypassPermissions --settings <会话 settings.json>
-//          --add-dir <会话根>   （cwd = fixture 仓）
+//          [--add-dir <该会话的 state root>]   （cwd = fixture 仓）
 //   stdout 完整落盘为 stream.jsonl；工具事件从其中的 tool_use 块按出现顺序取。
 //
 // 现场：每个会话一份全新 fixture 仓、独立 state root、独立 HOME 与 CLAUDE_CONFIG_DIR。
 // skill 怎么装：见 lib/skill-install.mjs（README 记载的 `npx skills add … -g --agent '*'`）。
 // WRITE 怎么判：PostToolUse hook 逐事件落一行仓库摘要，判据见 lib/classifier.mjs。
+//
+// ⚠️ 两条安全面，改动前先读 README「会话怎么起」：
+// 1. `bypassPermissions` 必须显式开启（allowBypassPermissions）。重定向 HOME **不是沙箱**：
+//    该模式下会话对运行者的整个文件系统有写权限，且不经确认就能执行任意命令。
+//    只应在一次性环境（CI runner / 容器 / 虚拟机）里跑。
+//    又不能换更弱的权限模式：被拒的写操作不会改变 git 摘要，`WRITE` 判据会失真——
+//    一次「本该写却被门禁拦下」的会话会被记成 `NONE`，评测量到的就不再是协议行为。
+// 2. 传给会话的环境变量走白名单（lib/session-env.mjs），不是 `...process.env`。
 //
 // ⚠️ 未经真实会话验证的部分见 README「已知盲区」：flag 组合、hook 载荷字段名、事件配对口径。
 
@@ -21,8 +29,23 @@ import { createFixtureRepo, repoSummary } from '../lib/fixture-repo.mjs';
 import { buildPrecondition, renderPrompt } from '../lib/preconditions.mjs';
 import { installSkills } from '../lib/skill-install.mjs';
 import { serializeObservation } from '../lib/observation.mjs';
+import { buildSessionEnv } from '../lib/session-env.mjs';
 
 const PROBE = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'probe.mjs');
+
+export const BYPASS_REFUSAL = [
+  '拒绝启动真实会话：无头驱动器要用 --permission-mode bypassPermissions，必须显式同意。',
+  '',
+  '该模式下被测会话不经确认就能执行任意命令，并且对运行者的**整个文件系统**有写权限。',
+  '本 harness 重定向了 HOME / CLAUDE_CONFIG_DIR 并给每个会话一份全新 fixture 仓，',
+  '但那只是隔离评测现场，**不是沙箱**——越界的写操作照样落在运行者的机器上。',
+  '所以只应在一次性环境（CI runner / 容器 / 虚拟机）里跑，不要在日常开发机上直接跑。',
+  '',
+  '也不能换一个更弱的权限模式：被门禁拒掉的写操作不会改变 fixture 仓的 git 摘要，',
+  'WRITE 判据会失真——「本该写却被拦下」的会话会被记成 NONE，量到的就不再是协议行为。',
+  '',
+  '确认在一次性环境里，再加 --allow-bypass-permissions 重跑。',
+].join('\n');
 
 /** 宿主版本：只读一次，写进每份结果。 */
 function hostVersion(bin) {
@@ -94,10 +117,12 @@ function collectPayloads(events) {
 }
 
 /**
- * @param {{ bin?: string, model: string, outDir: string, timeoutMs?: number, budgetUsd?: number | null, extraArgs?: string[] }} options
+ * @param {{ bin?: string, model: string, outDir: string, allowBypassPermissions?: boolean, timeoutMs?: number, budgetUsd?: number | null, extraArgs?: string[] }} options
  * @returns {import('./index.mjs').Driver}
  */
-export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, timeoutMs = 900000, budgetUsd = null, extraArgs = [] }) {
+export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allowBypassPermissions = false, timeoutMs = 900000, budgetUsd = null, extraArgs = [] }) {
+  // 在建驱动器的时候就拒绝，而不是等第一个会话——那时已经建过 fixture 仓、装过 skill 了。
+  if (!allowBypassPermissions) throw new Error(BYPASS_REFUSAL);
   const version = hostVersion(bin);
   return {
     name: 'claude-headless',
@@ -140,12 +165,22 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, time
         ...(budgetUsd === null ? [] : ['--max-budget-usd', String(budgetUsd)]),
         ...extraArgs,
       ];
-      writeFileSync(join(session, 'command.json'), `${JSON.stringify({ bin, args, cwd: repo }, null, 2)}\n`);
+      // 白名单环境：不把运行者手上的凭据（GH_TOKEN、NPM_TOKEN、云厂商 key……）
+      // 交给一个在 bypassPermissions 下运行、且有网的会话。见 lib/session-env.mjs。
+      const env = buildSessionEnv(process.env, {
+        HOME: home,
+        CLAUDE_CONFIG_DIR: configDir,
+        XDG_CONFIG_HOME: join(home, '.config'),
+        PROTOCOL_ROUTING_REPO: repo,
+        PROTOCOL_ROUTING_PROBE: probeFile,
+      });
+      // 留档只记键名，不记取值——ANTHROPIC_API_KEY 之类的值不进会话目录。
+      writeFileSync(join(session, 'command.json'), `${JSON.stringify({ bin, args, cwd: repo, env_keys: Object.keys(env).sort() }, null, 2)}\n`);
 
       const run = await new Promise((resolvePromise) => {
         const child = spawn(bin, args, {
           cwd: repo,
-          env: { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: configDir, XDG_CONFIG_HOME: join(home, '.config'), PROTOCOL_ROUTING_REPO: repo, PROTOCOL_ROUTING_PROBE: probeFile },
+          env,
           stdio: ['ignore', 'pipe', 'pipe'],
         });
         let stdout = '';

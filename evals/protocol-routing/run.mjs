@@ -6,10 +6,14 @@
 //   node evals/protocol-routing/run.mjs --driver replay --replay evals/protocol-routing/fixtures/replay/always-none
 //
 //   # 真实评测：33 个会话（11 条用例 × 3 次）
-//   node evals/protocol-routing/run.mjs --driver claude-headless --model <模型 ID> --out /tmp/pr-eval
+//   # --allow-bypass-permissions 必须显式加：会话在 bypassPermissions 下跑，
+//   # 不经确认就能执行任意命令，只应在一次性环境（CI runner / 容器 / 虚拟机）里用。
+//   node evals/protocol-routing/run.mjs --driver claude-headless --model <模型 ID> \
+//     --allow-bypass-permissions --out /tmp/pr-eval
 //
 //   # 子集加跑（改动前后对比时把受影响用例加到 n ≥ 10）
-//   node evals/protocol-routing/run.mjs --driver claude-headless --model <模型 ID> --cases 7,8 --runs 10 --out /tmp/pr-eval
+//   node evals/protocol-routing/run.mjs --driver claude-headless --model <模型 ID> \
+//     --allow-bypass-permissions --cases 7,8 --runs 10 --out /tmp/pr-eval
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -19,12 +23,12 @@ import { createHeadlessClaudeDriver, createReplayDriver } from './drivers/index.
 import { buildReport, renderMarkdown } from './lib/report.mjs';
 
 /** 布尔开关：不吃下一个 token。 */
-const FLAGS = new Set(['quiet']);
+const FLAGS = new Set(['quiet', 'allow-bypass-permissions']);
 
 /** @param {string[]} argv */
 export function parseArgs(argv) {
   /** @type {Record<string, string | boolean>} */
-  const options = { driver: 'replay', runs: '3', cases: 'all', out: '', replay: '', model: '', bin: 'claude', 'budget-usd': '', quiet: false };
+  const options = { driver: 'replay', runs: '3', cases: 'all', out: '', replay: '', model: '', bin: 'claude', 'budget-usd': '', quiet: false, 'allow-bypass-permissions': false };
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (!token.startsWith('--')) throw new Error(`未知参数 ${token}`);
@@ -51,6 +55,8 @@ function makeDriver(options, outDir) {
       bin: options.bin,
       model: options.model,
       outDir,
+      // 不给默认值：bypassPermissions 只能由运行者当轮显式同意，不能从配置里继承。
+      allowBypassPermissions: options['allow-bypass-permissions'] === true,
       budgetUsd: options['budget-usd'] ? Number(options['budget-usd']) : null,
     });
   }
@@ -64,9 +70,9 @@ export async function main(argv) {
   if (!Number.isInteger(runs) || runs < 1) throw new Error('--runs 必须是正整数');
   const cases = selectCases(String(options.cases));
   const outDir = resolve(String(options.out) || `./protocol-routing-eval-${Date.now()}`);
-  mkdirSync(outDir, { recursive: true });
-
+  // 先建驱动器再建目录：被拒绝时（例如没显式同意 bypassPermissions）不该留下空目录。
   const driver = makeDriver(options, outDir);
+  mkdirSync(outDir, { recursive: true });
   /** @type {Array<{ case_id: number, run: number, observation: any }>} */
   const sessions = [];
   /** @type {string[]} */
