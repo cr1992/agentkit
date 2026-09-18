@@ -68,11 +68,15 @@ function persist(dir, snapshot, kind) { const next = { ...snapshot, revision: sn
 // 三处不可能各自漂移；doctor 已经算过当前摘要时把它传进来，避免重复遍历分发内容。
 export function skillDrift(snapshot, current = skillContentDigest()) { return snapshot.skill_provenance?.content_digest !== current; }
 const SKILL_DRIFT_REMEDIATION = '冻结的 skill_provenance.content_digest 与当前 runtime 不一致：这个 ledger 只剩两条路——用 `close --abandon --reason <text>` 记为放弃，或用当前 runtime re-contract 一个新 ledger。';
+// digest 前缀足以让人肉眼分辨"冻结的是哪一版"，不需要贴出完整 64 位 hex。
+function digestPrefix(digest) { return typeof digest === 'string' && digest ? digest.slice(0, 19) : String(digest ?? null); }
+// mutate 拦下 drift 修改命令时的报错：给出两份摘要的可辨识前缀，避免被当成别的校验失败误读。
+function driftRefusalMessage(snapshot, current = skillContentDigest()) { return `skill_drift：冻结的 skill_provenance.content_digest（${digestPrefix(snapshot.skill_provenance?.content_digest)}…）与当前 runtime 内容摘要（${digestPrefix(current)}…）不一致；这个 ledger 只剩两条路——用 close --abandon --reason <text> 记为放弃，或用当前 runtime re-contract 一个新 ledger。`; }
 // 终态之后任务图冻结。这里只判断 lifecycle 是否存在，不区分 closed / abandoned：两种终态对任务图的约束相同。
 function assertOpen(snapshot) { const life = snapshot.lifecycle; if (!life) return; throw new LedgerError(`ledger 已处于终态：lifecycle.state=${life.state}，closed_at=${life.closed_at}；任务图已冻结，之后只剩 record-reflection / propose-improvement / rebuild / doctor / status / inspect / batch-status / batch-fuse`); }
 // allowSkillDrift 只由 `close --abandon` 传入——它不推进任务图，也不按冻结协议下任何结论，是 drift 检查的唯一豁免点。
 // allowTerminal 只由终态白名单里的两条反思写入传入；其余修改命令（含将来新增的）默认在终态之后 fail closed。
-function mutate(dir, expected, callback, { allowSkillDrift = false, allowTerminal = false } = {}) { return withLock(dir, () => { const loaded = load(dir); if (loaded.journal.trailing) writeFileSync(join(dir, 'events.ndjson'), loaded.journal.complete, { mode: 0o600 }); if (loaded.repair) atomicJson(join(dir, 'snapshot.json'), loaded.snapshot); if (expected !== null && loaded.snapshot.revision !== expected) throw new LedgerError(`revision conflict: expected ${expected}, actual ${loaded.snapshot.revision}`); if (!allowSkillDrift && skillDrift(loaded.snapshot)) throw new LedgerError('skill_drift：必须 re-contract'); if (!allowTerminal) assertOpen(loaded.snapshot); const result = callback(loaded.snapshot); return persist(dir, result.snapshot, result.kind); }); }
+function mutate(dir, expected, callback, { allowSkillDrift = false, allowTerminal = false } = {}) { return withLock(dir, () => { const loaded = load(dir); if (loaded.journal.trailing) writeFileSync(join(dir, 'events.ndjson'), loaded.journal.complete, { mode: 0o600 }); if (loaded.repair) atomicJson(join(dir, 'snapshot.json'), loaded.snapshot); if (expected !== null && loaded.snapshot.revision !== expected) throw new LedgerError(`revision conflict: expected ${expected}, actual ${loaded.snapshot.revision}`); if (!allowSkillDrift && skillDrift(loaded.snapshot)) throw new LedgerError(driftRefusalMessage(loaded.snapshot)); if (!allowTerminal) assertOpen(loaded.snapshot); const result = callback(loaded.snapshot); return persist(dir, result.snapshot, result.kind); }); }
 
 // CLI 命令与参数的唯一真源：parseCli 的合法性判断和 `--help` 清单都从这里推导。
 const CLI_SPEC = {
@@ -271,18 +275,19 @@ function assuranceForNode(dir, snapshot, node, verificationRef) {
   }
   if (node.stable_outputs.length === 0) throw new LedgerError('实现节点没有稳定交付物，不能 passed');
   if (requirement === 'worker_self_check') return requirement;
-  if (!DIGEST_PATTERN.test(verificationRef ?? '')) throw new LedgerError(`${requirement} 必须用 verification_ref 绑定精确 attachment digest`);
   if (requirement === 'controller_recheck') {
+    if (!DIGEST_PATTERN.test(verificationRef ?? '')) throw new LedgerError(`node[${node.node_id}].verification_ref 当前为 ${JSON.stringify(verificationRef ?? null)}：controller_recheck 要求它是一个 sha256 attachment digest，精确指向该节点已 attach 的 Controller Recheck Record；先用 attach 登记该记录，再在 update 里带上它的 digest`);
     const outputs = controllerOutputs(dir, node);
     const report = attachmentValues(dir, node, 'report').find(({ entry, value }) => entry.digest === verificationRef && value.report_type === 'controller_recheck');
-    if (!report) throw new LedgerError('verification_ref 未指向 Controller Recheck Record');
+    if (!report) throw new LedgerError(`node[${node.node_id}].verification_ref=${verificationRef} 未指向 Controller Recheck Record：controller_recheck 要求 verification_ref 精确匹配该节点已 attach 的一份 controller_recheck 记录；先用 attach 登记该记录，再在 update 里带上它的 digest`);
     validateControllerRecheck(report.value, snapshot, outputs);
     return requirement;
   }
+  if (!DIGEST_PATTERN.test(verificationRef ?? '')) throw new LedgerError(`node[${node.node_id}].verification_ref 当前为 ${JSON.stringify(verificationRef ?? null)}：independent_evidence 要求它是一个 sha256 attachment digest，精确指向该节点已 attach 的 Evidence Package；先用 attach 登记该 Evidence Package，再在 update 里带上它的 digest`);
   const artifacts = attachmentValues(dir, node, 'artifact').map(({ value }) => validateArtifactRef(value));
   if (artifacts.length !== 1) throw new LedgerError('independent_evidence 节点必须且只能绑定一个 Artifact Ref');
   const evidence = attachmentValues(dir, node, 'evidence').find(({ entry }) => entry.digest === verificationRef);
-  if (!evidence) throw new LedgerError('verification_ref 未指向 Evidence Package');
+  if (!evidence) throw new LedgerError(`node[${node.node_id}].verification_ref=${verificationRef} 未指向 Evidence Package：independent_evidence 要求 verification_ref 精确匹配该节点已 attach 的一份 Evidence Package；先用 attach 登记该 Evidence Package，再在 update 里带上它的 digest`);
   const projections = projectedContractsForNode(dir, snapshot, node.node_id);
   validateEvidencePackage(evidence.value, snapshot, artifacts, { requirePass: true, projections });
   return requirement;
@@ -361,9 +366,9 @@ function completionGate(dir, snapshot) {
 // 只说清楚哪条判据没过、当前值是什么，不给可照抄的合规值。
 function unmetCompletionConditions(gate) {
   const unmet = [];
-  if (!gate.required_total) unmet.push('nodes 里没有任何 required 节点（required 节点数=0）：空 ledger 与只有非 required 节点的 ledger 都不算完成');
-  if (gate.unpassed_required_nodes.length) unmet.push(`nodes[].state：required 节点尚未 passed —— ${gate.unpassed_required_nodes.join('、')}`);
-  if (gate.uncovered_implementation_nodes.length) unmet.push(`summary.uncovered_implementation_nodes：契约声明了 verify-agent-output provider，但这些 required 实现节点没有被任何集成验证节点覆盖 —— ${gate.uncovered_implementation_nodes.join('、')}`);
+  if (!gate.required_total) unmet.push('nodes 里没有任何 required 节点（required 节点数=0）：完成判定至少需要一个 required 节点，空 ledger 与只有非 required 节点的 ledger 都不算完成；用 add-node 登记节点');
+  if (gate.unpassed_required_nodes.length) unmet.push(`nodes[].state：required 节点尚未 passed —— ${gate.unpassed_required_nodes.join('、')}；这些节点要先满足各自 verification.requirement 要求的证据，才能用 update 把 state 改为 passed`);
+  if (gate.uncovered_implementation_nodes.length) unmet.push(`summary.uncovered_implementation_nodes：契约声明了 verify-agent-output provider，但这些 required 实现节点没有被任何集成验证节点覆盖 —— ${gate.uncovered_implementation_nodes.join('、')}；需要一个 verification.requirement=independent_evidence 且 artifact_scope=integration_candidate 的已 passed 节点，通过 add-edge 的依赖边可达它们`);
   return unmet;
 }
 function status(options) { const dir = ledgerDir(options); const loaded = load(dir); const nodes = Object.values(loaded.snapshot.nodes); const totalTokens = nodes.reduce((acc, n) => acc + (typeof n.tokens === 'number' ? n.tokens : (n.tokens?.total_tokens ?? 0)), 0); const tokensByRole = {}; for (const n of nodes) { const t = typeof n.tokens === 'number' ? n.tokens : (n.tokens?.total_tokens ?? 0); tokensByRole[n.role] = (tokensByRole[n.role] || 0) + t; }

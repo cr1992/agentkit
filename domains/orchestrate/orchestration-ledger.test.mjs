@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { dirname } from 'node:path';
@@ -878,7 +878,18 @@ test('drift 的 ledger 只剩 close --abandon：其余修改命令（含正常 c
       close: ['close', '--ledger', L],
     };
     assert.deepEqual(Object.keys(drifted).sort(), [...DRIFT_BLOCKED_COMMANDS].sort(), 'CLI_SPEC 的 drift 冻结集合与用例表不一致');
-    for (const [command, argv] of Object.entries(drifted)) assert.match(refusal(argv), /skill_drift：必须 re-contract/u, command);
+    // 报错要给出冻结摘要与当前摘要的可辨识前缀（两者不同），以及唯二剩下的合规路径。
+    const frozenPrefix = frozenDigest.slice(0, 19);
+    const currentPrefix = skillContentDigest().slice(0, 19);
+    assert.notEqual(frozenPrefix, currentPrefix);
+    for (const [command, argv] of Object.entries(drifted)) {
+      const message = refusal(argv);
+      assert.match(message, /^skill_drift：/u, command);
+      assert.ok(message.includes(frozenPrefix), `${command}: 缺少冻结摘要前缀\n${message}`);
+      assert.ok(message.includes(currentPrefix), `${command}: 缺少当前摘要前缀\n${message}`);
+      assert.match(message, /close --abandon --reason/u, command);
+      assert.match(message, /re-contract 一个新 ledger/u, command);
+    }
 
     // 唯一豁免点：不推进任务图，也不按冻结协议下结论，只记录"这个 ledger 不再继续"。
     const abandoned = main(['close', '--ledger', L, '--abandon', '--reason', '升级后在途任务不再继续']);
@@ -936,5 +947,107 @@ test('lifecycle 是向后兼容的可选新增字段：旧快照没有它仍然�
     assert.deepEqual(Object.keys(lifecycle).sort(), [...schema.$defs.lifecycle.required].sort());
     for (const key of Object.keys(lifecycle)) assert.ok(Object.hasOwn(schema.$defs.lifecycle.properties, key), key);
     assert.match(lifecycle.closed_by_content_digest, new RegExp(schema.$defs.lifecycle.properties.closed_by_content_digest.pattern, 'u'));
+  } finally { f.cleanup(); }
+});
+
+// #17：现场违规文案——机械拦截点在报错里点名字段路径/节点 id、当前值、要求满足的性质，
+// 并指出合规命令名（不给可直接照抄的取值）。
+
+test('independent_evidence 的 verification_ref 违规文案点名节点、字段路径与合规命令名', () => {
+  const f = makeFixture({ independent: true });
+  try {
+    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('node.json', node({ node_id: 'verified', objective: '需要独立证据覆盖' }, INDEPENDENT_EVIDENCE))]);
+    const attached = main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'artifact', '--input', f.input('artifact.json', artifactRef())]);
+    const artifactDigest = attached.nodes.verified.stable_outputs.find((item) => item.type === 'artifact').digest;
+
+    // ① 完全没给 verification_ref：只点名 Evidence Package，不与 Controller Recheck Record 并列。
+    const missingRef = refusal(['update', '--ledger', f.ledger_dir, '--node', 'verified', '--input', f.input('missing-ref.json', { state: 'passed' })]);
+    assert.match(missingRef, /node\[verified\]\.verification_ref/u, missingRef);
+    assert.match(missingRef, /independent_evidence/u, missingRef);
+    assert.match(missingRef, /Evidence Package/u, missingRef);
+    assert.doesNotMatch(missingRef, /Controller Recheck Record/u, missingRef);
+    assert.match(missingRef, /\battach\b/u, missingRef);
+    assert.match(missingRef, /\bupdate\b/u, missingRef);
+
+    // ② verification_ref 有效但指向的是已绑定的 Artifact digest，不是 Evidence Package。
+    const wrongRef = refusal(['update', '--ledger', f.ledger_dir, '--node', 'verified', '--input', f.input('wrong-ref.json', { state: 'passed', verification_ref: artifactDigest })]);
+    assert.match(wrongRef, /node\[verified\]\.verification_ref=/u, wrongRef);
+    assert.match(wrongRef, /未指向 Evidence Package/u, wrongRef);
+    assert.match(wrongRef, /\battach\b/u, wrongRef);
+  } finally { f.cleanup(); }
+});
+
+test('controller_recheck 的 verification_ref 违规文案点名节点、字段路径与合规命令名', () => {
+  const f = makeFixture();
+  try {
+    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('node.json', node({ node_id: 'reviewed', objective: '需要主控复核' }, CONTROLLER_RECHECK))]);
+    const attached = main(['attach', '--ledger', f.ledger_dir, '--node', 'reviewed', '--type', 'artifact', '--input', f.input('artifact.json', artifactRef())]);
+    const artifactDigest = attached.nodes.reviewed.stable_outputs.find((item) => item.type === 'artifact').digest;
+
+    // ① 完全没给 verification_ref：只点名 Controller Recheck Record，不与 Evidence Package 并列。
+    const missingRef = refusal(['update', '--ledger', f.ledger_dir, '--node', 'reviewed', '--input', f.input('missing-ref.json', { state: 'passed' })]);
+    assert.match(missingRef, /node\[reviewed\]\.verification_ref/u, missingRef);
+    assert.match(missingRef, /controller_recheck/u, missingRef);
+    assert.match(missingRef, /Controller Recheck Record/u, missingRef);
+    assert.doesNotMatch(missingRef, /Evidence Package/u, missingRef);
+    assert.match(missingRef, /\battach\b/u, missingRef);
+    assert.match(missingRef, /\bupdate\b/u, missingRef);
+
+    // ② verification_ref 有效但指向的是已绑定的 Artifact digest，不是 Controller Recheck Record。
+    const wrongRef = refusal(['update', '--ledger', f.ledger_dir, '--node', 'reviewed', '--input', f.input('wrong-ref.json', { state: 'passed', verification_ref: artifactDigest })]);
+    assert.match(wrongRef, /node\[reviewed\]\.verification_ref=/u, wrongRef);
+    assert.match(wrongRef, /未指向 Controller Recheck Record/u, wrongRef);
+    assert.match(wrongRef, /\battach\b/u, wrongRef);
+  } finally { f.cleanup(); }
+});
+
+test('completion_ready 未满足时的每条 unmet condition 都点名合规命令名', () => {
+  const f = makeFixture();
+  const L = f.ledger_dir;
+  try {
+    const empty = refusal(['close', '--ledger', L]);
+    assert.match(empty, /没有任何 required 节点/u, empty);
+    assert.match(empty, /完成判定至少需要一个 required 节点/u, empty);
+    assert.match(empty, /\badd-node\b/u, empty);
+    // 陈述性质，不劝诫具体取值：不写"required 默认为 true"之类实现细节，也不写"不要显式设为 false"。
+    assert.doesNotMatch(empty, /不要把 required/u, empty);
+    assert.doesNotMatch(empty, /默认.{0,4}true/u, empty);
+
+    main(['add-node', '--ledger', L, '--input', f.input('waiting.json', node({ node_id: 'waiting', objective: '还没跑完' }))]);
+    const pending = refusal(['close', '--ledger', L]);
+    assert.match(pending, /nodes\[\]\.state/u, pending);
+    assert.ok(pending.includes('waiting(state=pending)'), pending);
+    // 条件在前、动作在后：先说明必须先满足验证要求的证据，再说明满足之后才能 update。
+    assert.match(pending, /要求的证据，才能用 update 把 state 改为 passed/u, pending);
+    assert.doesNotMatch(pending, /逐个推进为 passed/u, pending);
+  } finally { f.cleanup(); }
+
+  const g = makeFixture({ independent: true });
+  try {
+    passNode(g, 'impl');
+    const uncovered = refusal(['close', '--ledger', g.ledger_dir]);
+    assert.match(uncovered, /uncovered_implementation_nodes/u, uncovered);
+    assert.ok(uncovered.includes('impl'), uncovered);
+    assert.match(uncovered, /independent_evidence/u, uncovered);
+    assert.match(uncovered, /\badd-edge\b/u, uncovered);
+  } finally { g.cleanup(); }
+});
+
+test('CLI 走一遍 controller_recheck 违规：stderr JSON 形态与退出码不变，只是 message 更详细', () => {
+  const f = makeFixture();
+  const L = f.ledger_dir;
+  try {
+    main(['add-node', '--ledger', L, '--input', f.input('node.json', node({ node_id: 'reviewed', objective: '需要主控复核' }, CONTROLLER_RECHECK))]);
+    main(['attach', '--ledger', L, '--node', 'reviewed', '--type', 'artifact', '--input', f.input('artifact.json', artifactRef())]);
+    const inputPath = f.input('pass.json', { state: 'passed' });
+    const cli = spawnSync(process.execPath, [LEDGER_SCRIPT, 'update', '--ledger', L, '--node', 'reviewed', '--input', inputPath], { encoding: 'utf8' });
+    assert.equal(cli.status, 2, cli.stderr);
+    assert.equal(cli.stdout, '');
+    const payload = JSON.parse(cli.stderr);
+    assert.deepEqual(Object.keys(payload).sort(), ['error', 'message']);
+    assert.equal(payload.error, 'invalid_input');
+    assert.match(payload.message, /node\[reviewed\]\.verification_ref/u, payload.message);
+    assert.match(payload.message, /controller_recheck/u, payload.message);
+    assert.match(payload.message, /\battach\b/u, payload.message);
   } finally { f.cleanup(); }
 });
