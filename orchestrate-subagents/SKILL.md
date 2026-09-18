@@ -10,6 +10,7 @@ metadata:
 
 提供宿主无关的拆解、派发、控制和验收协议。最强适配模型持续担任 controller，掌握
 `Plan → Delegate → Observe → Re-plan → Verify → Finish`；不得派生另一个 agent 接管控制面或最终判断。
+新会话冷启动或接手已有任务时先跑 `agentkit status`，找回本仓未终态的 ledger。
 
 ## 组合协议
 
@@ -40,7 +41,8 @@ controller 始终拥有闭环对象、完成标准、任务图、依赖/barrier�
 和最终答复时更新，无活跃 worker 明示为 0，不虚构百分比。字段与状态变换见
 编排运行时（`agentkit docs orchestrate orchestration-runtime`）「派发台账的三张表」。台账也是回收清单：收口前
 确认没有孤儿 worker/worktree/运行时资源。任务图与台账只写仓库外会话状态；完整档用 mechanical
-ledger，轻量档用单一 JSON 快照，闭环后清理。
+ledger，闭环后 `agentkit orchestrate ledger close` 收口，放弃或升级后 drift 的用
+`close --abandon --reason <text>`；轻量档用单一 JSON 快照，闭环后清理。
 
 ### 档位无关的有效能力预检
 
@@ -64,7 +66,9 @@ Reflection 使用 `agentkit orchestrate reflection record/propose`，通用 Skil
 ### 完整档机械台账工具
 
 不满足轻量档时使用 `orchestration_mode: full`。先用 `agentkit contract normalize / validate / digest /
-review-view / diff` 固定公共 Task Contract，再以仓库外 state root 初始化 `agentkit orchestrate ledger`。
+review-view / diff` 固定公共 Task Contract——需求还没逼问成可冻结的契约时，先用
+`agentkit contract interview-*` 访谈（`agentkit docs orchestrate contract-interview`）——再以仓库外
+state root 初始化 `agentkit orchestrate ledger`。
 脚本不直接派发 Agent，controller 把宿主回执写入 `dispatch-record`。节点必须选择
 `worker_self_check`、`controller_recheck`、`independent_evidence`，只读 critic/scout 用
 `not_applicable`；依赖/barrier 未通过不派下游。命令、schema、`--expected-revision`、state root 信任

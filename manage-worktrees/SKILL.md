@@ -61,7 +61,7 @@ manager 的 trace/common-dir 状态只应由受信 operator/controller 与 runti
 | 恢复/盘点 | `watch-service status` → `resume-all` → `list` → `doctor` | 常驻服务未安装时只报告并建议 `watch-service install`，不得用 `--no-watch` 顶替；`list/doctor` 只读；`UNTRACKED` 不等于无人使用；`EPHEMERAL` 优先 commit+push；任何 error 都暂停 `spawn/adopt` |
 | 碰撞扫描 | `scan --target <paths>` | `COLLIDE`、范围不确定或重做昂贵时隔离；`CLEAR` 仅在 owner 明确且改动小时共享；低置信后缀匹配先人工核对路径基准 |
 | 交付身份 | 选择复用/并存/替代 | branch、MR 或目录名不同不能单独证明独立交付；同一 agent 有存量树或需要替代时读交付身份（`agentkit docs worktree delivery-identity`） |
-| 创建/接管 | `spawn <semantic-slug>` / `adopt <path>` | 使用真实 agent-id，不猜身份；task 至少两个 lowercase 语义分词；base、root、堆叠、rebase/retarget 读创建与堆叠（`agentkit docs worktree spawn-and-stack`） |
+| 创建/接管 | `spawn <semantic-slug>` / `adopt <path>` | 使用真实 agent-id，不猜身份；task 至少两个 lowercase 语义分词；属于某次编排时带 `--ledger <id>`，好让 `agentkit status` 收窄到那一个；base、root、堆叠、rebase/retarget 读创建与堆叠（`agentkit docs worktree spawn-and-stack`） |
 | 更新/交接 | `touch` / `handoff` / `refresh-review` | `ready_for_review` 默认武装冻结 HEAD；handoff 只接受 clean、已 push 边界，禁止 stash 搬运；读评审生命周期（`agentkit docs worktree review-lifecycle`） |
 | 审计/提交 | `audit` / `submit` | portable core 不决定 MR/PR 或直推策略；先服从目标仓规则，再原子登记 change request 与 watcher target |
 | 批量集成 | `plan-batch` → `batch-integrate` → `batch-step` → `batch-result` | 同仓同 target：≥3 默认聚合，2 个仅在碰撞时；只合成冻结 SHA，不代跑门禁；合同/顺序/target 变化即重规划；读批量集成（`agentkit docs worktree batch-integration`） |
