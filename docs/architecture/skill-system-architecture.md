@@ -24,6 +24,7 @@
 - [12. 版本、兼容与安装](#12-版本兼容与安装)
 - [13. 测试策略](#13-测试策略)
 - [15. 反思、沉淀与受控改进](#15-反思沉淀与受控改进)
+- [17. 已确定的设计决策与待定 ADR](#17-已确定的设计决策与待定-adr)
 
 ## 1. 背景与核心判断
 
@@ -593,12 +594,31 @@ abort / re-contract，不得修改原合同。这三条是跨 envelope 的架构
 | loop | [`domains/loop/`](../../domains/loop/) | [`docs/loop/`](../loop/) | `run-agent-verify-loop/` |
 
 跨域共享原语在 [`core/`](../../core/)；Skill 目录下的 `scripts/` 只在 1.x 保留兼容 stub，不承载实现。
-单个 Skill 不能依赖兄弟 Skill 路径，共享代码只能从包根 `core/` 与对应 `domains/<domain>/` 获取。
 
 full verifier protocol 只有一个真源：[`docs/verify/verification-protocol.md`](../verify/verification-protocol.md)
 与 Review Result v1 schema。Loop 只维护 [`docs/loop/embedded-review-adapter.md`](../loop/embedded-review-adapter.md)，
 定义 standalone 模式如何准备最小只读 reviewer view、如何把 Review Result 绑定到 loop ID / iteration /
 Artifact，以及 embedded 模式缺少标准 Evidence 时哪些保证不成立；它不复制也不改写完整行为协议。
+
+### 8.2 通用脚本约束
+
+- 统一使用 Node 22+ 原生 ESM 模块（`.mjs`），不引入第三方或 Python 运行时依赖，也不提前编译；
+- 所有机器消费命令支持 `--json`；
+- 所有状态修改命令使用 revision / lock；
+- init 冻结相关 Skill manifest；provider 派发、Evidence 接收和 Loop `next` 前重算摘要；
+- 运行中 Skill 摘要变化以 `skill_drift` abort，必须 re-contract；
+- 不接受任意 shell 字符串，命令使用 argv 数组；
+- 默认不向业务仓库写运行状态；
+- 状态目录必须显式授权；
+- event journal 追加写，snapshot 可重建；
+- Reflection、Convergence Report 和 Proposal 使用 write-new / append-only，不回写 Evidence；
+- `propose-improvement` 只能输出 `lifecycle: proposed`，不能编辑 Skill 文件；
+- 域级 `doctor` 只检查显式选择的 ledger / run / loop 等状态，不自动删除或修复；顶层
+  `agentkit doctor` 只检查 Node、Git、安装完整性与各域 capabilities，不把缺少状态选择器判为故障；
+- runtime 提供 `capabilities`、`status`、`inspect`、`validate`、`doctor`；
+- 单个 Skill 不能依赖兄弟 Skill 路径；共享代码只能从包根 `core/` 与对应 `domains/<domain>/` 获取；
+- 1.x 兼容入口必须 import-safe，只允许静态透传 domain 导出并在直接执行时调用同一进程内的
+  `runCli()`；不得在 import 时执行命令，也不得再派生第二个 Node 进程。2.0 删除这些 stub。
 
 ## 9. 验证、证据与安全内核
 
@@ -1125,3 +1145,39 @@ v1 包含：
 
 v1 不包含自动聚类、自动改 Skill、自动 accepted、自动发布或跨用户学习。它只把高质量改进输入
 生产出来，为未来独立改进层提供可靠接口。
+
+## 17. 已确定的设计决策与待定 ADR
+
+### 17.1 已确定
+
+1. 四个 Skill 均可独立使用。
+2. `verify-agent-output` 是独立的一次性验证 Skill。
+3. `run-agent-verify-loop` 继续保留，服务明确要求循环收敛，或在 freeze 前已合理预期同一目标会连续产生多轮新 Artifact 且修复已获授权的任务。
+4. 仅在第 5.4 节循环触发条件成立或显式调用时，`/run-agent-verify-loop + 目标` 才按第 5.5 节先冻结
+   合同再启动循环；普通任务与一次性验收不经过 Loop，普通 Loop 也不自动创建外部 Goal。
+5. Loop 可以 standalone embedded 运行，也可以消费 verifier provider。
+6. Verification Profile 是独立冻结 envelope，并承接现有验证 extension。
+7. full verifier protocol 只有一个真源；Loop 只维护 embedded adapter。
+8. 多 Skill 通过 envelope 联动，不跨目录 import。
+9. 能机械表达的保证必须由脚本实现。
+10. v1 以 Git commit 作为 Artifact。
+11. one-shot pass 与 Loop completed 都不自动等于外部 Goal / 全局任务完成。
+12. 目标 v1 中 Loop 不拥有批队列；批量由 orchestrator 组合多个独立 Loop，但迁移必须与
+    orchestration ledger 同批落地。
+13. Skill 是可质疑的版本化协议；当前任务冻结版本和内容摘要。
+14. 四个执行 Skill 只生成 proposed 改进候选，不能任务内自改或自行 accepted。
+15. Reflection 保存证据化结论，不保存 chain-of-thought，也不改变 Artifact verdict。
+16. 自动学习与自进化不进入 v1。
+
+### 17.2 待定 ADR
+
+1. orchestration ledger 与 verification / loop state root 的默认目录布局。
+2. 日志大小上限和脱敏配置格式。
+3. standalone verifier 如何获得 clean pinned workdir，同时不复制 worktree 生命周期能力。
+4. 不依赖 `manage-worktrees` 时 repository identity 的跨 clone 语义。
+5. RFC 8785 的 Node 实现采用经测试的本地实现还是锁定版本依赖；无论选择哪种，都必须通过
+   RFC 测试向量、重复 key 拒绝和跨 Skill digest 兼容测试。“优先标准库”不等于允许自创另一套
+   canonical 语义。
+6. Reflection / Proposal 的默认 state root、保留周期、跨项目去重键和用户导出授权。
+
+这些 ADR 可以影响实现细节，但不能推翻“独立可用、组合增强、脚本保证机械不变量”的总体边界。
