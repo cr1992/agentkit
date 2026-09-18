@@ -28,7 +28,7 @@ import { validateJsonSchema } from '../../core/json-schema-lite.mjs';
 import { atomicWriteJson, atomicWriteText, writeNewJson } from '../../core/atomic-fs.mjs';
 import { createDigestKit } from '../../core/digest.mjs';
 import { distributionDigest, skillDistributionRoots } from '../../core/content-digest.mjs';
-import { contractSubstance, formatSubstanceErrors, profileSubstance } from '../../core/contract-substance.mjs';
+import { contractSubstance, coverageSubstance, formatSubstanceErrors, profileSubstance, substanceWarnings } from '../../core/contract-substance.mjs';
 
 export const RUNTIME_VERSION = '1.0.0';
 const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'run-agent-verify-loop');
@@ -717,7 +717,8 @@ function initialize(options, flags) {
   const ids = validateContract(contract);
   validateProfile(profile, ids);
   // 实质性只在 init 这个冻结点判定；adopt-root、record-embedded-review、validate 等续跑入口不重判。
-  const substance = [...contractSubstance(contract).errors, ...profileSubstance(profile).errors];
+  const contractReport = contractSubstance(contract);
+  const substance = [...contractReport.errors, ...profileSubstance(profile).errors, ...coverageSubstance(contract, profile).errors];
   if (substance.length) throw new LoopValidationError(formatSubstanceErrors(substance));
   const contentDigest = skillContentDigest();
   validateSkillBinding(contract, contentDigest);
@@ -778,7 +779,7 @@ function initialize(options, flags) {
     initialEvent.event_digest = envelopeDigest(initialEvent, 'event_digest');
     writeFileSync(join(loopDir, 'events.ndjson'), `${canonicalJson(initialEvent)}\n`, { flag: 'wx', mode: 0o600 });
     atomicWriteJson(join(loopDir, 'snapshot.json'), snapshot);
-    return { loop_id: loopId, loop_dir: loopDir, revision: 0, state: 'active', provider };
+    return { loop_id: loopId, loop_dir: loopDir, revision: 0, state: 'active', provider, ...(contractReport.warnings.length ? { warnings: contractReport.warnings } : {}) };
   });
 }
 
@@ -1009,7 +1010,10 @@ function doctor(options) {
   const drift = currentDigest !== loaded.snapshot.skill_provenance.content_digest;
   const lockPresent = existsSync(join(stateRoot, '.loop-runtime.lock'));
   const findings = identityError ? ['state_root_identity_invalid'] : [];
-  return { healthy: !loaded.needsRepair && !lockPresent && !drift && !identityError, loop_id: loaded.snapshot.loop_id, revision: loaded.snapshot.revision, snapshot_matches_journal: !loaded.needsRepair, lock_present: lockPresent, skill_drift: drift, frozen_content_digest: loaded.snapshot.skill_provenance.content_digest, current_content_digest: currentDigest, state_root_identity_valid: !identityError, findings, diagnostics: identityError, recovery_command: identityError ? `adopt-root --state-root ${stateRoot}` : null };
+  // 实质性问题不进 findings、不参与 healthy：doctor 是只读回看路径，会读到判据出现之前冻结的 loop，
+  // 在这里判 unhealthy 等于让历史结论随 runtime 版本变化。
+  const substance = substanceWarnings(readJson(join(loopDir, 'contract.json')), readJson(join(loopDir, 'profile.json')));
+  return { healthy: !loaded.needsRepair && !lockPresent && !drift && !identityError, loop_id: loaded.snapshot.loop_id, revision: loaded.snapshot.revision, snapshot_matches_journal: !loaded.needsRepair, lock_present: lockPresent, skill_drift: drift, frozen_content_digest: loaded.snapshot.skill_provenance.content_digest, current_content_digest: currentDigest, state_root_identity_valid: !identityError, findings, substance_warnings: substance, diagnostics: identityError, recovery_command: identityError ? `adopt-root --state-root ${stateRoot}` : null };
 }
 
 export function main(argv = process.argv.slice(2)) {

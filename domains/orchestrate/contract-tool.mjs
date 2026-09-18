@@ -49,8 +49,12 @@ class Parser {
 
 export function parseJsonStrict(text) { return new Parser(text).parse(); }
 // substance 只由创建入口打开（contract validate、ledger init）。add-node、doctor、投影等
-// 在已冻结契约上的操作保持形状校验，升级前冻结的 ledger 才能继续运行。
-export function validateContract(contract, { requireDigest = true, substance = false } = {}) {
+// 在已冻结契约上的操作保持形状校验：契约冻结后不可变，实质性只在冻结那一刻判定一次；
+// doctor 这类只读回看路径还会读到判据出现之前冻结的 ledger，在那里拒绝等于让历史结论随
+// runtime 版本变化。
+// warnings 是出参数组：warning 不改变 valid 结论也不改变退出码，只能由调用方带进输出，
+// 因此不能走抛异常这条路，也不适合改 validateContract 的返回值（返回的是契约本身）。
+export function validateContract(contract, { requireDigest = true, substance = false, warnings = null } = {}) {
   const required = ['schema_version', 'contract_id', 'objective', 'scope', 'acceptance', 'permissions', 'environment', 'skill_set', 'stop_conditions', 'extensions'];
   if (contract?.schema_version !== 1) throw new ContractError('Task Contract schema_version 必须为 1');
   for (const field of required) if (!Object.hasOwn(contract, field)) throw new ContractError(`Task Contract 缺少 ${field}`);
@@ -91,8 +95,9 @@ export function validateContract(contract, { requireDigest = true, substance = f
   for (const key of Object.keys(contract.extensions)) if (common.has(key)) throw new ContractError(`extension 覆盖公共字段: ${key}`);
   if (requireDigest && (!/^sha256:[0-9a-f]{64}$/u.test(String(contract.contract_digest ?? '')) || envelopeDigest(contract) !== contract.contract_digest)) throw new ContractError('contract_digest 无效');
   if (substance) {
-    const { errors } = contractSubstance(contract);
-    if (errors.length) throw new ContractError(formatSubstanceErrors(errors));
+    const report = contractSubstance(contract);
+    if (report.errors.length) throw new ContractError(formatSubstanceErrors(report.errors));
+    if (warnings) warnings.push(...report.warnings);
   }
   return contract;
 }
@@ -153,7 +158,7 @@ export function main(argv = process.argv.slice(2)) {
   if (isHelpRequest(argv)) return { help: renderCliHelp('contract-tool.mjs', CLI_SPEC, CLI_NOTES) };
   const { command, options } = parseCli(argv);
   if (command === 'normalize') return normalizeContract(read(options.input));
-  if (command === 'validate') { const value = validateContract(read(options.input), { substance: true }); return { valid: true, contract_id: value.contract_id, contract_digest: value.contract_digest }; }
+  if (command === 'validate') { const warnings = []; const value = validateContract(read(options.input), { substance: true, warnings }); return { valid: true, contract_id: value.contract_id, contract_digest: value.contract_digest, ...(warnings.length ? { warnings } : {}) }; }
   if (command === 'digest') return { contract_digest: envelopeDigest(read(options.input)) };
   if (command === 'review-view') { const value = validateContract(read(options.input)); return { schema_version: 1, contract_id: value.contract_id, objective: value.objective, scope: value.scope, acceptance: value.acceptance, contract_permissions: value.permissions, reviewer_permissions: { mode: 'read_only', writable_paths: [] }, environment: value.environment, contract_digest: value.contract_digest }; }
   if (command === 'diff') return contractDiff(read(options.left), read(options.right));
