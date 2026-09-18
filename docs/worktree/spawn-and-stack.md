@@ -21,6 +21,26 @@ manager 的一行摘要，失败时只返回有界错误，避免 ANSI 进度条
 `agent-id` 必须来自宿主真实 session/thread/task ID，不得编造。相同会话已有其他树时，先按
 [delivery-identity.md](delivery-identity.md) 判断复用、并存或替代。
 
+## worktree 级 ledger 指针
+
+这棵树属于某次编排时，`spawn` 可以带上 `--ledger <id>`：
+
+```bash
+agentkit worktree spawn ci-gate-hardening \
+  --agent codex --agent-id <real-thread-id> \
+  --purpose "加固 CI 门禁" --ledger <orchestration-ledger-id>
+```
+
+它写进 record 的 `ledger` 字段（缺省 `null`，升级前的老 record 同样按 `null` 处理），只有一个用途：
+`agentkit status` 在受管 worktree 里据此把候选 ledger 收窄到一个，不必在多个未终态 ledger 之间猜。
+
+worktree record 仍然是 worktree 域的内部结构，由代码定义、没有对外 schema；`ledger` 字段是其中一个
+普通可选字段。worktree 域只校验 id 的**格式**（规则真源是 `core/ledger-pointer.mjs` 里的
+`LEDGER_ID_PATTERN`，与 `agentkit orchestrate ledger init --ledger-id` 同一套），不去解析 ledger
+状态——那属于 orchestrate 域，两个域之间不互相 import。传一个还不存在的 ledger id 不会被拒绝，
+它只是暂时收窄不到任何东西。仓级指针与 ledger 状态见
+`agentkit docs orchestrate orchestration-runtime`。
+
 ## Root 与 branch
 
 无 Profile 时：base 按 remote HEAD、`origin/main`、`origin/master`、upstream、HEAD 依次选择；branch

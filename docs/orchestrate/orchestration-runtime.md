@@ -25,12 +25,51 @@ add-node / add-edge / dispatch-record / update / attach
 batch-init / batch-record / batch-status / batch-fuse
 record-reflection / propose-improvement
 close [--abandon --reason <text>]
-status / inspect / rebuild / doctor / capabilities
+status / inspect / rebuild / capabilities
+doctor --ledger <dir> | doctor --repository <path>
+reclaim-pointers --repository <path>
 ```
 
 `init` 回显 `ledger_id / ledger_dir / ledger / state_root / revision`。后续所有命令的 `--ledger`
 传 `ledger` 字段的值，也就是 `<state-root>/ledgers/<ledger-id>`，**不是 `--state-root` 本身**；
 把 state root 当 `--ledger` 传时，ledger 直接给出应传的绝对路径（多个 ledger 时列出候选）。
+
+## 仓级 ledger 指针与 `agentkit status`
+
+state root 按设计落在业务仓库之外，新会话在主 checkout 里没有任何线索能找回上一个会话的 ledger。
+`init` 因此在 `contract.environment.repository` 所属仓库的 git common dir 下写一份指针：
+
+```text
+<git-common-dir>/agentkit/ledgers/<ledger_id>.json
+{ "schema_version": 1, "ledger_id", "state_root", "contract_digest", "created_at" }
+```
+
+结构真源是 [`schemas/ledger-pointer-v1.schema.json`](../../schemas/ledger-pointer-v1.schema.json)，
+读写实现是 `core/ledger-pointer.mjs`（放在 core/ 是因为 worktree 域与顶层 CLI 都要用它，而域之间不互相 import）。
+
+- **指针不是真源。** 它只回答"ledger 在哪"。`contract_digest` 等字段只用于展示与交叉核对，任何判定
+  都回读 state root 的事件链。指针全部删掉不丢任何状态，代价只是重新手传 `--ledger`。
+- 指针只写在 `.git/` 下，不进版本控制；linked worktree 里 `--git-common-dir` 指向主仓 `.git`，
+  因此一个仓库永远只有一份指针目录。
+- `environment.repository` 为 `'none'`、路径不存在或不是 git 仓时不写指针，`init` 在 `pointer.reason`
+  与 `warnings` 里说明原因。
+- **顺序与失败语义**：先把 ledger 建成（事件链 + 快照落盘），最后才写指针。指针写失败降级为 warning，
+  不让 `init` 失败后留下半个 ledger。`close`（含 `--abandon`）成功后删除指针，删除失败同样只是 warning。
+- 指针按 `ledger_id` 索引，一个仓上同名 ledger 只有一份。换 state root 重建同名 ledger 会顶掉旧那一份，
+  `init` 在 `pointer.replaced` 与 `warnings` 里点名被顶掉的 state root——旧 ledger 本身不受影响，
+  只是之后要手传 `--ledger`。
+- `doctor --repository <path>` 扫描该仓的全部指针并分类：`active` / `skill_drift` / `terminal` /
+  `dangling_state_root` / `unreadable` / `malformed`。它是只读的，只报告不删。
+  **drift 但未进入终态的 ledger 指针一律保留**：它还需要有人来 `close --abandon` 或 re-contract，
+  回收指针等于把它藏起来。
+- `reclaim-pointers --repository <path>` 是显式回收入口，删掉 `doctor` 标为 `reclaimable` 的那些。
+  回收不放在只读的 `doctor` 里，是为了让一次例行体检不会悄悄改掉仓库状态。
+
+顶层 `agentkit status [--json]` 从 cwd 找 git common dir，读全部指针，回读各 state root，筛出未终态
+的 ledger，单屏给出当前阶段、活跃 worktree、阻塞项、未覆盖节点（`summary.uncovered_implementation_nodes`）
+与下一步命令。同时存在多个时全部列出，不做猜测；处在受管 worktree 里时用 record 的 `ledger` 字段收窄。
+`skill_drift` 的 ledger 单独成组，下一步只给 `close --abandon` 与 re-contract，不给续跑命令。
+找不到任何指针时直接提示"未发现 ledger"。轻量档不在覆盖范围内。
 
 五个脚本（`contract-tool` / `orchestration-ledger` / `worker-capability-preflight` /
 `review-budget` / `orchestration-reflection`）在 `--help`、`-h`、`help` 或无参数时打印自己的命令与

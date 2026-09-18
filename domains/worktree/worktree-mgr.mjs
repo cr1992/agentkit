@@ -8,6 +8,9 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// ledger id 的格式规则下沉在 core/：worktree 域只做格式校验，不 import orchestrate 域。
+import { LEDGER_ID_PATTERN, isLedgerId } from '../../core/ledger-pointer.mjs';
+
 import * as core from './worktree-core.mjs';
 import * as mergePreview from './worktree-merge-preview.mjs';
 import * as profile from './worktree-profile.mjs';
@@ -82,6 +85,8 @@ const dependencies = {
   processPlatform: process.platform,
   processExecPath: process.execPath,
   processGetuid: () => typeof process.getuid === 'function' ? process.getuid() : 0,
+  LEDGER_ID_PATTERN,
+  isLedgerId,
   ...mergePreview,
   ...profile,
   ...provider,
@@ -139,8 +144,9 @@ function cmdCapabilities(args) {
 function usage() {
   console.log(`${PREFIX} portable multi-Agent worktree manager
 
-spawn <task> --agent <host> --agent-id <id> --purpose <text> [--owner <name>] [--base <ref> --base-reason <text>] [--root <path>] [--codegraph auto|on|off]
+spawn <task> --agent <host> --agent-id <id> --purpose <text> [--owner <name>] [--base <ref> --base-reason <text>] [--root <path>] [--codegraph auto|on|off] [--ledger <id>]
   同会话已有未回收树时默认拒绝；独立并行加 --parallel-reason <text>；替代加 --supersedes <selector> --replacement-reason <text>
+  --ledger <id>：把这棵树绑到某个 orchestration ledger，写进 record，供 agentkit status 收窄范围；只校验 id 格式
 adopt <path> --agent <host> --agent-id <id> --purpose <text> [--task <slug>] [--base <ref> --base-reason <text>]
 list [--json] [--all] [--present] [--archived]
   --present：只列目录仍然存在的 record（TRACKED/UNTRACKED/MAIN 分类不变），隐藏全部历史记录

@@ -67,7 +67,24 @@ export function createCommands(deps) {
     localBranchExists,
     autoArmReviewWatch,
     isSettledWorktreeState,
+    LEDGER_ID_PATTERN,
+    isLedgerId,
   } = deps;
+
+  /**
+   * worktree 级指针：把这棵树绑到某个 orchestration ledger 上，供 `agentkit status` 收窄范围。
+   * 这里只校验 id 的格式（规则真源在 core/ledger-pointer.mjs），不去解析 ledger 状态——
+   * 那属于 orchestrate 域，worktree 域不跨域 import，也不为一个可能还没建成的 ledger 背书。
+   * @param {Map<string, string>} flags
+   */
+  function resolveLedgerBinding(flags) {
+    const raw = flag(flags, 'ledger');
+    if (raw === null || raw === undefined) return null;
+    if (!isLedgerId(raw)) {
+      die(`--ledger 无效：当前值 ${JSON.stringify(raw)}；要求非空且只含字母、数字、点、下划线与连字符（${LEDGER_ID_PATTERN.source}），与 orchestrate ledger 的 --ledger-id 同一套格式。`, 2);
+    }
+    return raw;
+  }
 
   function cmdSupersede(args) {
     rejectUnknownFlags(args.flags, ['by', 'reason', 'id', 'by-id', 'config']);
@@ -134,11 +151,12 @@ export function createCommands(deps) {
   function prepareSpawnRequest(args) {
     rejectUnknownFlags(args.flags, [
       'agent', 'agent-id', 'purpose', 'owner', 'base', 'base-reason', 'config', 'codegraph', 'root',
-      'parallel-reason', 'supersedes', 'replacement-reason',
+      'parallel-reason', 'supersedes', 'replacement-reason', 'ledger',
     ]);
     const task = args.positionals[0];
     if (!task) die('spawn 需要 <task>。', 2);
     validateTaskSlug(task);
+    const ledger = resolveLedgerBinding(args.flags);
     const identity = resolveIdentity(args.flags, { requirePurpose: true });
     const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
     requireFreshPrimaryProfile(loaded);
@@ -175,6 +193,7 @@ export function createCommands(deps) {
       loaded,
       codegraphMode,
       existingRecords,
+      ledger,
       deliveryRelation: resolveDeliveryRelation(args.flags, existingRecords, coexisting),
     };
   }
@@ -359,6 +378,8 @@ export function createCommands(deps) {
       last_head: git(['rev-parse', 'HEAD'], plan.path),
       ownership_epochs: [{ agent: request.identity.actor, started_at: now, start_sha: baseSha.out, end_sha: null, ended_at: null }],
       delivery_relation: request.deliveryRelation,
+      // worktree 级 ledger 指针。缺省 null，老 record 没有这个字段同样按 null 处理。
+      ledger: request.ledger,
     };
     appendTraceEvent({
       commonDir: plan.context.common_dir,
@@ -371,6 +392,7 @@ export function createCommands(deps) {
         base_reason: baseReason,
         stack_parent_worktree_id: record.stack_parent?.worktree_id ?? null,
         delivery_relation: request.deliveryRelation,
+        ledger: request.ledger,
       },
       mutate: () => record,
     });

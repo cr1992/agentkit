@@ -30,7 +30,7 @@ test('公共 v1 envelope 只有一份 canonical schema，Skill 目录不再携�
 
 test('canonical schema 集合无重名、无重复 $id', () => {
   const all = names();
-  assert.equal(all.length, 17, `canonical schema 数量应为 17，实际 ${all.length}`);
+  assert.equal(all.length, 18, `canonical schema 数量应为 18，实际 ${all.length}`);
   assert.equal(new Set(all).size, all.length);
   const ids = all.map((name) => schema(name).$id);
   for (const id of ids) assert.equal(typeof id, 'string');

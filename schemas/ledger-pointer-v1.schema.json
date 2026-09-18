@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-skills.local/schemas/ledger-pointer-v1.schema.json",
+  "title": "Ledger Pointer v1",
+  "description": "仓级 ledger 指针，落盘于 <git-common-dir>/agentkit/ledgers/<ledger_id>.json。只回答 ledger 在哪，不是任何状态的真源：state_root 之外的字段仅用于展示与交叉核对，判定一律回读 state root 的事件链。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "ledger_id", "state_root", "contract_digest", "created_at"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "ledger_id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$" },
+    "state_root": { "type": "string", "minLength": 1, "description": "ledger state root 的绝对路径；ledger 目录为 <state_root>/ledgers/<ledger_id>。" },
+    "contract_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "init 时冻结的 Task Contract 摘要，只用于展示与交叉核对。" },
+    "created_at": { "type": "string", "minLength": 1 }
+  }
+}
