@@ -24,7 +24,7 @@
 - [12. 版本、兼容与安装](#12-版本兼容与安装)
 - [13. 测试策略](#13-测试策略)
 - [15. 反思、沉淀与受控改进](#15-反思沉淀与受控改进)
-- [17. 已确定的设计决策与待定 ADR](#17-已确定的设计决策与待定-adr)
+- [17. ADR](#17-adr)
 
 ## 1. 背景与核心判断
 
@@ -56,7 +56,8 @@
 Skill 目录下的 `scripts/` 只在 1.x 保留兼容入口，不再承载运行时实现。
 
 当用户明确要求反复修复与独立验收，或显式调用
-`/run-agent-verify-loop + 目标` 时，controller 才选择 Loop 模式，并按第 5.5 节完成启动前置。
+`/run-agent-verify-loop + 目标` 时，controller 才选择 Loop 模式，并按
+[`run-agent-verify-loop/SKILL.md`](../../run-agent-verify-loop/SKILL.md) 的启动闸门完成启动前置。
 Loop 可以消费前三个 Skill 的能力，但它不是普通任务或一次性验收的默认入口，也不负责全局路由、
 provider 选择和最终授权。
 
@@ -235,198 +236,21 @@ reference。reference 必须从入口说明“何时读取”，不得要求所�
 
 ## 5. 每个 Skill 如何独立使用
 
-### 5.1 orchestrate-subagents
-
-独立触发场景：
-
-- 用户明确要求多 Agent、并行或委派；
-- 任务规模需要拆分；
-- 独立 critic 是多节点任务图的一部分，需要额外依赖、权限或并发控制；
-- 多节点任务存在依赖、barrier 或不同权限。
-
-对一个冻结 Artifact 只派生一个只读 reviewer，是
-`verify-agent-output` 的单 reviewer carve-out，不触发完整 orchestrator。只有该 reviewer
-属于更大的任务图，或用户明确要求多 Agent 编排时，才同时使用 orchestrator。
-
-独立模式下：
-
-1. controller 生成 Task Contract。
-2. 使用宿主原生 Agent API 派发。
-3. 用本 Skill 自带 ledger 工具持久化任务图和状态。
-4. 在共享树安全时直接使用共享树。
-5. 需要隔离但没有 `manage-worktrees` 时，使用 Skill 中的保守 Git 下限或要求用户提供环境。
-6. 需要独立验收但没有专项验证 Skill 时，可以使用宿主原生 reviewer 辅助 Controller 判断，但在
-   ledger 中只能记录 `controller_recheck`；没有标准 Evidence Package 不得升级成
-   `independent_evidence`。
-
-迭代期的分支仍会在 review 后立即修复时，上述原生 reviewer 是合适的决策辅助，但其结论仍只属于
-`controller_recheck` / advisory。RC、合入候选等终审边界必须先冻结唯一 Artifact；需要
-`independent_evidence` 时再运行 `verify-agent-output` 全流程，不能把移动分支上的手动 review 升格。
-
-独立模式的交付不是“子 Agent 都回复了”，而是 controller 对稳定产物和证据完成最终验收。
-
-编排档位与 worker 有效权限是正交轴。controller 在选择 lightweight / full 前，先为节点声明
-`required_capabilities`。为空时不调用 preflight 脚本，只记录 `not_required` 与合同已提供全部输入等
-依据；非空时用实时接口事实、与当前接口指纹和 worker 配置绑定的有效记录，或按需最小探针证明。
-相同 requirements 与 binding 的当轮有效结果可以复用；同机、本地或历史上恒过不构成豁免。full 只
-增加 ledger、恢复、barrier 和缓存，不扩大 worker 权限；未知能力不能通过升级档位变成可用。探针是
-实际 worker，必须计入数量、预算和台账。
-
-### 5.2 manage-worktrees
-
-独立触发场景：
-
-- 用户明确要求 worktree；
-- 同仓存在多个写入者；
-- 写入归属不明且路径相交；
-- 需要登记、交接、监听、批次集成候选或安全回收。
-
-它不需要任何 Agent 编排 Skill。用户或单个 Agent 可以直接：
-
-- 扫描碰撞；
-- 创建或接管 worktree；
-- 更新 owner 与状态；
-- 以 CAS 约束执行 manager-owned rebase，或在不改历史时 retarget；
-- 记录堆叠父 worktree、base SHA 与结构化 change request；
-- 固定 feature / target SHA；
-- 生成批次集成计划；
-- 按冻结计划合成一次性集成候选；
-- 监听合入；
-- 审计并保守回收。
-
-独立输出包括稳定的 worktree record、event journal、owner epoch 和 artifact identity。
-
-是否聚合验收由数量默认与定性判据共同决定，且数量默认在前：同一仓库、同一目标分支的并行交付单元
-≥3 时默认走聚合验收，此时"输入之间互不触碰"的人工评估视为不可信、不得据它豁免（数量默认正是对
-这类定性误判的兜底）；=2 时按交叉面判据走，碰撞扫描 `COLLIDE`、同文件或同生成物即聚合。跨仓或
-目标分支不同的输入不计入同批。
-
-集成候选只承载"这组输入合成后兼容"的验收结论，不作为 change request 载体：合入仍按可独立评审、
-合入和回退的交付单元分别进行。合入监听绑定的是"内容进目标分支"这一事实，与内容经哪个载体合入
-无关，因此在进入 `ready_for_review` 时默认武装，而不是依附于某个 change request 的创建动作；未显式
-指定 target 时优先使用该树登记的 managed base，而不是全局 Profile 默认值。watcher 只观察和记录，
-目标前进但冻结 HEAD 尚未合入时，用 `merge-tree` 只读预判刷新为 `clean / conflict / unknown`；该预判
-不是逐 commit rebase 成功保证，也不授予后台进程远端历史改写权。
-默认武装同时持久化独立的 `review_watch` intent：`auto/pending` 表示期望自动回收但前置条件或进程尚未
-就绪，`disabled` 只来自显式 `--no-watch`/`unwatch`。`auto_reclaim` 继续表示某一次带 token 的实际
-watcher 租约。这样启动失败不会和人工退出一起坍缩成字段缺失；`doctor` 能报告 pending/legacy 缺口，
-`resume-all` 能重试 pending，并对无法判断历史意图的 legacy record fail-closed。
-若 HEAD 前进，状态更新与旧 watcher 失效必须在同一条 event 内原子完成，并以 watcher token/state
-做 CAS；随后才能尝试重冻结。这样旧 SHA 不会在状态更新与撤防之间抢先把任务推进到不可逆终态，
-陈旧 controller 也不能覆盖并发 rearm 或已进入 `merge_detected` 的 watcher。
-
-后台子进程本身不是跨会话持久性边界：宿主可能在任务结束时清理 descendant，注销和重启也会终止进程。
-portable runtime 因此只把它称为进程级即时监听。macOS 可由用户显式安装按仓库生成的 LaunchAgent，
-周期性从 primary worktree 执行 `resume-all`；服务用固定 argv 直接调用 Node/runtime，不执行 shell、不
-保存会话环境或凭证，也不在 npm install 时隐式落常驻项。LaunchAgent 只恢复原有意图，不改变冻结 SHA、
-target、回收证明或任何 KEEP 门禁。其他平台在对应 service adapter 落地前只支持显式 `resume-all`。
-
-远端历史刷新由用户显式调用一次性 `refresh-review` 才能发生。命令复用 managed rebase 事务；默认在
-成功 rebase 后以冻结 upstream SHA 执行精确 `--force-with-lease` push，回读远端并重冻结、重新武装
-watcher。没有项目 wrapper 时，push 触发的服务端 CI 就是后续门禁，不得因此拒绝 portable core 执行；
-有 wrapper 时可用 `--pause-before-push` 在本地 rebase 后暂停，wrapper 通过后以 `--continue` 推送收口。
-冲突保留 recoverable marker，人工解冲突并 `git add` 后继续。显式 `--abort` 除了放弃未完成 rebase，
-也可在 `pause-before-push` 的本地 rebase 成功态恢复 `old_head`；后者必须确认 upstream 仍是冻结旧 SHA，
-以补偿 event 恢复原 base、ownership/change-request 边界并重武装原 watcher。已发生的 rebase lineage
-不可删除，另追加 rollback 审计；远端已推新 HEAD、被他人更新或分支已删除时拒绝自动回滚。
-
-堆叠交付的历史改写必须由 manager 事务拥有：先写 `history_operation` intent 并撤防旧 watcher，再
-执行 rebase；成功后原子更新 `base_ref/base_sha/stack_parent`、闭合旧 ownership epoch、新开
-`managed_rebase` epoch 并保存 old/new commit lineage。冲突或进程中断时 record 保持 pending，Artifact、
-评审登记、交接和提交命令 fail-closed；`rebase <selector> --continue` 从 intent 恢复，调用方若重复提供
-原参数则只做一致性校验，也可显式 `--abort` 恢复。`retarget`
-不改 Git 历史，仅当新 base 已是 live HEAD 祖先时更新验证/MR attribution。已有 MR 的 fallback 由
-一次 `touch --status ready_for_review --mr <url> --watch-target <ref>` 同时写入状态、结构化 URL 与 watcher；
-未显式 target 时使用 record 的 managed base 推断堆叠目标，portable core 不声称已修改远端 MR。
+四个 Skill 的独立触发条件、standalone 流程、最小命令面和 provider 缺失时的降级路径，真源是各自的
+Skill 外壳与对应的 `docs/<域>/`：[`orchestrate-subagents/SKILL.md`](../../orchestrate-subagents/SKILL.md)、
+[`manage-worktrees/SKILL.md`](../../manage-worktrees/SKILL.md)、
+[`verify-agent-output/SKILL.md`](../../verify-agent-output/SKILL.md)、
+[`run-agent-verify-loop/SKILL.md`](../../run-agent-verify-loop/SKILL.md)。它们是 agent 实际加载的那一份，
+本节只做导航，不另外抄写触发条件与流程；§5.3 另外保留一条 runtime 尚未实现、全仓也没有第二份的
+降级约定。
 
 ### 5.3 verify-agent-output
-
-独立触发场景：
-
-- “只 review 这个 commit，不要修改”；
-- “独立验收这份产物一次”；
-- “检查实现者是否满足合同，失败后停止”；
-- 需要标准 Evidence，但不需要自动修复。
-
-独立模式下，当前会话担任 controller：
-
-1. 冻结 Contract、Verification Profile 与 Artifact。
-2. 脚本运行 smoke L0。
-3. controller 使用宿主原生能力创建一个新上下文、只读 reviewer。
-4. 脚本校验 L1 输出。
-5. 脚本在同一 Artifact 上运行 final L0。
-6. 输出 Evidence Package。
-
-已填写的三份输入优先通过 `prepare-run` 一次完成 digest 规范化、readiness、preflight 与 init；源文件
-保持只读，任何前置失败都不得留下半初始化 run。reviewer 结构化结果可通过 `record-review --stdin`
-直接进入 runtime，避免人工中间文件；stdin 与文件输入互斥并受严格 JSON、大小和 TTY 门禁。状态变更
-CLI 默认输出 compact 摘要，完整 snapshot 通过 `--verbose` 或 `inspect` 获取。
 
 如果宿主不能提供新上下文，Skill 可以导出只读 review bundle，等待用户转交给第二会话。
 第二会话返回结果时记录 `isolation_assurance: user_relayed`。如果宿主不能派生、用户也不
 中继第二会话，运行以 `independent_context_unavailable` abort，不产生标准 Evidence。
 同一 implementer 上下文的 self-check 只能生成另一种 `self_check_report`，不得进入本 Skill
 的 independent Evidence 状态机。
-
-### 5.4 run-agent-verify-loop
-
-独立触发场景：
-
-- 用户明确要求“一个 Agent 实现、另一个持续验收，直到通过或触发停止条件”；
-- 高风险工作需要有界修复—证伪；
-- controller 在 freeze 前已有证据表明同一收敛对象很可能连续产生多轮新 Artifact，且修复范围与有界重试已获授权；
-- 需要 max iterations、failure fuse、恢复和人工门。
-
-它不应该因为没有 `verify-agent-output` 就完全不可用。独立模式使用内置 adapter：
-
-1. `loop-runtime` 冻结合同、维护 iteration、revision、锁和 fuse。
-2. implementer 由宿主原生 Agent 机制或双会话方式提供。
-3. L0 由 loop runtime 的受限命令执行器运行。
-4. L1 必须由宿主新上下文 reviewer 或用户中继的第二会话提供，脚本校验其结构。
-5. 结果记录为 `embedded_verification_record`，它只在当前 Loop 内有效，不是标准
-   Evidence Package。
-
-同时安装 `verify-agent-output` 时，Loop 切换为
-`provider: verify-agent-output`，直接消费标准 Evidence Package，避免 Loop 重复实现完整的一次性
-验证状态机，并获得标准 Artifact / Evidence 绑定保证。
-
-两种模式必须使用不同 record type 和 assurance 标记。embedded 模式不能输出、导出或冒充
-Evidence Package；如果无法获得独立 reviewer，同样停止而不是用 implementer 自审产生 pass。
-
-### 5.5 显式 Loop 模式的启动协议
-
-仅当命中第 5.4 节触发条件，或用户显式调用下列形式时，才执行本协议：
-
-~~~text
-/run-agent-verify-loop <目标>
-~~~
-
-这不是普通目标型任务的推荐入口；一次性验收继续直接使用 `verify-agent-output`。自然语言目标
-只是显式 Loop 请求，不是可执行合同。启动前置顺序固定为：
-
-1. controller 解析目标、scope、acceptance、权限、非目标和停止条件；
-2. 缺少可观察验收标准或边界时，controller 先补合同，不创建 Loop；
-3. controller / orchestrator 探测已安装 Skill 与宿主能力；
-4. controller 在 freeze 前选择 orchestration、isolation 和 verification provider；
-5. controller 冻结 Task Contract 与 Verification Profile；
-6. 创建 Loop State，开始 implement → artifact → verify → decide；
-7. 根据结果继续下一轮、等待 H gate，或熔断停止。
-
-普通调用只创建本轮的 Loop contract / ledger，不自动创建宿主持久 Goal。只有用户明确要求“设置
-Goal、持续追踪这个目标”时，controller 才创建外部 Goal，并把不透明的 `goal_ref` 绑定到 Loop。
-Loop completed 只是 Goal 的完成证据之一；外层 controller 仍需检查全局 completion 与 H gate，
-再决定是否把 Goal 标记完成。
-
-一次性 verification 已经 terminal 后才获得循环授权时，旧 Evidence 保持不可变；controller 新建
-Loop、冻结 limits，并从修复后的新 Artifact 开始正式 iteration，不在旧 run 上覆盖或补写 verdict。
-
-controller 的 provider 选择是按需的，Loop 只消费冻结结果：
-
-- 多节点派发或多个角色：使用 `orchestrate-subagents`；
-- 同仓多写入者或明确隔离：使用 `manage-worktrees`；
-- 需要标准一次性 Evidence：使用 `verify-agent-output`；
-- provider 不存在时，只能在 freeze 前选择文档定义的 standalone adapter；
-- freeze 后不得自动切换 provider。
 
 ## 6. 组合使用时如何联动
 
@@ -435,7 +259,7 @@ flowchart TD
     U["用户请求 / 目标"]
     C["当前 controller<br/>目标解释、路由与最终授权"]
     O["orchestrate-subagents<br/>多节点任务图与全局控制（按需）"]
-    R{"按第 6.1 节选择执行模式"}
+    R{"按组合协议表选择执行模式"}
     W["manage-worktrees<br/>隔离 provider（按需）"]
     V["verify-agent-output<br/>independent_once"]
     L["run-agent-verify-loop<br/>adversarial_loop（仅显式）"]
@@ -462,19 +286,9 @@ provider 选择。Loop 只执行已经显式选择并冻结的循环合同，不
 
 ### 6.1 联动不是全量加载
 
-controller 根据任务事实选择能力：
-
-| 场景 | 使用方式 |
-| --- | --- |
-| 单 Agent、小修改、确定性检查足够 | 不加载四 Skill |
-| 多 Agent 但只有一个写入者 | `orchestrate-subagents` |
-| 单 Agent 需要隔离 Git 工作区 | `manage-worktrees` |
-| 固定 commit 独立 review 一次 | `verify-agent-output` |
-| 明确要求反复修复，或 freeze 前已合理预期同一目标会经历多轮新 Artifact 且修复已获授权 | `run-agent-verify-loop` |
-| 多写入者 + 一次性验收 | orchestrator + worktrees + verifier |
-| 多写入者 + 有界修复循环 | 四者组合 |
-
-不能因为“仓库 dirty”“任务很多”或“可能并发”就默认加载全部 Skill。
+controller 按任务事实逐项启用能力的判据表，真源是
+[`orchestrate-subagents/SKILL.md`](../../orchestrate-subagents/SKILL.md) 的「组合协议」表——它是 controller
+实际加载的那一份。本节只做导航。
 
 ### 6.2 能力发现
 
@@ -542,20 +356,10 @@ Loop 的独立 L1 条件。
 
 ### 6.4 触发优先级
 
-目标 v1 的 frontmatter 与 forward tests 必须共同保证：
-
-- 固定 Artifact、单个只读 reviewer、只验一次：只触发 `verify-agent-output`；
-- reviewer 是多节点任务图的一部分，或需要并发、不同权限、多个 critic：触发
-  `orchestrate-subagents`；
-- 明确要求实现—验收反复收敛，或 freeze 前已合理预期同一目标会连续产生多轮新 Artifact 且有修复授权：触发 `run-agent-verify-loop`；
-- Loop 内的一次性验证是 provider 调用，不再次创建全局 orchestrator。
-
-固定 SHA 的一次性 terminal Evidence 不会自动升级成 Loop，也不能被后续修复覆盖；模式变化时保留旧
-Evidence，显式冻结新的 Loop state。多个彼此独立的收敛对象仍由 orchestrator 各自建节点/Loop，不能
-塞进一个 Loop。
-
-`orchestrate-subagents` 的 description 必须显式排除“单 Artifact、单 reviewer 的一次性验收”；
-`verify-agent-output` 的 description 必须显式排除多节点编排与自动修复。
+哪个请求该触发哪个 Skill，由四份 `SKILL.md` 的 frontmatter `description` 与
+[`orchestrate-subagents/SKILL.md`](../../orchestrate-subagents/SKILL.md) 的「组合协议」表定义；
+description 的字符预算由 [`tests/skill-context-budget.test.mjs`](../../tests/skill-context-budget.test.mjs)
+守住。本节只做导航。
 
 ## 7. 跨 Skill 数据契约
 
@@ -816,7 +620,7 @@ Evidence pass 只是节点验收输入，最终任务完成仍由 controller 判
 
 ~~~text
 用户目标
-→ controller 根据第 6.1 节明确选择 adversarial_loop
+→ controller 按组合协议表明确选择 adversarial_loop
 → 需要多节点时，orchestrator 完成 capability discovery、任务图与 provider 选择
 → controller 冻结公共合同和 Verification Profile
 → orchestrator 建任务图并派发 implementer
@@ -900,27 +704,12 @@ assurance:
 
 ### 12.5 仓库与发布载荷
 
-本仓库直接维护四个 Skill 目录及以下同版本内容：
-
-- `package.json` 与 `bin/`：提供零依赖 ESM 的 `agentkit` 命令映射，不生成编译产物；
-- `shell-manifest.json`：绑定包版本、CLI 入口、四个 Skill shell、兼容入口、domain 目标与只读命令边界；
-- `core/`、`domains/` 与 `schemas/`：共享原语、四个领域运行时与 canonical schema 真源；
-- `docs/orchestrate/`、`docs/worktree/`、`docs/verify/`、`docs/loop/`：由 `agentkit docs` 按需读取。SKILL.md
-  只能以 `agentkit docs <域> <主题>` 命令引用这些文档，不得写 `../docs/...` 相对链接：宿主把 Skill
-  基目录报成安装路径（可能是软链），Read 工具按词法折叠 `..`，跨目录链接在安装态必断，
-  `tools/validate-skills.mjs` 对此 fail closed；
-- `LICENSE`：MIT，随发布一起分发；
-- `tests/`：四个 Skill 的共享测试，使安装侧可以在自己的环境上复验安装矩阵与跨 Skill 契约；
-- `tools/validate-skills.mjs`：Skill 规范校验入口，供安装侧独立复跑。
-
-仓库中的 `tests/`、domain 测试文件和仓库级校验工具用于持续复验，不进入 npm tarball；npm 包只
-携带运行时、schema、按需文档、四个 Skill shell、兼容入口、manifest、LICENSE，以及由发布仓维护的
-双语 README。
-包清单必须显式排除 `*.test.mjs`，并在 `publishConfig` 固定 public npm registry 与公开访问级别。
-
-仓库级 CI、README 与生成的协作图由本仓库自行维护。任何外部聚合仓只能消费固定 commit、tag 或
-npm 版本，不得向本仓库回写生成结果。发布流程在提交前必须校验载荷清单与内容摘要，使 tag、npm
-tarball、架构文档与四个 `SKILL.md` 可以事后证明来自同一 commit。
+载荷清单的机器真源是 [`package.json`](../../package.json) 的 `files` 与 `publishConfig`，入口与目标路径
+的清单真源是 [`shell-manifest.json`](../../shell-manifest.json)；两者由
+[`tests/package-distribution.test.mjs`](../../tests/package-distribution.test.mjs) 与
+[`tests/runtime-bundle.test.mjs`](../../tests/runtime-bundle.test.mjs) 在真实 `npm pack` tarball 上反查。
+仓库边界、变更流程与发布顺序的真源是
+[`docs/maintenance/source-of-truth.md`](../maintenance/source-of-truth.md)。本节只做导航。
 
 ## 13. 测试策略
 
@@ -1157,38 +946,28 @@ v1 包含：
 v1 不包含自动聚类、自动改 Skill、自动 accepted、自动发布或跨用户学习。它只把高质量改进输入
 生产出来，为未来独立改进层提供可靠接口。
 
-## 17. 已确定的设计决策与待定 ADR
+## 17. ADR
 
-### 17.1 已确定
+编号保留原值。ADR-1 与 ADR-5 已由实现回答，写明结论与真源；其余四条仍未决。
 
-1. 四个 Skill 均可独立使用。
-2. `verify-agent-output` 是独立的一次性验证 Skill。
-3. `run-agent-verify-loop` 继续保留，服务明确要求循环收敛，或在 freeze 前已合理预期同一目标会连续产生多轮新 Artifact 且修复已获授权的任务。
-4. 仅在第 5.4 节循环触发条件成立或显式调用时，`/run-agent-verify-loop + 目标` 才按第 5.5 节先冻结
-   合同再启动循环；普通任务与一次性验收不经过 Loop，普通 Loop 也不自动创建外部 Goal。
-5. Loop 可以 standalone embedded 运行，也可以消费 verifier provider。
-6. Verification Profile 是独立冻结 envelope，并承接现有验证 extension。
-7. full verifier protocol 只有一个真源；Loop 只维护 embedded adapter。
-8. 多 Skill 通过 envelope 联动，不跨目录 import。
-9. 能机械表达的保证必须由脚本实现。
-10. v1 以 Git commit 作为 Artifact。
-11. one-shot pass 与 Loop completed 都不自动等于外部 Goal / 全局任务完成。
-12. 目标 v1 中 Loop 不拥有批队列；批量由 orchestrator 组合多个独立 Loop，但迁移必须与
-    orchestration ledger 同批落地。
-13. Skill 是可质疑的版本化协议；当前任务冻结版本和内容摘要。
-14. 四个执行 Skill 只生成 proposed 改进候选，不能任务内自改或自行 accepted。
-15. Reflection 保存证据化结论，不保存 chain-of-thought，也不改变 Artifact verdict。
-16. 自动学习与自进化不进入 v1。
+- **ADR-1（已定）**：三个 state root 的默认布局是
+  `<系统临时目录>/orchestration-ledger-state/ledgers/<ledger-id>`、
+  `<系统临时目录>/verify-agent-output-state/runs/<run-id>` 与
+  `<系统临时目录>/run-agent-verify-loop-state/loops/<loop-id>`，目录以 `0700` 创建，state root 落在
+  业务仓库内时必须显式 `--allow-repository-state`。真源是
+  [`domains/orchestrate/orchestration-ledger.mjs`](../../domains/orchestrate/orchestration-ledger.mjs)、
+  [`domains/verify/verification-runtime.mjs`](../../domains/verify/verification-runtime.mjs) 与
+  [`domains/loop/loop-runtime.mjs`](../../domains/loop/loop-runtime.mjs) 的 `init`。
+- **ADR-2**：日志大小上限和脱敏配置格式。
+- **ADR-3**：standalone verifier 如何获得 clean pinned workdir，同时不复制 worktree 生命周期能力。
+- **ADR-4**：不依赖 `manage-worktrees` 时 repository identity 的跨 clone 语义。
+- **ADR-5（已定）**：canonical JSON 与 envelope 摘要采用零依赖的本地实现，不锁定版本依赖；真源是
+  [`core/digest.mjs`](../../core/digest.mjs)，零依赖由
+  [`tests/package-distribution.test.mjs`](../../tests/package-distribution.test.mjs) 锁定。本地实现必须
+  实现 RFC 8785 本身，不得另立一套 canonical 语义：重复 key 拒绝与跨 Skill digest 兼容分别由
+  `domains/verify/verification-runtime.test.mjs` 和
+  [`tests/content-digest.test.mjs`](../../tests/content-digest.test.mjs) 守住，RFC 官方测试向量仍需进入
+  回归集。
+- **ADR-6**：Reflection / Proposal 的默认 state root、保留周期、跨项目去重键和用户导出授权。
 
-### 17.2 待定 ADR
-
-1. orchestration ledger 与 verification / loop state root 的默认目录布局。
-2. 日志大小上限和脱敏配置格式。
-3. standalone verifier 如何获得 clean pinned workdir，同时不复制 worktree 生命周期能力。
-4. 不依赖 `manage-worktrees` 时 repository identity 的跨 clone 语义。
-5. RFC 8785 的 Node 实现采用经测试的本地实现还是锁定版本依赖；无论选择哪种，都必须通过
-   RFC 测试向量、重复 key 拒绝和跨 Skill digest 兼容测试。“优先标准库”不等于允许自创另一套
-   canonical 语义。
-6. Reflection / Proposal 的默认 state root、保留周期、跨项目去重键和用户导出授权。
-
-这些 ADR 可以影响实现细节，但不能推翻“独立可用、组合增强、脚本保证机械不变量”的总体边界。
+未决 ADR 可以影响实现细节，但不能推翻“独立可用、组合增强、脚本保证机械不变量”的总体边界。
