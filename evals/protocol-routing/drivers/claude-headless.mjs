@@ -209,6 +209,9 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
           host_session_id: sessionId,
           skills: installation.content_digests,
           installed_skills: installation.skills,
+          // 安装器自己的回报（退出码 + JSON）：只留档。判「装没装上」看的是文件系统，
+          // 见 lib/skill-install.mjs 顶部那段「不看退出码」的理由。
+          skill_installer: installation.installer,
           setup: evalCase.setup,
           setup_notes: precondition.notes,
           setup_vars: precondition.vars,

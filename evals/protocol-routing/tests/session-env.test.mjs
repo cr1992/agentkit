@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { BYPASS_REFUSAL, createHeadlessClaudeDriver } from '../drivers/claude-headless.mjs';
-import { INHERITED_ENV_KEYS, buildSessionEnv } from '../lib/session-env.mjs';
+import { INHERITED_ENV_KEYS, INHERITED_ENV_PREFIXES, buildSessionEnv } from '../lib/session-env.mjs';
 import { main, parseArgs } from '../run.mjs';
 
 /** 一份「运行者环境」：正常项 + 一堆与评测无关的凭据。 */
@@ -24,6 +24,7 @@ const PARENT = {
   NODE_EXTRA_CA_CERTS: '/etc/ssl/corp.pem',
   HTTPS_PROXY: 'http://proxy.internal:3128',
   ANTHROPIC_API_KEY: 'sk-ant-fake-for-test',
+  CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat-fake-for-test',
   // 以下一个都不该出现在被测会话里
   GH_TOKEN: 'gh-secret',
   GITHUB_TOKEN: 'gh-secret-2',
@@ -62,7 +63,32 @@ test('白名单放行宿主跑起来必需的项与 Claude Code 自己的认证�
   assert.equal(env.TERM, 'xterm-256color');
   assert.equal(env.NODE_EXTRA_CA_CERTS, '/etc/ssl/corp.pem');
   assert.equal(env.HTTPS_PROXY, 'http://proxy.internal:3128');
+  // 两条认证路径同级：API key（CI）与 `claude setup-token` 生成的订阅 token（本机容器）。
+  // 少了任何一条，对应那条路的会话都起不来。
   assert.equal(env.ANTHROPIC_API_KEY, 'sk-ant-fake-for-test');
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, 'sk-ant-oat-fake-for-test');
+});
+
+test('白名单的键集合是完整常量：改动必须是显式的', () => {
+  assert.deepEqual([...INHERITED_ENV_KEYS], [
+    'PATH',
+    'TERM',
+    'TMPDIR', 'TMP', 'TEMP',
+    'LANG', 'LANGUAGE',
+    'NODE_EXTRA_CA_CERTS',
+    'NODE_OPTIONS',
+    'SSL_CERT_FILE', 'SSL_CERT_DIR',
+    'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY',
+    'http_proxy', 'https_proxy', 'no_proxy',
+    'ANTHROPIC_API_KEY',
+    'CLAUDE_CODE_OAUTH_TOKEN',
+    'ANTHROPIC_AUTH_TOKEN',
+    'ANTHROPIC_BASE_URL',
+  ]);
+  assert.deepEqual([...INHERITED_ENV_PREFIXES], ['LC_']);
+  // CLAUDE_CODE_* 只放行这一个键，不是整类前缀：别的 CLAUDE_CODE_* 会改变宿主行为。
+  assert.deepEqual(INHERITED_ENV_KEYS.filter((key) => key.startsWith('CLAUDE_CODE_')), ['CLAUDE_CODE_OAUTH_TOKEN']);
+  assert.ok(!INHERITED_ENV_PREFIXES.some((prefix) => 'CLAUDE_CODE_X'.startsWith(prefix)));
 });
 
 test('隔离用的覆盖项优先级最高，会盖掉父环境的同名变量', () => {

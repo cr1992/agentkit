@@ -20,6 +20,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { CASES, selectCases } from './cases.mjs';
 import { createHeadlessClaudeDriver, createReplayDriver } from './drivers/index.mjs';
+import { redactSecrets } from './lib/redact.mjs';
 import { buildReport, renderMarkdown } from './lib/report.mjs';
 
 /** 布尔开关：不吃下一个 token。 */
@@ -96,12 +97,15 @@ export async function main(argv) {
   if (!meta.model && firstSession?.meta?.model) meta.model = firstSession.meta.model;
   const report = { ...buildReport({ cases, runs, driver: meta, sessions }), session_failures: failures, selected_cases: cases.map((item) => item.id), total_cases: CASES.length };
 
-  writeFileSync(resolve(outDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
-  const markdown = renderMarkdown(report);
+  // 脱敏兜底：报告里不该出现 ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN 的取值。
+  // 主防线是「取值只经环境变量传递、command.json 只记键名」，这里只是最后一道字面替换，
+  // 防的是某段 stderr 或会话输出把取值带进了报告。见 lib/redact.mjs。
+  writeFileSync(resolve(outDir, 'report.json'), redactSecrets(`${JSON.stringify(report, null, 2)}\n`));
+  const markdown = redactSecrets(renderMarkdown(report));
   writeFileSync(resolve(outDir, 'report.md'), markdown);
   if (!options.quiet) process.stdout.write(markdown);
   if (failures.length) {
-    if (!options.quiet) process.stderr.write(`\n${failures.length} 个会话没有跑出记录：\n- ${failures.join('\n- ')}\n`);
+    if (!options.quiet) process.stderr.write(redactSecrets(`\n${failures.length} 个会话没有跑出记录：\n- ${failures.join('\n- ')}\n`));
     return 1;
   }
   return 0;

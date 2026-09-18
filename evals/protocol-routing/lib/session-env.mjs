@@ -8,7 +8,8 @@
 // 不会悄悄外泄一份凭据。
 //
 // 白名单只放两类：宿主 CLI 跑起来必需的（PATH、TLS、代理、locale、临时目录），
-// 以及 Claude Code 自己的认证项。第三方 provider（Bedrock / Vertex / Foundry）的
+// 以及 Claude Code 自己的认证项（API key 与订阅 token 同级，见下）。
+// 第三方 provider（Bedrock / Vertex / Foundry）的
 // AWS_* / GOOGLE_* / AZURE_* **不在**白名单里——要用那些 provider 跑评测，
 // 得显式往 `INHERITED_ENV_KEYS` 里加，并且清楚自己在把什么交出去。
 
@@ -26,10 +27,16 @@ export const INHERITED_ENV_KEYS = Object.freeze([
   // 代理：内网出口
   'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY',
   'http_proxy', 'https_proxy', 'no_proxy',
-  // Claude Code 认证。HOME 被重定向到会话目录，OAuth / keychain 那条路走不通，
-  // 实际可用的只有 API key 这条。ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL 是
-  // 自建网关的常见配法，`claude --help` 只点名了 ANTHROPIC_API_KEY，另两个见 README。
+  // Claude Code 认证。HOME 被重定向到会话目录，交互式 OAuth / keychain 那条路走不通，
+  // 能用的只有「由环境变量带进来」的两条，二者同级：
+  // - ANTHROPIC_API_KEY：控制台 API key，`claude --help` 点名了它（CI 走这条）；
+  // - CLAUDE_CODE_OAUTH_TOKEN：`claude setup-token` 生成的长期订阅 token，
+  //   需要 Claude 订阅（`claude setup-token --help`：Set up a long-lived
+  //   authentication token (requires Claude subscription)）。本机容器运行走这条。
+  // ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL 是自建网关的常见配法，
+  // **属于「拿不准但放进去了」**，见 README「已知盲区」。
   'ANTHROPIC_API_KEY',
+  'CLAUDE_CODE_OAUTH_TOKEN',
   'ANTHROPIC_AUTH_TOKEN',
   'ANTHROPIC_BASE_URL',
 ]);
