@@ -715,7 +715,7 @@ test('run-smoke 前置不满足时报 stale_precondition，而不是把 L0 跑�
   } finally { fixture.cleanup(); }
 });
 
-test('prepare 只出骨架与 TODO，不猜测试命令；填最小 L0 后可过 preflight', () => {
+test('prepare 只出骨架与 TODO，不猜测试命令；契约 TODO 与 L0 都填实后才过 preflight', () => {
   const fixture = makeFixture();
   try {
     const outDir = join(fixture.sandbox, 'prepared');
@@ -742,10 +742,24 @@ test('prepare 只出骨架与 TODO，不猜测试命令；填最小 L0 后可过
     const artifactPath = join(outDir, 'artifact.json');
     writeFileSync(artifactPath, JSON.stringify(artifact));
     assert.equal(main(['readiness', '--contract', prepared.contract_path, '--profile', prepared.profile_path, '--workdir', fixture.repo, '--state-root', fixture.stateRoot]).ready, true);
+    // 只填 L0、契约保留 TODO：preflight 只报契约层的三处 scaffold 占位。
+    const partial = main(['preflight', '--contract', prepared.contract_path, '--profile', prepared.profile_path, '--artifact', artifactPath]);
+    assert.equal(partial.valid, false);
+    assert.deepEqual(partial.errors.map((item) => item.split(' = ')[0]), ['objective', 'acceptance[0].requirement', 'scope.include[0]']);
+    assert.ok(partial.errors.every((item) => item.includes('scaffold 占位')));
+
+    // 按 prepare 的 TODO 清单填实契约，再重算摘要。
+    contract.objective = 'README 写明 fixture 的验收基线';
+    contract.scope.include = ['README.md'];
+    contract.acceptance[0].requirement = 'README.md 的内容与合同约定一致';
+    delete contract.contract_digest;
+    writeFileSync(prepared.contract_path, JSON.stringify(contract));
+    const filled = main(['digest', '--kind', 'contract', '--input', prepared.contract_path]);
+    writeFileSync(prepared.contract_path, JSON.stringify(filled));
     const report = main(['preflight', '--contract', prepared.contract_path, '--profile', prepared.profile_path, '--artifact', artifactPath]);
     assert.deepEqual(report.errors, []);
     assert.equal(report.valid, true);
-    assert.equal(report.contract_digest, contract.contract_digest);
+    assert.equal(report.contract_digest, filled.contract_digest);
 
     const inline = main(['prepare', '--workdir', fixture.repo]);
     assert.equal(inline.contract.skill_set[0].content_digest, skillContentDigest());

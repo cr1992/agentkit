@@ -8,6 +8,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isHelpRequest, renderCliHelp } from '../../core/cli-help.mjs';
 import { createDigestKit } from '../../core/digest.mjs';
+import { contractSubstance, formatSubstanceErrors } from '../../core/contract-substance.mjs';
 
 export class ContractError extends Error {}
 
@@ -47,7 +48,9 @@ class Parser {
 }
 
 export function parseJsonStrict(text) { return new Parser(text).parse(); }
-export function validateContract(contract, { requireDigest = true } = {}) {
+// substance 只由创建入口打开（contract validate、ledger init）。add-node、doctor、投影等
+// 在已冻结契约上的操作保持形状校验，升级前冻结的 ledger 才能继续运行。
+export function validateContract(contract, { requireDigest = true, substance = false } = {}) {
   const required = ['schema_version', 'contract_id', 'objective', 'scope', 'acceptance', 'permissions', 'environment', 'skill_set', 'stop_conditions', 'extensions'];
   if (contract?.schema_version !== 1) throw new ContractError('Task Contract schema_version 必须为 1');
   for (const field of required) if (!Object.hasOwn(contract, field)) throw new ContractError(`Task Contract 缺少 ${field}`);
@@ -87,6 +90,10 @@ export function validateContract(contract, { requireDigest = true } = {}) {
   const common = new Set(required.concat('contract_digest'));
   for (const key of Object.keys(contract.extensions)) if (common.has(key)) throw new ContractError(`extension 覆盖公共字段: ${key}`);
   if (requireDigest && (!/^sha256:[0-9a-f]{64}$/u.test(String(contract.contract_digest ?? '')) || envelopeDigest(contract) !== contract.contract_digest)) throw new ContractError('contract_digest 无效');
+  if (substance) {
+    const { errors } = contractSubstance(contract);
+    if (errors.length) throw new ContractError(formatSubstanceErrors(errors));
+  }
   return contract;
 }
 
@@ -146,7 +153,7 @@ export function main(argv = process.argv.slice(2)) {
   if (isHelpRequest(argv)) return { help: renderCliHelp('contract-tool.mjs', CLI_SPEC, CLI_NOTES) };
   const { command, options } = parseCli(argv);
   if (command === 'normalize') return normalizeContract(read(options.input));
-  if (command === 'validate') { const value = validateContract(read(options.input)); return { valid: true, contract_id: value.contract_id, contract_digest: value.contract_digest }; }
+  if (command === 'validate') { const value = validateContract(read(options.input), { substance: true }); return { valid: true, contract_id: value.contract_id, contract_digest: value.contract_digest }; }
   if (command === 'digest') return { contract_digest: envelopeDigest(read(options.input)) };
   if (command === 'review-view') { const value = validateContract(read(options.input)); return { schema_version: 1, contract_id: value.contract_id, objective: value.objective, scope: value.scope, acceptance: value.acceptance, contract_permissions: value.permissions, reviewer_permissions: { mode: 'read_only', writable_paths: [] }, environment: value.environment, contract_digest: value.contract_digest }; }
   if (command === 'diff') return contractDiff(read(options.left), read(options.right));
