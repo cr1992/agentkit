@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- 升级影响：本批改动多数触及 `core/`、`schemas/`、各域 `domains/<域>/` 或 `docs/<域>/`，升级后
+  所有升级前 init 的在途 ledger、loop、verify run 都会判定为 `skill_drift`，需要先收尾在途任务
+  再升级。升级后 drift 的 ledger 可用 `agentkit orchestrate ledger close --abandon --reason <text>`
+  记为放弃；drift 但未放弃、未进入终态的 ledger 指针会一直保留，等待 `close --abandon` 或
+  re-contract。升级前 init 的 ledger 没有仓级指针，`agentkit status` 找不到它们，仍需手传
+  `--ledger <ledger 目录>`。
 - 新增 `agentkit contract interview-ask / interview-answer / interview-freeze`：一台由实质性判据的
   拒绝清单驱动提问、由自己的三条完成判据决定何时冻结的状态机。命令本身不调用任何模型，只出题、
   校验回填、冻结；选项由调用它的模型填，选哪个由用户定。提问顺序固定为
@@ -19,6 +25,37 @@
 - 新增 `agentkit contract scaffold` 别名。契约骨架下沉到 `core/contract-scaffold.mjs`，
   与 `agentkit verify scaffold --kind contract` 同源，两边只在 `skill_set` 上分叉
   （各自冻结自己域的 content digest）。
+- 契约、profile 的创建入口（`contract validate`、`ledger init`、`verify preflight / init / prepare-run`、
+  `loop init`）新增实质性检查，原样照抄 `verify scaffold` 生成的占位契约或 profile 一律拒绝，
+  报错给出字段路径与当前值但不给可以照抄的合规值；`prepare-run` 遇到该拒绝时紧凑输出也会带上
+  `errors`。续跑与恢复入口（`ledger add-node`、`verify record-review` / `validate`、
+  `loop adopt-root` / `record-embedded-review` / `validate`）不重判实质性，行为不变。
+  同一批判据里，每条 `acceptance[].contract_item_id` 必须至少被一条 `l1_review` 引用，不分权限
+  模式，只在同时拿到契约与 profile 的创建入口执行；`permissions.mode` 为 `write` 且
+  `scope.exclude` / `stop_conditions` 为空只降级为 warning，不拒绝、退出码不变。`warnings` 键仅
+  非空时出现：见 `contract validate`、`ledger init`、`verify init`、`loop init` 的返回值，以及
+  `preflight` 报告（该键恒在，可能是空数组）；`prepare-run` 把它放进完整报告的
+  `preflight.warnings`，默认紧凑输出不带，取证需加 `--verbose`。`ledger / verify / loop doctor`
+  新增 `substance_warnings`：恒在，把手上能执行的判据整体降级为 warning，不进 `findings`，
+  不改变 `healthy`。
+- 声明 `extensions.verification.provider === 'verify-agent-output'` 时，`completion_ready` 要求每个
+  required 的实现节点（`verification.requirement !== 'not_applicable'`）要么自身是已通过的
+  `independent_evidence` 节点，要么沿 `dependency` / `barrier` 边可达一个已通过、
+  `artifact_scope: integration_candidate` 的 `independent_evidence` 节点；不满足则拒绝视为完成。
+  没有任何 required 节点的空 ledger，`completion_ready` 恒为 false。`status` / `inspect` 的
+  `summary` 新增三份名单：`uncovered_implementation_nodes`（声明 provider 但未被覆盖的实现节点）、
+  `non_required_implementation_nodes`、`nodes_without_independent_evidence`（未声明 provider 时，
+  列出尚未经独立验证的实现节点）。
+- `orchestrate ledger close` 要求 `status` 判定的 `completion_ready` 为 true，不满足时非零退出，
+  逐条列出未满足的条件（同一份文本同时出现在 `status.summary.unmet_completion_conditions`）；
+  `close --abandon --reason <text>` 记为放弃，`reason` 必填且非空，不带 `--abandon` 的 `--reason`
+  会被拒绝。事件链新增终态事件 `closed` / `abandoned`，快照新增可选字段 `lifecycle`
+  （终态种类、时间、reason、写入时的 runtime 摘要与 drift 状态），旧快照不含该字段仍然合法。
+  `close` 返回体新增 `pointer` 字段（仓级指针的写入/删除结果）。ledger 进入终态后任务图冻结，
+  `add-node / add-edge / dispatch-record / update / attach / batch-init / batch-record / close`
+  等修改命令一律拒绝，只读命令与 `record-reflection / propose-improvement / rebuild` 仍可用；
+  `status` / `inspect` 新增输出键 `skill_drift`，drift 下 `close --abandon` 是唯一仍能写入的路径，
+  其余修改命令照常拒绝。
 - ledger 状态发现。`orchestrate ledger init` 在 `contract.environment.repository` 所属仓库的
   git common dir 下写仓级指针 `<git-common-dir>/agentkit/ledgers/<ledger_id>.json`（第 18 份
   canonical schema `ledger-pointer-v1`），`close`（含 `--abandon`）成功后删除它。**指针不是真源**：
@@ -28,15 +65,42 @@
   筛出未终态的 ledger，单屏给出当前阶段、活跃 worktree、阻塞项、未覆盖节点与下一步命令。多个时
   全部列出不猜测；受管 worktree 里用 record 的 `ledger` 字段收窄；`skill_drift` 的单独成组，
   下一步只给 `close --abandon` 与 re-contract。
-- `orchestrate ledger doctor` 新增 `--repository <path>` 档位，扫描并分类该仓的全部指针；
-  回收是显式的 `orchestrate ledger reclaim-pointers --repository <path>`，不藏在只读的 `doctor` 里。
+- `orchestrate ledger doctor` 新增 `--repository <path>` 档位（返回体新增 `mode: "repository"`，
+  单 ledger 档位为 `mode: "ledger"`），扫描并分类该仓的全部指针；回收是显式的
+  `orchestrate ledger reclaim-pointers --repository <path>`，不藏在只读的 `doctor` 里。
   **drift 但未进入终态的 ledger 指针一律保留**：它还需要有人来 `close --abandon` 或 re-contract。
 - `worktree spawn` 新增可选 `--ledger <id>`，写进 record 的 `ledger` 字段供 `agentkit status` 收窄；
   worktree 域只校验 id 格式，格式规则下沉到 `core/ledger-pointer.mjs`，两个域之间不互相 import。
-- 升级影响：`core/ledger-pointer.mjs` 与第 18 份 schema 都在三个域的内容摘要范围内，本次发版后
-  所有在途的 ledger、loop、verify run 都会 `skill_drift`，请先收尾在途任务。升级前 init 的 ledger
-  没有指针，`agentkit status` 找不到它们，仍需手传 `--ledger <ledger 目录>`。
-||||||| 262405d
+- 编排拦截点（缺 `verification_ref`、`verification_ref` 类型不符、`completion_ready` 为 false 时
+  `close`、drift 下执行修改命令）的报错文案改写为"违规原因 + 合规做法"：点出字段路径或节点 id、
+  当前值、要求的性质与可执行的命令/flag 名，取值一律用占位符，不给可以照抄的合规值；不新增拦截点，
+  不改变任何命令的放行/拒绝行为、`error` 码或退出码。
+- `verify-agent-output` 的证伪任务提示词新增一条：已成立的 finding 涉及结构调整时，`expected`
+  必须写出具名重构手法且只针对该 finding 的 `contract_item_id`，给不出具名手法的结构评价不写入
+  findings；不扩大取证范围，不新增 schema 字段。
+- 架构文档 `docs/architecture/skill-system-architecture.md` 只保留与真源不重复的内容，其余段落
+  改写为指向 `domains/<域>/`、`docs/<域>/`、四份 `SKILL.md`、`schemas/`、`core/digest.mjs` 等真源的
+  指针（累计从 114,315 字节精简到 49,877 字节）；`tests/architecture-consistency.test.mjs` 的判据
+  从"固定字符串存在"改为"指针能实际解析且覆盖当前 `domains/*` 与 `docs/<域>/` 目录"。四份
+  `SKILL.md` 补齐指向 `agentkit status`、`orchestrate ledger close`、`contract interview-*`、
+  `worktree spawn --ledger` 的指针；`tests/documentation.test.mjs` 新增孤儿文档检查，
+  `docs/<域>/` 下每个主题必须被至少一个 `SKILL.md` 以 `agentkit docs <域> <主题>` 的形式指到。
+- 四个 Skill 的正文字符预算按当前实测值重新标定并去掉总量卡口里不再起约束作用的重复上限；
+  `description` 合计上限改为按 Skill 数量推导。删除 `approximate_tokens`
+  （原按英文字符数估算 token，在中英混排文本上系统性偏差较大）。`tests/skill-budgets.mjs`
+  作为预算数字的共享真源，供架构文档反查比对。
+- 新增手动触发的发版流水线（`.github/workflows/release.yml`）：`verify`（限定从 `main` 发布、
+  版本号须与 `package.json` 一致、该版本不得已在 registry 上、`npm test` 与 tarball 干净安装验证，
+  Node 22/24 双版本矩阵）→ `publish`（`npm publish --provenance`）→ `attest`（从 registry 反装并跑
+  `agentkit doctor` 确认版本一致，同样跑 Node 22/24 双版本矩阵）→ `tag-and-release`（同一 commit
+  对同一 semver 打 tag、建 GitHub Release，正文从本文件对应小节程序化提取，缺小节即失败）。
+  `verify` 与 `attest` 两段的发布证据（`npm pack --dry-run` 文件清单、`agentkit doctor` 输出，
+  均带上 commit SHA 与版本号）按矩阵各存为一份 GitHub Actions 产物。需要仓库 secret `NPM_TOKEN`。
+- 新增 `evals/protocol-routing/`：协议路由评测 harness 与 11 条用例，用于衡量 agent 在给定提示下
+  是否按预期路由到只读、`agentkit <域> <动词>` 或写操作。支持预录 JSONL 回放（接入 `npm test`）与
+  两种真实评测运行方式——GitHub Actions + `ANTHROPIC_API_KEY`，或本机一次性容器
+  （`evals/protocol-routing/container/`）+ `claude setup-token` 生成的订阅 token；容器以只读挂载
+  仓库、非 root 用户、`--cap-drop ALL` 等收紧运行。均不进发布包，不在任何 Skill 内容摘要范围内。
 
 ## 1.1.1 - 2026-09-08
 
