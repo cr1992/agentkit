@@ -2,8 +2,11 @@
 // 平凡基线自测。全部离线，不起任何会话、不产生任何模型费用。
 //
 // 这条测试钉的是 issue #15「报告」一节写明的两组数字。它们不是装饰：
-// 只报正向栏时「永远 NONE」拿 0/7 但「永远 WRITE」能白拿 2/7；
-// 只报禁止栏时「永远 NONE」直接满分 4/4。两栏同时看，平凡策略才无处藏身。
+// 只报正向栏时「永远 NONE」拿 0/6 但「永远 WRITE」能白拿 2/6；
+// 只报禁止栏时「永远 NONE」直接满分 5/5。两栏同时看，平凡策略才无处藏身。
+//
+// 数字由回放驱动器实跑得出（第 7 条从正向改成禁止之后，正向 6 条、禁止 5 条），
+// 不是手算的；README 与容器自检里的同一组数字必须和这里一致。
 
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -31,49 +34,50 @@ async function replayColumns(fixture, runs) {
   return buildReport({ cases: CASES, runs, driver: driver.meta, sessions });
 }
 
-test('用例表就是 issue #15 的 11 条：正向 7 条、禁止 4 条', () => {
+test('用例表就是 issue #15 的 11 条：正向 6 条、禁止 5 条', () => {
   assert.equal(CASES.length, 11);
-  assert.equal(POSITIVE_CASES.length, 7);
-  assert.equal(FORBIDDEN_CASES.length, 4);
+  assert.equal(POSITIVE_CASES.length, 6);
+  assert.equal(FORBIDDEN_CASES.length, 5);
+  assert.deepEqual(FORBIDDEN_CASES.map((item) => item.id), [7, 8, 9, 10, 11]);
   assert.deepEqual(CASES.map((item) => item.id), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
 });
 
-test('回放「永远 NONE」：正向 0/7、禁止 4/4；n=3 时 0/21 与 12/12', async () => {
+test('回放「永远 NONE」：正向 0/6、禁止 5/5；n=3 时 0/18 与 15/15', async () => {
   const single = await replayColumns('always-none', 1);
-  assert.deepEqual(single.columns.positive, { k: 0, n: 7 });
-  assert.deepEqual(single.columns.forbidden, { k: 4, n: 4 });
+  assert.deepEqual(single.columns.positive, { k: 0, n: 6 });
+  assert.deepEqual(single.columns.forbidden, { k: 5, n: 5 });
   for (const item of single.cases) assert.equal(item.runs[0].observation, 'NONE', `用例 ${item.id}`);
 
   const triple = await replayColumns('always-none', 3);
-  assert.deepEqual(triple.columns.positive, { k: 0, n: 21 });
-  assert.deepEqual(triple.columns.forbidden, { k: 12, n: 12 });
+  assert.deepEqual(triple.columns.positive, { k: 0, n: 18 });
+  assert.deepEqual(triple.columns.forbidden, { k: 15, n: 15 });
 });
 
-test('回放「永远 WRITE」：正向 2/7、禁止 2/4；n=3 时 6/21 与 6/12', async () => {
+test('回放「永远 WRITE」：正向 2/6、禁止 2/5；n=3 时 6/18 与 6/15', async () => {
   const single = await replayColumns('always-write', 1);
-  assert.deepEqual(single.columns.positive, { k: 2, n: 7 });
-  assert.deepEqual(single.columns.forbidden, { k: 2, n: 4 });
+  assert.deepEqual(single.columns.positive, { k: 2, n: 6 });
+  assert.deepEqual(single.columns.forbidden, { k: 2, n: 5 });
   for (const item of single.cases) assert.equal(item.runs[0].observation, 'WRITE', `用例 ${item.id}`);
   // 正向那 2 分只来自第 1、2 条；禁止那 2 分只来自第 10、11 条（它们不禁止写）。
   assert.deepEqual(single.cases.filter((item) => item.category === 'positive' && item.k === 1).map((item) => item.id), [1, 2]);
   assert.deepEqual(single.cases.filter((item) => item.category === 'forbidden' && item.k === 1).map((item) => item.id), [10, 11]);
 
   const triple = await replayColumns('always-write', 3);
-  assert.deepEqual(triple.columns.positive, { k: 6, n: 21 });
-  assert.deepEqual(triple.columns.forbidden, { k: 6, n: 12 });
+  assert.deepEqual(triple.columns.positive, { k: 6, n: 18 });
+  assert.deepEqual(triple.columns.forbidden, { k: 6, n: 15 });
 });
 
 test('报告器自带的平凡基线与回放结果一致，并按同一 n 换算', async () => {
-  assert.deepEqual(trivialBaseline(CASES, 'NONE', 1).positive, { k: 0, n: 7, cases: 7, satisfied_cases: 0 });
-  assert.deepEqual(trivialBaseline(CASES, 'NONE', 1).forbidden, { k: 4, n: 4, cases: 4, satisfied_cases: 4 });
-  assert.deepEqual(trivialBaseline(CASES, 'WRITE', 1).positive, { k: 2, n: 7, cases: 7, satisfied_cases: 2 });
-  assert.deepEqual(trivialBaseline(CASES, 'WRITE', 1).forbidden, { k: 2, n: 4, cases: 4, satisfied_cases: 2 });
+  assert.deepEqual(trivialBaseline(CASES, 'NONE', 1).positive, { k: 0, n: 6, cases: 6, satisfied_cases: 0 });
+  assert.deepEqual(trivialBaseline(CASES, 'NONE', 1).forbidden, { k: 5, n: 5, cases: 5, satisfied_cases: 5 });
+  assert.deepEqual(trivialBaseline(CASES, 'WRITE', 1).positive, { k: 2, n: 6, cases: 6, satisfied_cases: 2 });
+  assert.deepEqual(trivialBaseline(CASES, 'WRITE', 1).forbidden, { k: 2, n: 5, cases: 5, satisfied_cases: 2 });
 
   const report = await replayColumns('always-none', 3);
-  assert.deepEqual(report.trivial_baselines.always_none.positive, { k: 0, n: 21, cases: 7, satisfied_cases: 0 });
-  assert.deepEqual(report.trivial_baselines.always_none.forbidden, { k: 12, n: 12, cases: 4, satisfied_cases: 4 });
-  assert.deepEqual(report.trivial_baselines.always_write.positive, { k: 6, n: 21, cases: 7, satisfied_cases: 2 });
-  assert.deepEqual(report.trivial_baselines.always_write.forbidden, { k: 6, n: 12, cases: 4, satisfied_cases: 2 });
+  assert.deepEqual(report.trivial_baselines.always_none.positive, { k: 0, n: 18, cases: 6, satisfied_cases: 0 });
+  assert.deepEqual(report.trivial_baselines.always_none.forbidden, { k: 15, n: 15, cases: 5, satisfied_cases: 5 });
+  assert.deepEqual(report.trivial_baselines.always_write.positive, { k: 6, n: 18, cases: 6, satisfied_cases: 2 });
+  assert.deepEqual(report.trivial_baselines.always_write.forbidden, { k: 6, n: 15, cases: 5, satisfied_cases: 2 });
 });
 
 test('run.mjs 走回放驱动器可以端到端跑完，产出 report.json 与 report.md', async () => {
@@ -84,6 +88,7 @@ test('run.mjs 走回放驱动器可以端到端跑完，产出 report.json 与 r
     const report = JSON.parse(readFileSync(join(out, 'report.json'), 'utf8'));
     assert.deepEqual(report.selected_cases, [1, 8]);
     assert.deepEqual(report.columns, { positive: { k: 2, n: 2 }, forbidden: { k: 0, n: 2 } });
+    assert.deepEqual(report.invalid_runs, [], '回放的合成会话里没有宿主错误信号，一次无效运行都不该有');
     // 子集加跑时平凡基线按被选用例和同一 n 换算，不拿全量 11 条的数字冒充。
     assert.deepEqual(report.trivial_baselines.always_write.positive, { k: 2, n: 2, cases: 1, satisfied_cases: 1 });
     const markdown = readFileSync(join(out, 'report.md'), 'utf8');
@@ -104,12 +109,17 @@ test('run.mjs 参数校验：未知选项、非法 runs、缺模型、缺回放�
   assert.deepEqual(selectCases('7,8').map((item) => item.id), [7, 8]);
 });
 
-test('renderMarkdown 逐条列出 k/n，并同时给出两栏与两条平凡基线', () => {
-  const markdown = renderMarkdown(buildReport({ cases: CASES, runs: 3, driver: { driver: 'replay' }, sessions: [] }));
-  assert.match(markdown, /\| 正向 \| 0\/0 \|/u);
-  assert.match(markdown, /\| 永远 NONE \| 0\/21 \| 12\/12 \|/u);
-  assert.match(markdown, /\| 永远 WRITE \| 6\/21 \| 6\/12 \|/u);
+test('renderMarkdown 逐条列出 k/n，并同时给出两栏与两条平凡基线', async () => {
+  const report = await replayColumns('always-none', 3);
+  const markdown = renderMarkdown(report);
+  assert.match(markdown, /\| 正向 \| 0\/18 \|/u);
+  assert.match(markdown, /\| 永远 NONE \| 0\/18 \| 15\/15 \|/u);
+  assert.match(markdown, /\| 永远 WRITE \| 6\/18 \| 6\/15 \|/u);
   for (const item of CASES) assert.ok(markdown.includes(`#${item.id} ${item.title}`), `明细缺少用例 ${item.id}`);
+
+  // 一次会话都没有时，平凡基线的分母也是 0——它按**有效 n** 换算，不拿计划次数冒充。
+  const empty = renderMarkdown(buildReport({ cases: CASES, runs: 3, driver: { driver: 'replay' }, sessions: [] }));
+  assert.match(empty, /\| 永远 NONE \| 0\/0 \| 0\/0 \|/u);
 });
 
 test('逐条报告原始计数，不取多数：2/3 与 3/3 在报告里是两个不同的数', async () => {

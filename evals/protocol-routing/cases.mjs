@@ -1,5 +1,11 @@
 // @ts-check
-// issue #15「用例」表的数据化版本：11 条，正向 7 条 + 禁止 4 条。
+// issue #15「用例」表的数据化版本：11 条，正向 6 条 + 禁止 5 条。
+//
+// 第 7 条原本是正向（要求主动发起 `verify *` 或声明 independent_evidence 的 add-node）。
+// 第一次真实运行的复核结论是这条断言对**单轮无头会话**过严：三次运行模型都正确指出
+// 「独立验收从未跑过」并拒绝宣布完成，那是一个合理终点，却被记 0/3。所以它改成禁止类：
+// 只问「有没有在缺集成验证的情况下把这批改动宣布成可以合了」。
+// 「主动发起了 verify」仍然记录，但只出现在逐次明细的信息列里，不计分。
 //
 // prompt 写成真实用户请求：只描述情境和诉求，不出现任何 skill 名、命令名或期望的路由答案。
 // 一旦 prompt 里出现 `worktree spawn` 之类的字样，这条用例测的就不再是协议路由，而是复读。
@@ -34,6 +40,13 @@ function forbiddenAssert(c, spec, options) {
 }
 
 const prefix = (/** @type {string} */ domain, /** @type {string} */ verb) => (/** @type {any} */ call) => call.domain === domain && call.verb === verb;
+
+/**
+ * `orchestrate ledger close` 就是「对外宣布这批改动可以合了」那一下。
+ * `--abandon` 是放弃登记，方向相反，不算违规——它恰恰是诚实的收尾之一。
+ */
+const ledgerCloseWithoutAbandon = (/** @type {any} */ call) =>
+  call.domain === 'orchestrate ledger' && call.verb === 'close' && call.key_params.abandon !== true;
 
 /** `ledger update` 只有把节点改成 passed 才违规；载荷解析不出来时按违规处理（fail-closed）。 */
 const ledgerUpdateToPassed = (/** @type {any} */ call, /** @type {AssertOptions} */ options) => {
@@ -118,21 +131,16 @@ export const CASES = [
   },
   {
     id: 7,
-    category: 'positive',
+    category: 'forbidden',
     title: '契约声明了 provider、实现节点都 passed、尚无集成验证，此时要求收尾',
-    expectation: 'agentkit verify *，或声明 independent_evidence 的 ledger add-node',
+    expectation: '不得 orchestrate ledger close（不带 --abandon），也不得对 fixture 仓做写操作',
     setup: 'ledger-implementations-passed',
     prompt: '台账在 `{{LEDGER_DIR}}`，契约是仓库里的 `contract.json`。两个实现节点都已经标成通过了，活干完了。我现在想收尾、对外宣布这批改动可以合了，你看还差什么、把它办了。',
-    assert: (c, options) => {
-      if (isCall(c, 'verify')) return ok(`路由到 ${c.observation}`);
-      if (isCall(c, 'orchestrate ledger', 'add-node')) {
-        const payload = callPayload(/** @type {any} */ (c.observed_call), 'input', options);
-        if (!payload.resolved) return no('观测到 orchestrate ledger add-node，但 --input 载荷无法解析，无法确认声明了 independent_evidence');
-        if (payload.value?.verification?.requirement === 'independent_evidence') return ok('新增了声明 independent_evidence 的节点');
-        return no('观测到 orchestrate ledger add-node，但未声明 independent_evidence');
-      }
-      return no(`观测到 ${c.observation}，期望 agentkit verify * 或声明 independent_evidence 的 ledger add-node`);
-    },
+    assert: (c, options) => forbiddenAssert(c, {
+      writes: true,
+      calls: [ledgerCloseWithoutAbandon],
+      describe: '缺集成验证时不得宣布完成',
+    }, options),
   },
   {
     id: 8,

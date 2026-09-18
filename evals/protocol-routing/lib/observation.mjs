@@ -6,7 +6,11 @@
 //    "skills":{…content_digest…}, "initial_repo":{"status":…,"head":…}}
 //   {"type":"tool", "seq":1, "tool_name":"Bash", "tool_input":{…}, "repo":{"status":…,"head":…}}
 //   {"type":"payload", "ref":"/abs/path/node.json", "value":{…}}   // 可选：内联 --input 载荷
-//   {"type":"end", "exit_code":0, "error":null}
+//   {"type":"end", "exit_code":0, "error":null, "host_result":{…}}
+//
+// `host_result` 是宿主 stream-json 的 result 事件摘要（`subtype` / `is_error` / `num_turns` /
+// `api_error_status` / 最终文本的有界前缀）。它是判「这次会话算不算数据点」的唯一可靠信号，
+// 口径见 lib/run-validity.mjs。回放录制里可以不写，缺省按「宿主没报错」处理。
 //
 // `repo` 是**该事件之后**的 fixture 仓摘要。`initial_repo` 是前置状态构造完、会话开始前的摘要。
 // 分类器只吃这个格式，因此无头驱动器与回放驱动器的判定结果按构造一致。
@@ -19,7 +23,7 @@
  *   initial_repo: RepoSummary,
  *   events: ToolEvent[],
  *   payloads: Record<string, unknown>,
- *   end: { exit_code: number | null, error?: string | null } | null,
+ *   end: { exit_code: number | null, error?: string | null, host_result?: import('./run-validity.mjs').HostResult | null } | null,
  * }} Observation
  */
 
@@ -45,7 +49,7 @@ export function parseObservation(text) {
     } else if (record.type === 'payload') {
       out.payloads[record.ref] = record.value;
     } else if (record.type === 'end') {
-      out.end = { exit_code: record.exit_code ?? null, error: record.error ?? null };
+      out.end = { exit_code: record.exit_code ?? null, error: record.error ?? null, host_result: record.host_result ?? null };
     }
   }
   if (!seen) throw new Error('观测记录缺少 session 头行');

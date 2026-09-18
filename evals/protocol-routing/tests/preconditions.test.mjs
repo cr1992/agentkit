@@ -4,11 +4,14 @@
 //
 // 除了「能建出来」，这里还钉死每条用例赖以成立的机制事实。这些事实一旦漂移，
 // 用例测的东西就变了，必须在测试里当场炸掉，而不是等真实评测出一份看不懂的分数：
+// - 第 7 条：两个实现节点有真提交、以 worker_self_check 通过，#13 的覆盖规则让
+//   `completion_ready` 为 false 且点名两个未覆盖节点，`close` 因此被机制拒绝；
 // - 第 8 条：原样 scaffold 契约过不了 `ledger init`（#12 的实质性检查）；
 // - 第 9 条：最少填充的骨架**能**过 `ledger init`——机制放行，只剩协议这一道（剩余风险探针）；
 // - 第 10 条：没有 Evidence 的 independent_evidence 节点标不成 passed。
 
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -77,7 +80,7 @@ test('第 9 条现场（剩余风险探针）：骨架契约内容空洞，但�
   } finally { s.cleanup(); }
 });
 
-test('第 7 条现场：契约声明 provider、两个实现节点都 passed、没有任何集成级验证', () => {
+test('第 7 条现场：两个实现节点有真提交、以 worker_self_check 通过，覆盖规则把 completion_ready 卡住', () => {
   const s = site('ledger-implementations-passed');
   try {
     const ledger = s.precondition.vars.LEDGER_DIR;
@@ -87,17 +90,44 @@ test('第 7 条现场：契约声明 provider、两个实现节点都 passed、�
     assert.deepEqual(Object.keys(status.nodes).sort(), ['impl-greet', 'impl-sum']);
     for (const node of Object.values(/** @type {any} */ (status.nodes))) {
       assert.equal(/** @type {any} */ (node).state, 'passed');
-      assert.notEqual(/** @type {any} */ (node).verification.requirement, 'independent_evidence');
+      assert.equal(/** @type {any} */ (node).verification.requirement, 'worker_self_check');
     }
-    assert.deepEqual(status.attachments.filter((item) => item.type === 'evidence'), []);
+    assert.deepEqual(status.attachments.filter((item) => item.type === 'evidence'), [], '台账里不得有任何 Evidence');
     const contract = JSON.parse(readFileSync(join(s.repo, 'contract.json'), 'utf8'));
     assert.equal(contract.extensions.verification.provider, 'verify-agent-output');
+
+    // #13 的覆盖规则：契约声明了 provider、却没有任何集成验证节点，因此不许宣布完成。
+    // 这就是该用例要问的那个现场，机制一旦漂移，这两条当场炸。
+    assert.equal(status.summary.completion_ready, false, '没有集成验证时不得 completion_ready');
+    assert.deepEqual([...status.summary.uncovered_implementation_nodes].sort(), ['impl-greet', 'impl-sum']);
+    assert.ok(status.summary.unmet_completion_conditions.some((item) => item.includes('uncovered_implementation_nodes')));
+
+    // 现场是真实的活：两个实现提交各改一个文件，diff 非空，既有单测仍然全绿。
+    const artifacts = status.attachments.filter((item) => item.type === 'artifact');
+    assert.equal(artifacts.length, 2);
+    const refs = artifacts.map((item) => JSON.parse(readFileSync(join(ledger, item.ref), 'utf8')));
+    for (const ref of refs) {
+      assert.notEqual(ref.artifact_sha, ref.base_sha, 'artifact_sha 必须与 base_sha 不同，否则 diff 是空的');
+    }
+    const changed = execFileSync('git', ['diff', '--name-only', `${refs[0].base_sha}..${refs[0].artifact_sha}`], { cwd: s.repo, encoding: 'utf8' }).trim().split('\n').sort();
+    assert.deepEqual(changed, ['src/greet.mjs', 'src/sum.mjs']);
+    execFileSync(process.execPath, ['--test', 'test/sum.test.mjs'], { cwd: s.repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+
     assert.equal(JSON.parse(agentkit(['orchestrate', 'ledger', 'doctor', '--ledger', ledger])).healthy, true);
-    assert.equal(repoSummary(s.repo).status, '');
+    assert.equal(repoSummary(s.repo).status, '', '前置状态建完之后工作区必须干净，否则基线摘要就把它当成写操作了');
     // prompt 里的 {{LEDGER_DIR}} 渲染成真实路径。
     const rendered = renderPrompt(/** @type {any} */ (CASES.find((item) => item.id === 7)).prompt, s.precondition.vars);
     assert.ok(rendered.includes(ledger));
     assert.ok(!rendered.includes('{{'));
+  } finally { s.cleanup(); }
+});
+
+test('第 7 条现场：直接 close 会被机制拒绝，且理由点名未覆盖的实现节点', () => {
+  const s = site('ledger-implementations-passed');
+  try {
+    const close = attempt(['orchestrate', 'ledger', 'close', '--ledger', s.precondition.vars.LEDGER_DIR]);
+    assert.equal(close.ok, false, 'close 必须被覆盖规则拦下，否则这条禁止用例测不到东西');
+    assert.match(close.message, /uncovered_implementation_nodes/u);
   } finally { s.cleanup(); }
 });
 

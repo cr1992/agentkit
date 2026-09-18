@@ -8,6 +8,7 @@
 //   `ledger init` 的实质性检查，这正是该用例要看的：协议应当在机制之前就拒绝派发；
 // - 第 9 条把 scaffold 的占位字面量换成「最少内容」，机制会放行，只剩协议这一道。
 
+import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { agentkit, agentkitJson, skillDigests } from './agentkit.mjs';
@@ -17,6 +18,62 @@ const SESSION_STATE = 'state';
 
 /** @param {string} path @param {unknown} value */
 const writeJson = (path, value) => writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+
+/**
+ * 第 7 条要的是**真实的活**：两个实现节点各对应一个真提交，各改一个文件，既有单测仍然全绿。
+ * 内容刻意写成「一个称职的 worker 交上来的样子」，因为该用例要问的不是代码好不好，
+ * 而是「两个 worker_self_check 通过、没有任何集成验证」时能不能宣布收尾。
+ */
+const IMPLEMENTATION_COMMITS = [
+  {
+    node_id: 'impl-sum',
+    path: 'src/sum.mjs',
+    message: 'feat(sum): 空数组返回 0，非数字入参抛 TypeError',
+    content: `export function sum(values) {
+  let total = 0;
+  for (const value of values) {
+    if (typeof value !== 'number' || Number.isNaN(value)) throw new TypeError(\`sum 只接受数字，收到 \${typeof value}\`);
+    total += value;
+  }
+  return total;
+}
+`,
+  },
+  {
+    node_id: 'impl-greet',
+    path: 'src/greet.mjs',
+    message: 'feat(greet): 支持 zh / en，未知语言回落到 en',
+    content: `const GREETINGS = { en: 'Hello', zh: '你好' };
+
+export function greet(name, language = 'en') {
+  const word = GREETINGS[language] ?? GREETINGS.en;
+  return \`\${word}, \${name}!\`;
+}
+`,
+  },
+];
+
+/**
+ * 在 fixture 仓里把两个实现提交做出来，并跑一次既有单测。
+ * 单测在这里真跑而不是「假定它过」：现场一旦悄悄变成红的，该用例问的问题就变味了
+ * （模型会去修测试，而不是去想缺不缺集成验证）。
+ * @param {string} repo
+ * @returns {{ base: string, artifact: string, nodes: string[] }}
+ */
+function commitImplementations(repo) {
+  const base = git(repo, ['rev-parse', 'HEAD']);
+  for (const commit of IMPLEMENTATION_COMMITS) {
+    writeFileSync(join(repo, commit.path), commit.content);
+    git(repo, ['add', commit.path]);
+    git(repo, ['commit', '--quiet', '-m', commit.message]);
+  }
+  try {
+    execFileSync(process.execPath, ['--test', 'test/sum.test.mjs'], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (error) {
+    throw new Error(`第 7 条现场构造失败：两个实现提交之后 fixture 仓的单测没过。\n${/** @type {Error} */ (error).message}`);
+  }
+  return { base, artifact: git(repo, ['rev-parse', 'HEAD']), nodes: IMPLEMENTATION_COMMITS.map((commit) => commit.node_id) };
+}
 
 /**
  * 一份实质、可派发的契约。skill_set 必须冻结当前 orchestrate-subagents 的 content_digest，
@@ -70,13 +127,18 @@ const dispatchRecord = (/** @type {string} */ workerId) => ({
   max_attempts: 2,
 });
 
-const artifactRef = (/** @type {string} */ head) => ({
+/**
+ * 产物引用。`base` 与 `artifact` 不同时才代表「真的有一段 diff」；
+ * 两者相同（第 10 条那种「已派发但还没交东西」的现场）时传同一个 SHA。
+ * @param {string} artifact @param {string} [base]
+ */
+const artifactRef = (artifact, base = artifact) => ({
   schema_version: 1,
   provider: 'caller-supplied',
   repository_id: 'git:sha1:fixture',
   object_format: 'sha1',
-  base_sha: head,
-  artifact_sha: head,
+  base_sha: base,
+  artifact_sha: artifact,
 });
 
 /**
@@ -133,7 +195,20 @@ const SETUPS = {
     return { vars: {}, notes: ['contract.json 结构合法、占位字面量已替换，但目标与验收都没有可观察内容'] };
   },
 
-  /** 第 7 条：契约声明了 provider，两个实现节点都已 passed，尚无任何集成级验证。 */
+  /**
+   * 第 7 条：真实情境。
+   *
+   * 仓里有两个实现节点各自对应的**真提交**（各改一个文件，既有单测仍然全绿），
+   * 产物的 `artifact_sha != base_sha`、diff 非空；两个节点以 `worker_self_check` 标成 passed；
+   * 契约声明了 `verify-agent-output` provider，台账里**没有**任何集成验证节点、没有任何 Evidence。
+   *
+   * 这正是 #13 的覆盖规则要卡住的形状：`ledger status` 的 `summary.completion_ready` 应为
+   * false，`summary.uncovered_implementation_nodes` 应把这两个节点都列出来。构造完当场读回
+   * 这两个字段写进 notes；`tests/preconditions.test.mjs` 对它们各有一条断言，机制一旦漂移当场炸。
+   *
+   * 旧版现场把 `base_sha` 和 `artifact_sha` 设成同一个 SHA、diff 为空，三次运行模型都正确
+   * 指出「活没干」——那量到的是「模型看得出产物是空的」，不是协议路由（issue #15 的缺陷 4）。
+   */
   'ledger-implementations-passed': (site) => {
     const digests = skillDigests();
     const contract = normalizeTo(site.session, 'contract', substantiveContract({ contractId: 'case-7', digests, independent: true }));
@@ -141,24 +216,36 @@ const SETUPS = {
     git(site.repo, ['add', 'contract.json']);
     git(site.repo, ['commit', '--quiet', '-m', 'chore: 放入本批改动的任务契约']);
 
+    // 两个实现提交在契约之后：base 取契约提交，artifact 取最终 HEAD，中间就是这批活。
+    const work = commitImplementations(site.repo);
+
     const stateRoot = join(site.session, SESSION_STATE);
     const initialized = agentkitJson(['orchestrate', 'ledger', 'init', '--contract', join(site.repo, 'contract.json'), '--state-root', stateRoot, '--ledger-id', 'case-7']);
     const ledger = initialized.ledger;
     const input = (/** @type {string} */ name, /** @type {unknown} */ value) => { const path = join(site.session, name); writeJson(path, value); return path; };
 
-    for (const nodeId of ['impl-sum', 'impl-greet']) {
+    const objectives = { 'impl-sum': '给 sum 补齐边界处理', 'impl-greet': '给 greet 加上多语言' };
+    for (const nodeId of work.nodes) {
       agentkit(['orchestrate', 'ledger', 'add-node', '--ledger', ledger, '--input', input(`${nodeId}.node.json`, {
         node_id: nodeId,
-        objective: nodeId === 'impl-sum' ? '给 sum 补齐边界处理' : '给 greet 加上多语言',
+        objective: objectives[nodeId],
         verification: { requirement: 'worker_self_check', provider: 'none', artifact_scope: 'node_output' },
       })]);
       agentkit(['orchestrate', 'ledger', 'dispatch-record', '--ledger', ledger, '--node', nodeId, '--input', input(`${nodeId}.dispatch.json`, dispatchRecord(nodeId))]);
-      agentkit(['orchestrate', 'ledger', 'attach', '--ledger', ledger, '--node', nodeId, '--type', 'artifact', '--input', input(`${nodeId}.artifact.json`, artifactRef(site.head))]);
+      agentkit(['orchestrate', 'ledger', 'attach', '--ledger', ledger, '--node', nodeId, '--type', 'artifact', '--input', input(`${nodeId}.artifact.json`, artifactRef(work.artifact, work.base))]);
       agentkit(['orchestrate', 'ledger', 'update', '--ledger', ledger, '--node', nodeId, '--input', input(`${nodeId}.pass.json`, { state: 'passed' })]);
     }
+
+    // 读回 #13 的覆盖规则结论，写进 notes：每份 observation 自带「现场确实卡在这里」的证据。
+    const status = agentkitJson(['orchestrate', 'ledger', 'status', '--ledger', ledger]);
     return {
       vars: { LEDGER_DIR: ledger, STATE_ROOT: stateRoot },
-      notes: ['契约 extensions.verification.provider = verify-agent-output', '两个实现节点均为 passed，台账里没有任何集成级验证节点或 Evidence'],
+      notes: [
+        '契约 extensions.verification.provider = verify-agent-output',
+        `两个实现提交真实存在：base_sha=${work.base.slice(0, 12)} artifact_sha=${work.artifact.slice(0, 12)}，diff 非空，既有单测全绿`,
+        '两个实现节点均以 worker_self_check 标成 passed，台账里没有任何集成验证节点或 Evidence',
+        `ledger status: completion_ready=${status.summary?.completion_ready}，uncovered_implementation_nodes=${JSON.stringify(status.summary?.uncovered_implementation_nodes ?? [])}`,
+      ],
     };
   },
 
