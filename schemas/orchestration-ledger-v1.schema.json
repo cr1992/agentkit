@@ -1,6 +1,23 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://agent-skills.local/schemas/orchestration-ledger-v1.schema.json", "title": "Orchestration Ledger v1", "type": "object", "required": ["schema_version", "runtime_version", "ledger_id", "revision", "contract_digest", "nodes", "edges", "attachments", "batches", "reflection_refs", "improvement_proposal_refs", "skill_provenance", "created_at", "updated_at"], "properties": { "schema_version": { "const": 1 }, "runtime_version": { "type": "string" }, "ledger_id": { "type": "string" }, "revision": { "type": "integer" }, "contract_digest": { "type": "string" }, "nodes": { "type": "object", "additionalProperties": { "$ref": "#/$defs/node" } }, "edges": { "type": "array" }, "attachments": { "type": "array", "items": { "$ref": "#/$defs/attachment" } }, "batches": { "type": "object" }, "reflection_refs": { "type": "array" }, "improvement_proposal_refs": { "type": "array" }, "skill_provenance": { "type": "object" }, "created_at": { "type": "string" }, "updated_at": { "type": "string" } }, "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://agent-skills.local/schemas/orchestration-ledger-v1.schema.json", "title": "Orchestration Ledger v1", "type": "object", "required": ["schema_version", "runtime_version", "ledger_id", "revision", "contract_digest", "nodes", "edges", "attachments", "batches", "reflection_refs", "improvement_proposal_refs", "skill_provenance", "created_at", "updated_at"], "properties": { "schema_version": { "const": 1 }, "runtime_version": { "type": "string" }, "ledger_id": { "type": "string" }, "revision": { "type": "integer" }, "contract_digest": { "type": "string" }, "nodes": { "type": "object", "additionalProperties": { "$ref": "#/$defs/node" } }, "edges": { "type": "array" }, "attachments": { "type": "array", "items": { "$ref": "#/$defs/attachment" } }, "batches": { "type": "object" }, "reflection_refs": { "type": "array" }, "improvement_proposal_refs": { "type": "array" }, "skill_provenance": { "type": "object" }, "created_at": { "type": "string" }, "updated_at": { "type": "string" }, "lifecycle": { "$ref": "#/$defs/lifecycle" } }, "additionalProperties": false,
   "$defs": {
+    "lifecycle": {
+      "description": "v1.2 新增的可选终态。缺省表示 ledger 仍然活跃；v1.1 及更早的快照没有这个字段，仍然合法。终态之后任务图冻结，只剩 record-reflection / propose-improvement / rebuild / doctor / status / inspect / batch-status。",
+      "type": "object",
+      "required": ["state", "closed_at", "reason", "closed_by_content_digest", "skill_drift_at_close"],
+      "properties": {
+        "state": { "enum": ["closed", "abandoned"] },
+        "closed_at": { "type": "string" },
+        "reason": { "description": "abandoned 必填非空；closed 固定为 null。", "type": ["string", "null"] },
+        "closed_by_content_digest": { "description": "写入终态事件时的 runtime 内容摘要；skill_drift_at_close 为 true 时它与 skill_provenance.content_digest 不同，标明这条终态由 drift 的 runtime 写入。", "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "skill_drift_at_close": { "type": "boolean" }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        { "if": { "properties": { "state": { "const": "abandoned" } }, "required": ["state"] }, "then": { "properties": { "reason": { "type": "string", "minLength": 1 } } } },
+        { "if": { "properties": { "state": { "const": "closed" } }, "required": ["state"] }, "then": { "properties": { "reason": { "type": "null" } } } }
+      ]
+    },
     "attachment": {
       "type": "object",
       "required": ["attachment_id", "node_id", "type", "digest", "ref"],
