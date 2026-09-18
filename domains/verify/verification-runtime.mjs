@@ -32,6 +32,10 @@ import { collectJsonSchemaErrors, validateJsonSchema } from '../../core/json-sch
 import { atomicWriteJson, atomicWriteText, writeNewJson } from '../../core/atomic-fs.mjs';
 import { createDigestKit } from '../../core/digest.mjs';
 import { distributionDigest, skillDistributionRoots } from '../../core/content-digest.mjs';
+import {
+  SCAFFOLD_ARGV, SCAFFOLD_CHECK_ID, SCAFFOLD_OBJECTIVE, SCAFFOLD_REQUIREMENT, SCAFFOLD_SCOPE_ITEM,
+  contractSubstance, profileSubstance,
+} from '../../core/contract-substance.mjs';
 
 export const RUNTIME_VERSION = '1.3.0';
 export const PROTOCOL_VERSION = 1;
@@ -845,9 +849,9 @@ function scaffoldContract(workdir) {
   return addDigest({
     schema_version: 1,
     contract_id: randomUUID(),
-    objective: 'TODO: describe the frozen artifact objective',
-    scope: { include: ['TODO'], exclude: [] },
-    acceptance: [{ contract_item_id: 'acceptance-1', requirement: 'TODO: replace with an observable requirement' }],
+    objective: SCAFFOLD_OBJECTIVE,
+    scope: { include: [SCAFFOLD_SCOPE_ITEM], exclude: [] },
+    acceptance: [{ contract_item_id: 'acceptance-1', requirement: SCAFFOLD_REQUIREMENT }],
     permissions: { mode: 'read_only', writable_paths: [] },
     environment: { repository: resolve(workdir), isolation: 'caller_supplied' },
     skill_set: [{ name: 'verify-agent-output', version: RUNTIME_VERSION, content_digest: skillContentDigest(), provider_mode: 'primary' }],
@@ -860,7 +864,7 @@ function scaffoldProfile() {
   return addDigest({
     schema_version: 1,
     profile_id: randomUUID(),
-    l0_checks: [{ check_id: 'replace-with-real-check', argv: ['node', '--version'], cwd_rel: '.', stage: 'both', timeout_ms: 30_000, expected_exit_codes: [0] }],
+    l0_checks: [{ check_id: SCAFFOLD_CHECK_ID, argv: [...SCAFFOLD_ARGV], cwd_rel: '.', stage: 'both', timeout_ms: 30_000, expected_exit_codes: [0] }],
     l1_review: [{ contract_item_id: 'acceptance-1', lenses: ['functional', 'scope', 'verification_definition', 'safety'] }],
     protected_verifier_paths: [],
     allowed_validation_changes: [],
@@ -974,9 +978,11 @@ function digestEnvelope(options) {
 /** @param {Record<string,any>|null} contract @param {Record<string,any>|null} profile @param {Record<string,any>|null} artifact @param {Set<string>} flags */
 function inspectValues(contract, profile, artifact, flags) {
   const issues = [];
-  if (contract) issues.push(...collectContractIssues(contract));
+  // inspectValues 只服务创建入口（preflight、init、prepare-run），所以实质性检查放在这里；
+  // record-review、validate 等续跑入口直接调 validateContract，只做形状校验。
+  if (contract) issues.push(...collectContractIssues(contract), ...contractSubstance(contract).errors);
   const acceptanceIds = new Set(Array.isArray(contract?.acceptance) ? contract.acceptance.map((item) => item?.contract_item_id).filter(Boolean) : []);
-  if (profile) issues.push(...collectProfileIssues(profile, acceptanceIds));
+  if (profile) issues.push(...collectProfileIssues(profile, acceptanceIds), ...profileSubstance(profile).errors);
   if (artifact) issues.push(...collectArtifactIssues(artifact));
   if (contract) {
     try { validateSkillBinding(contract, skillContentDigest()); }
@@ -1599,6 +1605,8 @@ function compactRunResult(result) {
     evidence_digest: result?.terminal?.evidence_digest ?? result?.evidence_digest ?? null,
     ...(result?.run_dir ? { run_dir: result.run_dir } : {}),
     ...(result?.prepared !== undefined ? { prepared: result.prepared } : {}),
+    // prepare-run 是 happy path 的入口。不带 preflight 原因的话，调用方只看得到 invalid_input，不知道该改哪个字段。
+    ...(result?.prepared === false && result?.preflight?.errors?.length ? { errors: result.preflight.errors } : {}),
     ...(result?.terminal && result.terminal.outcome !== 'pass' ? {
       next_mode_hint: '本次单 Artifact 验收已终止并保留 Evidence；若已授权修复且预期多轮，请用 run-agent-verify-loop 创建新 Artifact/run。',
     } : {}),

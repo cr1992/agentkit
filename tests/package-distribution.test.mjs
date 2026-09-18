@@ -55,6 +55,7 @@ test('npm pack 内容清单只含运行时与四个 Skill，不含内部计划�
       'core/digest.mjs',
       'core/content-digest.mjs',
       'core/runtime-bundle.mjs',
+      'core/contract-substance.mjs',
       'orchestrate-subagents/SKILL.md',
       'orchestrate-subagents/scripts/orchestration-ledger.mjs',
       'domains/orchestrate/orchestration-ledger.mjs',

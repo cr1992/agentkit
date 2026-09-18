@@ -7,7 +7,9 @@
 
 `prepare` 生成 Contract/Profile 骨架、逐项 TODO 和后续命令，不猜测试命令、不内置项目 preset。
 `l0_checks` 必须由 controller 按项目实际填写。`scaffold` 支持 `contract | profile | artifact | review |
-bundle`；骨架结构和摘要合法，但 TODO acceptance 与示例 L0 必须替换。
+bundle`；骨架结构和摘要合法，但 TODO acceptance 与示例 L0 必须替换。创建入口（`preflight`、`init`、
+`prepare-run`，以及 `contract validate`、`ledger init`、`loop init`）会拒绝原样保留的 scaffold 占位，
+报错逐条给出字段路径与当前值；续跑与恢复入口不重判，已冻结的 run 不受影响。
 
 `artifact/bundle` 要求 `--workdir` 与 `--base-sha`，默认冻结当前 HEAD。`review` 从 `review-input` 原样
 取得 Contract/Profile digest、Artifact 与 challenge nonce。`digest` 支持 `contract | profile | review`，

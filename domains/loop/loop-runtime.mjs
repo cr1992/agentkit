@@ -28,6 +28,7 @@ import { validateJsonSchema } from '../../core/json-schema-lite.mjs';
 import { atomicWriteJson, atomicWriteText, writeNewJson } from '../../core/atomic-fs.mjs';
 import { createDigestKit } from '../../core/digest.mjs';
 import { distributionDigest, skillDistributionRoots } from '../../core/content-digest.mjs';
+import { contractSubstance, formatSubstanceErrors, profileSubstance } from '../../core/contract-substance.mjs';
 
 export const RUNTIME_VERSION = '1.0.0';
 const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'run-agent-verify-loop');
@@ -715,6 +716,9 @@ function initialize(options, flags) {
   const profile = readJson(required(options, 'profile'));
   const ids = validateContract(contract);
   validateProfile(profile, ids);
+  // 实质性只在 init 这个冻结点判定；adopt-root、record-embedded-review、validate 等续跑入口不重判。
+  const substance = [...contractSubstance(contract).errors, ...profileSubstance(profile).errors];
+  if (substance.length) throw new LoopValidationError(formatSubstanceErrors(substance));
   const contentDigest = skillContentDigest();
   validateSkillBinding(contract, contentDigest);
   const provider = required(options, 'provider');

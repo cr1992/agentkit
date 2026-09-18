@@ -107,7 +107,7 @@ function req(options, name) { if (!options[name]) throw new LedgerError(`缺少 
 function revision(options) { if (options['expected-revision'] === undefined) return null; const value = Number(options['expected-revision']); if (!Number.isInteger(value) || value < 0) throw new LedgerError('expected-revision 无效'); return value; }
 
 function init(options, flags) {
-  const contract = validateContract(readJson(req(options, 'contract')));
+  const contract = validateContract(readJson(req(options, 'contract')), { substance: true });
   const binding = contract.skill_set.find((item) => item.name === 'orchestrate-subagents');
   if (!binding || binding.content_digest !== skillContentDigest()) throw new LedgerError('Task Contract 未冻结当前 orchestrate-subagents content digest');
   const root = resolve(options['state-root'] ?? join(tmpdir(), 'orchestration-ledger-state')); const repository = contract.environment.repository;
