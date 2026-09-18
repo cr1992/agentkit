@@ -241,7 +241,8 @@ Skill 外壳与对应的 `docs/<域>/`：[`orchestrate-subagents/SKILL.md`](../.
 [`manage-worktrees/SKILL.md`](../../manage-worktrees/SKILL.md)、
 [`verify-agent-output/SKILL.md`](../../verify-agent-output/SKILL.md)、
 [`run-agent-verify-loop/SKILL.md`](../../run-agent-verify-loop/SKILL.md)。它们是 agent 实际加载的那一份，
-本节只做导航，不另外抄写触发条件与流程。
+本节只做导航，不另外抄写触发条件与流程；§5.3 另外保留一条 runtime 尚未实现、全仓也没有第二份的
+降级约定。
 
 ### 5.3 verify-agent-output
 
