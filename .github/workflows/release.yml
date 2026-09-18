@@ -1,0 +1,223 @@
+# 发布流水线。顺序严格遵循 AGENTS.md 的「发布」约定与
+# docs/maintenance/source-of-truth.md 的第 4-6 步：
+#   门禁 → npm 发布 → 从 registry 反装验证 → 才推 tag 和建 Release。
+# 因此触发方式是手动 workflow_dispatch，而不是 tag push——tag push 会把顺序倒过来，
+# 先产生 tag 再发布，一旦发布失败就留下一个指向未发布版本的 tag。
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '要发布的版本，须与 package.json 完全一致（例如 1.1.2）'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: 门禁 Node.js ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: 只允许从 main 发布
+        run: |
+          test "${GITHUB_REF}" = "refs/heads/main" || {
+            echo "::error::只能从 main 发布，当前 ${GITHUB_REF}"; exit 1; }
+
+      # 用户输入的版本号一律经 env 传入脚本，不直接插值进 shell。
+      - name: 输入版本与 package.json 一致
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          pkg="$(node -p "require('./package.json').version")"
+          test "$VERSION" = "$pkg" || {
+            echo "::error::输入 $VERSION 与 package.json $pkg 不一致"; exit 1; }
+
+      - name: 该版本尚未发布
+        run: |
+          pkg="$(node -p "require('./package.json').version")"
+          name="$(node -p "require('./package.json').name")"
+          if npm view "$name@$pkg" version >/dev/null 2>&1; then
+            echo "::error::$name@$pkg 已在 registry 上，拒绝重复发布"; exit 1
+          fi
+
+      - run: npm test
+
+      # 保存 npm pack --dry-run 的文件清单作为发布证据，带上 commit SHA 与版本号，
+      # 便于事后核对某次发布确实打包了哪些文件。
+      - name: npm pack --dry-run 并保存文件清单
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -e
+          {
+            echo "commit: $GITHUB_SHA"
+            echo "version: $VERSION"
+            echo "node: ${{ matrix.node }}"
+            echo "---"
+          } > "pack-dry-run-node${{ matrix.node }}.txt"
+          npm pack --dry-run >> "pack-dry-run-node${{ matrix.node }}.txt" 2>&1
+          cat "pack-dry-run-node${{ matrix.node }}.txt"
+
+      # AGENTS.md：发布前「从生成的 tarball 做一次干净安装验证」；doctor 输出同样存档为发布证据。
+      # 先把 doctor 的输出与退出码分别捕获、写完证据文件后再判定成败，
+      # 不用 `doctor | tee file` 这种写法——那样管道会把 doctor 自身的失败退出码吞掉。
+      - name: 从 tarball 干净安装并保存 doctor 证据
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -e
+          tgz="$(npm pack --pack-destination "$RUNNER_TEMP" | tail -1)"
+          npm i -g --prefix "$RUNNER_TEMP/prefix" "$RUNNER_TEMP/$tgz"
+          set +e
+          doctor_output="$("$RUNNER_TEMP/prefix/bin/agentkit" doctor)"
+          status=$?
+          set -e
+          {
+            echo "commit: $GITHUB_SHA"
+            echo "version: $VERSION"
+            echo "node: ${{ matrix.node }}"
+            echo "---"
+            echo "$doctor_output"
+          } > "verify-doctor-node${{ matrix.node }}.txt"
+          cat "verify-doctor-node${{ matrix.node }}.txt"
+          test "$status" -eq 0
+
+      - name: 上传门禁发布证据
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-evidence-verify-node${{ matrix.node }}
+          path: |
+            pack-dry-run-node${{ matrix.node }}.txt
+            verify-doctor-node${{ matrix.node }}.txt
+
+  publish:
+    name: 发布到 npm
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write        # provenance 证明需要
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - run: npm publish --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  attest:
+    name: 从 registry 反装验证 Node.js ${{ matrix.node }}
+    needs: publish
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+      # AGENTS.md：「发布物必须能从 registry 反装并通过 agentkit doctor」，Node 22/24 双版本矩阵反装；
+      # registry 有传播延迟，反装前先等该精确版本可见。
+      - name: 等待版本可见并反装
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -e
+          for i in $(seq 1 30); do
+            npm view "@cr1992/agentkit@$VERSION" version >/dev/null 2>&1 && break
+            echo "等待 registry 可见 ($i/30)"; sleep 10
+          done
+          npm i -g "@cr1992/agentkit@$VERSION"
+
+      # 反装后的 doctor 输出存档为发布证据，同时核对反装到的版本号。
+      # 同上：先分别捕获输出与退出码、写完证据文件，再判定成败，避免吞掉失败。
+      - name: 反装自检并保存 doctor 证据
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set +e
+          doctor_output="$(agentkit doctor)"
+          status=$?
+          set -e
+          {
+            echo "commit: $GITHUB_SHA"
+            echo "version: $VERSION"
+            echo "node: ${{ matrix.node }}"
+            echo "---"
+            echo "$doctor_output"
+          } > "attest-doctor-node${{ matrix.node }}.txt"
+          cat "attest-doctor-node${{ matrix.node }}.txt"
+          test "$status" -eq 0
+          test "$(echo "$doctor_output" | head -1 | awk '{print $2}')" = "$VERSION"
+
+      - name: 上传反装发布证据
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-evidence-attest-node${{ matrix.node }}
+          path: attest-doctor-node${{ matrix.node }}.txt
+
+  tag-and-release:
+    name: 打 tag 并建 Release
+    needs: attest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # Release 正文从 CHANGELOG 对应小节程序化提取，避免手抄漂移。
+      - name: 提取 CHANGELOG 小节
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const v = process.argv[1];
+            const text = fs.readFileSync("CHANGELOG.md", "utf8");
+            const start = text.indexOf(`## ${v} - `);
+            if (start < 0) { console.error(`CHANGELOG 缺少 ## ${v} 小节`); process.exit(1); }
+            const rest = text.slice(start);
+            const nextIndex = rest.indexOf("\n## ", 1);
+            const section = (nextIndex < 0 ? rest : rest.slice(0, nextIndex)).trim();
+            fs.writeFileSync(
+              "release-notes.md",
+              `${section}\n\n安装或升级：\n\n\`\`\`bash\nnpm install -g @cr1992/agentkit@${v}\n\`\`\`\n`,
+            );
+          ' "$VERSION"
+
+      - name: 推 tag 并创建 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -e
+          git tag -a "v$VERSION" -m "agentkit v$VERSION"
+          git push origin "v$VERSION"
+          gh release create "v$VERSION" \
+            --title "agentkit v$VERSION" \
+            --notes-file release-notes.md
