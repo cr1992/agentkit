@@ -600,3 +600,135 @@ test("Token and duration input validation rejects strings, negatives, invalid to
     assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad8.json", { state: "passed", tokens: { input_tokens: 100 } })]), /必须且只能包含/);
   } finally { f.cleanup(); }
 });
+
+// 造一个已 passed 的实现节点（默认 worker_self_check 档），overrides 用于传 required 之类的节点字段。
+function passImplementationNode(f, nodeId, overrides = {}) {
+  main(['add-node', '--ledger', f.ledger_dir, '--input', f.input(`${nodeId}.json`, node({ node_id: nodeId, objective: `实现 ${nodeId}`, ...overrides }))]);
+  main(['attach', '--ledger', f.ledger_dir, '--node', nodeId, '--type', 'artifact', '--input', f.input(`${nodeId}-artifact.json`, artifactRef())]);
+  main(['update', '--ledger', f.ledger_dir, '--node', nodeId, '--input', f.input(`${nodeId}-pass.json`, { state: 'passed' })]);
+}
+// 造一个已 passed 的集成验证节点：independent_evidence + integration_candidate + pass Evidence。
+function passIntegrationNode(f, nodeId) {
+  main(['add-node', '--ledger', f.ledger_dir, '--input', f.input(`${nodeId}.json`, node({ node_id: nodeId, objective: `独立验收集成候选 ${nodeId}` }, INDEPENDENT_EVIDENCE))]);
+  const artifact = artifactRef();
+  main(['attach', '--ledger', f.ledger_dir, '--node', nodeId, '--type', 'artifact', '--input', f.input(`${nodeId}-artifact.json`, artifact)]);
+  const attached = main(['attach', '--ledger', f.ledger_dir, '--node', nodeId, '--type', 'evidence', '--input', f.input(`${nodeId}-evidence.json`, evidencePackage(f.contract, artifact, { run_id: `${nodeId}-run` }))]);
+  main(['update', '--ledger', f.ledger_dir, '--node', nodeId, '--input', f.input(`${nodeId}-pass.json`, { state: 'passed', verification_ref: attached.nodes[nodeId].evidence.at(-1).digest })]);
+}
+function edge(f, from, to, kind = 'dependency') { main(['add-edge', '--ledger', f.ledger_dir, '--input', f.input(`edge-${from}-${to}.json`, { from, to, kind })]); }
+function summaryOf(f) { return main(['status', '--ledger', f.ledger_dir]).summary; }
+
+test('声明 provider 后，实现节点全 passed 但没有集成验证节点时不算完成，未覆盖名单逐个点名', () => {
+  const f = makeFixture({ independent: true });
+  try {
+    passImplementationNode(f, 'impl-a');
+    passImplementationNode(f, 'impl-b');
+    const summary = summaryOf(f);
+    assert.equal(summary.completion_ready, false);
+    assert.deepEqual([...summary.uncovered_implementation_nodes].sort(), ['impl-a', 'impl-b']);
+    assert.deepEqual(summary.non_required_implementation_nodes, []);
+    // 声明了 provider 时，未独立验证名单让位给未覆盖名单。
+    assert.deepEqual(summary.nodes_without_independent_evidence, []);
+    assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
+  } finally { f.cleanup(); }
+});
+
+test('连到已通过的集成验证节点即算覆盖，可达性沿 dependency / barrier 边传递', () => {
+  const f = makeFixture({ independent: true });
+  try {
+    passImplementationNode(f, 'impl-a');
+    passIntegrationNode(f, 'verify');
+    edge(f, 'impl-a', 'verify');
+    const covered = summaryOf(f);
+    assert.equal(covered.completion_ready, true);
+    assert.deepEqual(covered.uncovered_implementation_nodes, []);
+
+    // 传递上游：upstream → impl-b → verify，upstream 不直连集成节点也算覆盖。
+    passImplementationNode(f, 'impl-b');
+    passImplementationNode(f, 'upstream');
+    const beforeEdges = summaryOf(f);
+    assert.equal(beforeEdges.completion_ready, false);
+    assert.deepEqual([...beforeEdges.uncovered_implementation_nodes].sort(), ['impl-b', 'upstream']);
+
+    edge(f, 'impl-b', 'verify', 'barrier');
+    assert.deepEqual(summaryOf(f).uncovered_implementation_nodes, ['upstream']);
+    edge(f, 'upstream', 'impl-b');
+    const transitive = summaryOf(f);
+    assert.equal(transitive.completion_ready, true);
+    assert.deepEqual(transitive.uncovered_implementation_nodes, []);
+    assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
+  } finally { f.cleanup(); }
+});
+
+test('边连到还没 passed 的集成验证节点不算覆盖', () => {
+  const f = makeFixture({ independent: true });
+  try {
+    passImplementationNode(f, 'impl');
+    // 集成节点设为 required: false 并停在 pending，把覆盖判定与"所有 required 节点已 passed"隔离开。
+    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('verify.json', node({ node_id: 'verify', objective: '尚未执行的独立验收', required: false }, INDEPENDENT_EVIDENCE))]);
+    edge(f, 'impl', 'verify');
+    const summary = summaryOf(f);
+    assert.equal(summary.completion_ready, false);
+    assert.deepEqual(summary.uncovered_implementation_nodes, ['impl']);
+    assert.deepEqual(summary.non_required_implementation_nodes, ['verify']);
+  } finally { f.cleanup(); }
+});
+
+test('刚 init 的空 ledger 不算完成', () => {
+  const f = makeFixture();
+  const declared = makeFixture({ independent: true });
+  try {
+    const summary = summaryOf(f);
+    assert.equal(summary.completion_ready, false);
+    assert.deepEqual(summary.uncovered_implementation_nodes, []);
+    assert.deepEqual(summary.non_required_implementation_nodes, []);
+    assert.deepEqual(summary.nodes_without_independent_evidence, []);
+    // 是否声明 provider 都一样：空真不再被当成完成。
+    assert.equal(summaryOf(declared).completion_ready, false);
+  } finally { f.cleanup(); declared.cleanup(); }
+});
+
+test('声明 provider 但全图只有 not_applicable 节点时，覆盖规则没有对象，通过即完成', () => {
+  const f = makeFixture({ independent: true });
+  try {
+    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('critic.json', node({ node_id: 'critic', role: 'critic', objective: '独立挑错评审' }, NOT_APPLICABLE))]);
+    main(['attach', '--ledger', f.ledger_dir, '--node', 'critic', '--type', 'report', '--input', f.input('critic-report.json', { report_type: 'critic_findings', findings: ['x'] })]);
+    main(['update', '--ledger', f.ledger_dir, '--node', 'critic', '--input', f.input('critic-pass.json', { state: 'passed' })]);
+    const summary = summaryOf(f);
+    assert.equal(summary.completion_ready, true);
+    assert.deepEqual(summary.uncovered_implementation_nodes, []);
+    assert.deepEqual(summary.non_required_implementation_nodes, []);
+  } finally { f.cleanup(); }
+});
+
+test('required: false 的实现节点只进名单，不参与完成判定', () => {
+  const f = makeFixture({ independent: true });
+  try {
+    passImplementationNode(f, 'impl');
+    passIntegrationNode(f, 'verify');
+    edge(f, 'impl', 'verify');
+    // 非 required 的实现节点既没 passed 也没被覆盖，但不拖住 completion_ready。
+    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('optional.json', node({ node_id: 'optional', objective: '可选实现节点', required: false }))]);
+    const summary = summaryOf(f);
+    assert.equal(summary.completion_ready, true);
+    assert.deepEqual(summary.uncovered_implementation_nodes, []);
+    assert.deepEqual(summary.non_required_implementation_nodes, ['optional']);
+  } finally { f.cleanup(); }
+});
+
+test('未声明 provider 的契约逐个列出未经独立验证的节点，assurance 计数照旧', () => {
+  const f = makeFixture();
+  try {
+    passImplementationNode(f, 'impl-a');
+    passImplementationNode(f, 'impl-b');
+    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('critic.json', node({ node_id: 'critic', role: 'critic', objective: '评审' }, NOT_APPLICABLE))]);
+    const summary = summaryOf(f);
+    assert.deepEqual([...summary.nodes_without_independent_evidence].sort(), ['critic', 'impl-a', 'impl-b']);
+    assert.equal(summary.verification_assurance.worker_self_check, 2);
+    assert.equal(summary.verification_assurance.none, 1);
+    assert.equal(summary.verification_assurance.independent_evidence, 0);
+    // 覆盖规则只对声明了 provider 的契约生效。
+    assert.deepEqual(summary.uncovered_implementation_nodes, []);
+    assert.equal(summary.completion_ready, false);
+  } finally { f.cleanup(); }
+});

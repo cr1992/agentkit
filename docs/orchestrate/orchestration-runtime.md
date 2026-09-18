@@ -180,6 +180,28 @@ Evidence 必须为 `terminal_outcome: pass` 且不再要求 human gate。节点�
 `status.summary.verification_assurance` 分别计数四档（含 `not_applicable`）和 `none`，
 `doctor` 重新执行同一门禁。
 
+**完成判定与独立验证覆盖**：`status.summary.completion_ready` 只在下面三条同时成立时为 `true`。
+
+1. 图里至少有一个 `required` 节点。空 ledger 和只有非 required 节点的 ledger 一律不算完成。
+2. 所有 `required` 节点都已 `passed`。
+3. 公共合同声明了 `extensions.verification.provider: verify-agent-output` 时，每个 `required` 的
+   **实现节点**都被独立验证覆盖。实现节点指 `verification.requirement !== 'not_applicable'` 的节点——
+   `not_applicable` 是只读评审节点的专用档，其余节点都有交付物；判定只看这一个字段，不看 `role`。
+   覆盖指满足其一：节点本身是已 `passed` 的 `independent_evidence` 节点；或沿 `dependency` /
+   `barrier` 边（`from → to`，`to` 依赖 `from`）向下可达某个已 `passed`、
+   `requirement: independent_evidence` 且 `artifact_scope: integration_candidate` 的节点，
+   可达性是传递的。合同没有声明 provider 时这条不生效，节点仍按 controller 选定的风险分级各自收口。
+
+覆盖规则只证明 controller 声明的拓扑关系，不证明上游产物真的进入了集成候选。
+
+`status.summary` 同时给出三份名单，都是节点 id 数组：
+
+- `uncovered_implementation_nodes`：被第 3 条拦下的 `required` 实现节点。合同未声明 provider 时为空数组。
+- `non_required_implementation_nodes`：`required: false` 的实现节点。`add-node` 直接接受调用方传入的
+  `required: false`，这类节点不受覆盖规则约束，是合法选择，但必须看得见。
+- `nodes_without_independent_evidence`：合同**未**声明 provider 时，逐个列出 `verification_assurance`
+  不是 `independent_evidence` 的节点；声明了 provider 时为空数组，改看 `uncovered_implementation_nodes`。
+
 **Token 消耗与成本核算（v1.2）**：`update` 支持记录节点消耗的 `tokens`（非负安全整数，或字段完整的 `{ input_tokens, output_tokens, total_tokens }`，其中 `total_tokens = input_tokens + output_tokens`）及非负安全整数 `duration_ms`。`status` 命令在 `summary.token_accounting` 中自动汇总总 Token 与按角色分级的消耗分布，支持计算多 Agent 分发相比全量顶配模型的 Token 节省率；`doctor` 使用同一校验器复核持久化节点。
 
 **合同投影（v1.2）**：Evidence 的合同绑定有两条合法路径，缺省仍是全等——verify-agent-output
