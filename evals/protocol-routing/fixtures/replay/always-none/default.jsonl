@@ -1,0 +1,7 @@
+{"type":"session","case_id":0,"run":0,"host":"synthetic","host_version":"n/a","model":"synthetic-always-none","driver":"replay","skills":{},"note":"平凡基线「永远 NONE」：整条会话只读文档、只读文件，fixture 仓摘要一次都没变","initial_repo":{"status":"","head":"1111111111111111111111111111111111111111"}}
+{"type":"tool","seq":1,"tool_name":"Bash","tool_input":{"command":"agentkit docs"},"repo":{"status":"","head":"1111111111111111111111111111111111111111"}}
+{"type":"tool","seq":2,"tool_name":"Bash","tool_input":{"command":"agentkit docs orchestrate dispatch-contract"},"repo":{"status":"","head":"1111111111111111111111111111111111111111"}}
+{"type":"tool","seq":3,"tool_name":"Read","tool_input":{"file_path":"src/sum.mjs"},"repo":{"status":"","head":"1111111111111111111111111111111111111111"}}
+{"type":"tool","seq":4,"tool_name":"Bash","tool_input":{"command":"agentkit worktree list --json"},"repo":{"status":"","head":"1111111111111111111111111111111111111111"}}
+{"type":"tool","seq":5,"tool_name":"Bash","tool_input":{"command":"agentkit capabilities --json"},"repo":{"status":"","head":"1111111111111111111111111111111111111111"}}
+{"type":"end","exit_code":0,"error":null}
