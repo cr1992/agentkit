@@ -200,7 +200,8 @@ Evidence 必须为 `terminal_outcome: pass` 且不再要求 human gate。节点�
 - `non_required_implementation_nodes`：`required: false` 的实现节点。`add-node` 直接接受调用方传入的
   `required: false`，这类节点不受覆盖规则约束，是合法选择，但必须看得见。
 - `nodes_without_independent_evidence`：合同**未**声明 provider 时，逐个列出 `verification_assurance`
-  不是 `independent_evidence` 的节点；声明了 provider 时为空数组，改看 `uncovered_implementation_nodes`。
+  不是 `independent_evidence` 的**实现节点**；只读评审节点没有交付物，不进这份名单。声明了
+  provider 时为空数组，改看 `uncovered_implementation_nodes`。
 
 **Token 消耗与成本核算（v1.2）**：`update` 支持记录节点消耗的 `tokens`（非负安全整数，或字段完整的 `{ input_tokens, output_tokens, total_tokens }`，其中 `total_tokens = input_tokens + output_tokens`）及非负安全整数 `duration_ms`。`status` 命令在 `summary.token_accounting` 中自动汇总总 Token 与按角色分级的消耗分布，支持计算多 Agent 分发相比全量顶配模型的 Token 节省率；`doctor` 使用同一校验器复核持久化节点。
 

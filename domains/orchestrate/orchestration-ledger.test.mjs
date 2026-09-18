@@ -721,9 +721,10 @@ test('未声明 provider 的契约逐个列出未经独立验证的节点，assu
   try {
     passImplementationNode(f, 'impl-a');
     passImplementationNode(f, 'impl-b');
+    // critic 留在图里：只读评审节点没有交付物，不该出现在"未经独立验证"名单里。
     main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('critic.json', node({ node_id: 'critic', role: 'critic', objective: '评审' }, NOT_APPLICABLE))]);
     const summary = summaryOf(f);
-    assert.deepEqual([...summary.nodes_without_independent_evidence].sort(), ['critic', 'impl-a', 'impl-b']);
+    assert.deepEqual([...summary.nodes_without_independent_evidence].sort(), ['impl-a', 'impl-b']);
     assert.equal(summary.verification_assurance.worker_self_check, 2);
     assert.equal(summary.verification_assurance.none, 1);
     assert.equal(summary.verification_assurance.independent_evidence, 0);
