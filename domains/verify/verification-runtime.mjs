@@ -34,7 +34,7 @@ import { createDigestKit } from '../../core/digest.mjs';
 import { distributionDigest, skillDistributionRoots } from '../../core/content-digest.mjs';
 import {
   SCAFFOLD_ARGV, SCAFFOLD_CHECK_ID, SCAFFOLD_OBJECTIVE, SCAFFOLD_REQUIREMENT, SCAFFOLD_SCOPE_ITEM,
-  contractSubstance, profileSubstance,
+  contractSubstance, coverageSubstance, profileSubstance, substanceWarnings,
 } from '../../core/contract-substance.mjs';
 
 export const RUNTIME_VERSION = '1.3.0';
@@ -978,11 +978,18 @@ function digestEnvelope(options) {
 /** @param {Record<string,any>|null} contract @param {Record<string,any>|null} profile @param {Record<string,any>|null} artifact @param {Set<string>} flags */
 function inspectValues(contract, profile, artifact, flags) {
   const issues = [];
+  const warnings = [];
   // inspectValues 只服务创建入口（preflight、init、prepare-run），所以实质性检查放在这里；
   // record-review、validate 等续跑入口直接调 validateContract，只做形状校验。
-  if (contract) issues.push(...collectContractIssues(contract), ...contractSubstance(contract).errors);
+  if (contract) {
+    const substance = contractSubstance(contract);
+    issues.push(...collectContractIssues(contract), ...substance.errors);
+    warnings.push(...substance.warnings);
+  }
   const acceptanceIds = new Set(Array.isArray(contract?.acceptance) ? contract.acceptance.map((item) => item?.contract_item_id).filter(Boolean) : []);
   if (profile) issues.push(...collectProfileIssues(profile, acceptanceIds), ...profileSubstance(profile).errors);
+  // 覆盖判据要同时拿到两份文件才成立，所以只有这条路径能执行它。
+  if (contract && profile) issues.push(...coverageSubstance(contract, profile).errors);
   if (artifact) issues.push(...collectArtifactIssues(artifact));
   if (contract) {
     try { validateSkillBinding(contract, skillContentDigest()); }
@@ -990,8 +997,10 @@ function inspectValues(contract, profile, artifact, flags) {
   }
   if (profile?.runtime?.network_policy === 'denied' && !flags.has('network-isolated')) issues.push('network_policy=denied 时必须由宿主提供 --network-isolated assurance');
   return {
+    // warning 只描述"没写"，不足以拒绝创建，所以不参与 valid，也不参与退出码。
     valid: issues.length === 0,
     errors: [...new Set(issues)],
+    warnings: [...new Set(warnings)],
     content_digest: skillContentDigest(),
     contract_digest: contract?.contract_digest ?? null,
     verification_profile_digest: profile?.verification_profile_digest ?? null,
@@ -1255,7 +1264,7 @@ function initialize(options, flags) {
   initialEvent.event_digest = envelopeDigest(initialEvent, 'event_digest');
   writeFileSync(join(runDir, 'events.ndjson'), `${canonicalJson(initialEvent)}\n`, { flag: 'wx', mode: 0o600 });
   atomicWriteJson(join(runDir, 'snapshot.json'), snapshot);
-  return { run_id: runId, run_dir: runDir, revision: 0, status: snapshot.status, review_challenge_nonce: snapshot.review_challenge_nonce };
+  return { run_id: runId, run_dir: runDir, revision: 0, status: snapshot.status, review_challenge_nonce: snapshot.review_challenge_nonce, ...(checked.report.warnings.length ? { warnings: checked.report.warnings } : {}) };
 }
 
 /** @param {Record<string,string>} options */
@@ -1554,6 +1563,9 @@ function doctor(options) {
     snapshot_matches_journal: !loaded.needsRepair,
     lock_present: existsSync(join(runDir, '.lock')),
     skill_drift: currentDigest !== loaded.snapshot.skill_provenance.content_digest,
+    // 冻结的两份文件就在 run 目录里，实质性判据都能重跑；但 doctor 只报不判，
+    // 否则判据出现之前冻结的历史 run 会在升级后突然变成 unhealthy。
+    substance_warnings: substanceWarnings(readJson(join(runDir, 'contract.json')), readJson(join(runDir, 'profile.json'))),
     // 旧 run 即使已漂移也要能只读检查：同时给出冻结时的摘要与当前摘要，便于判断漂移了什么。
     frozen_content_digest: loaded.snapshot.skill_provenance.content_digest,
     current_content_digest: currentDigest,

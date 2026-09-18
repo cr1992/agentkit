@@ -8,7 +8,11 @@
 // 调用约定：
 // - 只在创建入口调用：contract validate、ledger init、verify preflight/init/prepare-run、loop init；
 // - 续跑与恢复入口只做形状校验，否则升级前已冻结的状态在续跑或崩溃恢复时会失败；
+// - 三个域的 doctor 用 substanceWarnings 把同一批判据整体降级成 warning，不改变 healthy；
 // - 各入口直接使用这里给出的原因字符串，只套各自的错误类型，不改写措辞。
+//
+// error 与 warning 的分界：只做存在性检查的判据一律只给 warning。"write 模式没写 exclude" 说明
+// 边界没划出来，但划不划得对本模块判断不了，拿它拒绝创建就是把没有信息量的检查当门禁。
 //
 // scaffold 的占位字面量以这里为唯一出处，verify scaffold 直接引用。两边一旦各自漂移，判据就会静默失效。
 
@@ -48,7 +52,18 @@ export function contractSubstance(contract) {
   include.forEach((item, index) => {
     if (item === SCAFFOLD_SCOPE_ITEM) errors.push(`scope.include[${index}] = ${quote(SCAFFOLD_SCOPE_ITEM)}：仍是 scaffold 占位，需列出本次任务的真实范围`);
   });
-  return { errors, warnings: [] };
+  const warnings = [];
+  // 只读合同越界由 permissions 本身兜住；写入合同则全靠 scope.exclude 与 stop_conditions 划边界，
+  // 两处都空等于把"改哪里、什么时候停"完全交给执行方判断。
+  if (contract?.permissions?.mode === 'write') {
+    if (!(Array.isArray(contract?.scope?.exclude) ? contract.scope.exclude : []).length) {
+      warnings.push('permissions.mode = "write" 且 scope.exclude 为空：写入型合同没有划出任何不可触碰的面，改动跑偏时没有范围边界可对照');
+    }
+    if (!(Array.isArray(contract?.stop_conditions) ? contract.stop_conditions : []).length) {
+      warnings.push('permissions.mode = "write" 且 stop_conditions 为空：写入型合同没有声明任何终止条件，执行失控时没有机械停机点');
+    }
+  }
+  return { errors, warnings };
 }
 
 /**
@@ -67,6 +82,43 @@ export function profileSubstance(profile) {
     errors.push(`l0_checks[*].argv 全部为 ${quote(SCAFFOLD_ARGV)}：只证明运行环境存在，没有检查本次 Artifact`);
   }
   return { errors, warnings: [] };
+}
+
+/**
+ * 契约 × profile 的覆盖判据。只有同时拿到两份文件的入口才能执行。
+ * 现有 profile 校验只做单向绑定（拒绝 L1 引用不存在的 acceptance），反向不成立：
+ * 一条 acceptance 可以一次都不被审，签出来的 Evidence 照样是"全部通过"。
+ *
+ * 这里只保证每条 acceptance 都被 L1 审过，不保证被 L0 测到：l0_checks 条目没有
+ * contract_item_id 字段，schema 又是 additionalProperties: false，无从建立对应关系。
+ * @param {any} contract @param {any} profile
+ * @returns {SubstanceReport}
+ */
+export function coverageSubstance(contract, profile) {
+  const errors = [];
+  const reviewed = new Set((Array.isArray(profile?.l1_review) ? profile.l1_review : []).map((item) => item?.contract_item_id).filter((id) => typeof id === 'string' && id));
+  const acceptance = Array.isArray(contract?.acceptance) ? contract.acceptance : [];
+  acceptance.forEach((item, index) => {
+    const id = item?.contract_item_id;
+    // ID 缺失或非字符串是形状问题，交给形状校验报，这里不重复报一遍。
+    if (typeof id !== 'string' || !id || reviewed.has(id)) return;
+    errors.push(`acceptance[${index}].contract_item_id = ${quote(id)}：未被任何 l1_review 条目引用`);
+  });
+  return { errors, warnings: [] };
+}
+
+/**
+ * doctor 口径：把手上能执行的全部判据整体降级成 warning。
+ * 历史状态可能在判据出现之前就已冻结，而 doctor 是只读回看路径；在这里判 unhealthy，
+ * 等于让同一份 Evidence 的审计结论随 runtime 版本变化。profile 传 null 时只出契约层判据。
+ * @param {any} contract @param {any} [profile]
+ * @returns {string[]}
+ */
+export function substanceWarnings(contract, profile = null) {
+  const report = contractSubstance(contract);
+  const findings = [...report.errors];
+  if (profile) findings.push(...profileSubstance(profile).errors, ...coverageSubstance(contract, profile).errors);
+  return [...findings, ...report.warnings];
 }
 
 /** @param {string[]} errors */
