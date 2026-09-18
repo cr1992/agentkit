@@ -258,7 +258,7 @@ flowchart TD
     U["用户请求 / 目标"]
     C["当前 controller<br/>目标解释、路由与最终授权"]
     O["orchestrate-subagents<br/>多节点任务图与全局控制（按需）"]
-    R{"按第 6.1 节选择执行模式"}
+    R{"按组合协议表选择执行模式"}
     W["manage-worktrees<br/>隔离 provider（按需）"]
     V["verify-agent-output<br/>independent_once"]
     L["run-agent-verify-loop<br/>adversarial_loop（仅显式）"]
@@ -285,19 +285,9 @@ provider 选择。Loop 只执行已经显式选择并冻结的循环合同，不
 
 ### 6.1 联动不是全量加载
 
-controller 根据任务事实选择能力：
-
-| 场景 | 使用方式 |
-| --- | --- |
-| 单 Agent、小修改、确定性检查足够 | 不加载四 Skill |
-| 多 Agent 但只有一个写入者 | `orchestrate-subagents` |
-| 单 Agent 需要隔离 Git 工作区 | `manage-worktrees` |
-| 固定 commit 独立 review 一次 | `verify-agent-output` |
-| 明确要求反复修复，或 freeze 前已合理预期同一目标会经历多轮新 Artifact 且修复已获授权 | `run-agent-verify-loop` |
-| 多写入者 + 一次性验收 | orchestrator + worktrees + verifier |
-| 多写入者 + 有界修复循环 | 四者组合 |
-
-不能因为“仓库 dirty”“任务很多”或“可能并发”就默认加载全部 Skill。
+controller 按任务事实逐项启用能力的判据表，真源是
+[`orchestrate-subagents/SKILL.md`](../../orchestrate-subagents/SKILL.md) 的「组合协议」表——它是 controller
+实际加载的那一份。本节只做导航。
 
 ### 6.2 能力发现
 
@@ -365,20 +355,10 @@ Loop 的独立 L1 条件。
 
 ### 6.4 触发优先级
 
-目标 v1 的 frontmatter 与 forward tests 必须共同保证：
-
-- 固定 Artifact、单个只读 reviewer、只验一次：只触发 `verify-agent-output`；
-- reviewer 是多节点任务图的一部分，或需要并发、不同权限、多个 critic：触发
-  `orchestrate-subagents`；
-- 明确要求实现—验收反复收敛，或 freeze 前已合理预期同一目标会连续产生多轮新 Artifact 且有修复授权：触发 `run-agent-verify-loop`；
-- Loop 内的一次性验证是 provider 调用，不再次创建全局 orchestrator。
-
-固定 SHA 的一次性 terminal Evidence 不会自动升级成 Loop，也不能被后续修复覆盖；模式变化时保留旧
-Evidence，显式冻结新的 Loop state。多个彼此独立的收敛对象仍由 orchestrator 各自建节点/Loop，不能
-塞进一个 Loop。
-
-`orchestrate-subagents` 的 description 必须显式排除“单 Artifact、单 reviewer 的一次性验收”；
-`verify-agent-output` 的 description 必须显式排除多节点编排与自动修复。
+哪个请求该触发哪个 Skill，由四份 `SKILL.md` 的 frontmatter `description` 与
+[`orchestrate-subagents/SKILL.md`](../../orchestrate-subagents/SKILL.md) 的「组合协议」表定义；
+description 的字符预算由 [`tests/skill-context-budget.test.mjs`](../../tests/skill-context-budget.test.mjs)
+守住。本节只做导航。
 
 ## 7. 跨 Skill 数据契约
 
@@ -638,7 +618,7 @@ Evidence pass 只是节点验收输入，最终任务完成仍由 controller 判
 
 ~~~text
 用户目标
-→ controller 根据第 6.1 节明确选择 adversarial_loop
+→ controller 按组合协议表明确选择 adversarial_loop
 → 需要多节点时，orchestrator 完成 capability discovery、任务图与 provider 选择
 → controller 冻结公共合同和 Verification Profile
 → orchestrator 建任务图并派发 implementer
