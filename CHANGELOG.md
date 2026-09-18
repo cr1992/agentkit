@@ -29,8 +29,7 @@
   `loop init`）新增实质性检查，原样照抄 `verify scaffold` 生成的占位契约或 profile 一律拒绝，
   报错给出字段路径与当前值但不给可以照抄的合规值；`prepare-run` 遇到该拒绝时紧凑输出也会带上
   `errors`。续跑与恢复入口（`ledger add-node`、`verify record-review` / `validate`、
-  `loop adopt-root` / `record-embedded-review` / `validate`）不重判实质性，行为不变；`doctor`
-  单独在后面讲。
+  `loop adopt-root` / `record-embedded-review` / `validate`）不重判实质性，行为不变。
   同一批判据里，每条 `acceptance[].contract_item_id` 必须至少被一条 `l1_review` 引用，不分权限
   模式，只在同时拿到契约与 profile 的创建入口执行；`permissions.mode` 为 `write` 且
   `scope.exclude` / `stop_conditions` 为空只降级为 warning，不拒绝、退出码不变。`warnings` 键仅
