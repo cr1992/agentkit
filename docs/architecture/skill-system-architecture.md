@@ -584,6 +584,7 @@ payload 计算；规范化与摘要实现的真源是 [`core/digest.mjs`](../../
 | Reflection Record | [`reflection-record-v1`](../../schemas/reflection-record-v1.schema.json) |
 | Skill Improvement Proposal | [`improvement-proposal-v1`](../../schemas/improvement-proposal-v1.schema.json) |
 | Orchestration Ledger | [`orchestration-ledger-v1`](../../schemas/orchestration-ledger-v1.schema.json) |
+| Ledger Pointer | [`ledger-pointer-v1`](../../schemas/ledger-pointer-v1.schema.json) |
 | Batch Result | [`batch-result-v1`](../../schemas/batch-result-v1.schema.json) |
 
 合同冻结后任何变化都创建新版本；extension 不得覆盖公共字段；freeze 后 provider 缺失或不兼容必须

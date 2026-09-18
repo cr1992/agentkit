@@ -10,6 +10,7 @@ import { ContractError, canonicalJson, envelopeDigest, parseJsonStrict, sha256, 
 import { ORCHESTRATION_PROTOCOL_VERSION, ORCHESTRATION_RUNTIME_VERSION } from './orchestration-metadata.mjs';
 import { isHelpRequest, renderCliHelp, specOptionNames } from '../../core/cli-help.mjs';
 import { writeNewJson } from '../../core/atomic-fs.mjs';
+import { LEDGER_ID_PATTERN, deleteLedgerPointerFile, ledgerDirectory, listLedgerPointers, pointerDirectory, recordLedgerPointer, removeLedgerPointer, resolveGitCommonDir } from '../../core/ledger-pointer.mjs';
 import { createReflectionKit } from '../../core/reflection.mjs';
 import { distributionDigest, skillDistributionRoots } from '../../core/content-digest.mjs';
 import { substanceWarnings } from '../../core/contract-substance.mjs';
@@ -93,7 +94,9 @@ const CLI_SPEC = {
   status: { required: ['ledger'] },
   inspect: { required: ['ledger'] },
   rebuild: { required: ['ledger'], optional: ['expected-revision'] },
-  doctor: { required: ['ledger'] },
+  // doctor 有两个互斥档位：--ledger 诊断单个 ledger，--repository 扫描该仓的全部仓级指针。
+  doctor: { optional: ['ledger', 'repository'] },
+  'reclaim-pointers': { required: ['repository'] },
 };
 const CLI_NOTES = [
   '--ledger 传 init 回显的 ledger 字段（<state-root>/ledgers/<ledger-id>），不是 --state-root 本身。',
@@ -102,10 +105,14 @@ const CLI_NOTES = [
   'close 要求 status 的 summary.completion_ready 为 true；不满足时会逐条列出未满足的条件并非零退出。',
   'close --abandon --reason <text> 记录放弃，reason 必填且非空；它是 skill_drift 下唯一仍能写入的命令。',
   '终态之后任务图冻结，只剩 record-reflection / propose-improvement / rebuild / doctor / status / inspect / batch-status / batch-fuse。',
+  'init 在 contract.environment.repository 指向的仓库里写仓级指针 <git-common-dir>/agentkit/ledgers/<ledger-id>.json；close 成功后删除它。指针不是真源，写/删失败只报 warning。',
+  'doctor --repository <path> 扫描该仓的全部仓级指针并报告悬空项；它是只读的，回收要显式用 reclaim-pointers --repository <path>。',
+  'drift 但未进入终态的 ledger 指针一律保留：它还需要有人来 close --abandon 或 re-contract，回收指针等于把它藏起来。',
 ];
 // 终态之后仍然放行的命令：架构 §15.2 的高优先级反思触发按定义发生在完成之后；rebuild 是崩溃修复；
 // 其余是只读回看——batch-fuse 只按已记录的 records 重算熔断判定，不写事件链，与 batch-status 同列。
-const POST_TERMINAL_ALLOWED = new Set(['capabilities', 'init', 'record-reflection', 'propose-improvement', 'rebuild', 'doctor', 'status', 'inspect', 'batch-status', 'batch-fuse']);
+// reclaim-pointers 不作用于某个 ledger 的任务图，而是清理仓级指针目录，因此不属于终态冻结集合。
+const POST_TERMINAL_ALLOWED = new Set(['capabilities', 'init', 'record-reflection', 'propose-improvement', 'rebuild', 'doctor', 'status', 'inspect', 'batch-status', 'batch-fuse', 'reclaim-pointers']);
 // 终态冻结集合由 CLI_SPEC 全集减白名单推导，不另抄一份清单：新增命令默认落进冻结集合。
 export const FROZEN_AFTER_TERMINAL = Object.keys(CLI_SPEC).filter((name) => !POST_TERMINAL_ALLOWED.has(name));
 // drift 冻结集合 = 走 mutate 写事件链的命令，判据是 CLI_SPEC 里接受 --expected-revision；rebuild 只按事件链重放快照，不经 mutate。
@@ -127,15 +134,32 @@ function req(options, name) { if (!options[name]) throw new LedgerError(`缺少 
 function revision(options) { if (options['expected-revision'] === undefined) return null; const value = Number(options['expected-revision']); if (!Number.isInteger(value) || value < 0) throw new LedgerError('expected-revision 无效'); return value; }
 
 function init(options, flags) {
-  const substanceWarningList = [];
-  const contract = validateContract(readJson(req(options, 'contract')), { substance: true, warnings: substanceWarningList });
+  // init 的 warning 清单：实质性检查的告警与「指针未写入」共用它——两者都是「ledger 建成了，但有事要告诉你」。
+  const initWarnings = [];
+  const contract = validateContract(readJson(req(options, 'contract')), { substance: true, warnings: initWarnings });
   const binding = contract.skill_set.find((item) => item.name === 'orchestrate-subagents');
   if (!binding || binding.content_digest !== skillContentDigest()) throw new LedgerError('Task Contract 未冻结当前 orchestrate-subagents content digest');
   const root = resolve(options['state-root'] ?? join(tmpdir(), 'orchestration-ledger-state')); const repository = contract.environment.repository;
   if (repository && repository !== 'none' && existsSync(repository) && inside(root, repository) && !flags.has('allow-repository-state')) throw new LedgerError('state root 位于业务仓库内');
-  mkdirSync(join(root, 'ledgers'), { recursive: true, mode: 0o700 }); const id = options['ledger-id'] ?? randomUUID(); if (!/^[A-Za-z0-9._-]+$/u.test(id)) throw new LedgerError('ledger-id 无效'); const dir = join(root, 'ledgers', id); mkdirSync(dir, { mode: 0o700 }); const now = new Date().toISOString();
+  mkdirSync(join(root, 'ledgers'), { recursive: true, mode: 0o700 }); const id = options['ledger-id'] ?? randomUUID(); if (!LEDGER_ID_PATTERN.test(id)) throw new LedgerError(`ledger-id 无效：当前值 ${JSON.stringify(id)}；要求非空且只含字母、数字、点、下划线与连字符（${LEDGER_ID_PATTERN.source}）`); const dir = join(root, 'ledgers', id); mkdirSync(dir, { mode: 0o700 }); const now = new Date().toISOString();
   const snapshot = { schema_version: 1, runtime_version: ORCHESTRATION_RUNTIME_VERSION, ledger_id: id, revision: 0, contract_digest: contract.contract_digest, nodes: {}, edges: [], attachments: [], batches: {}, reflection_refs: [], improvement_proposal_refs: [], skill_provenance: { name: 'orchestrate-subagents', version: ORCHESTRATION_PROTOCOL_VERSION, content_digest: skillContentDigest() }, created_at: now, updated_at: now };
-  writeNew(join(dir, 'contract.json'), contract); const initialEvent = { schema_version: 1, revision: 0, kind: 'initialized', recorded_at: now, previous_event_digest: null, snapshot }; initialEvent.event_digest = envelopeDigest(initialEvent, 'event_digest'); writeFileSync(join(dir, 'events.ndjson'), `${canonicalJson(initialEvent)}\n`, { flag: 'wx', mode: 0o600 }); atomicJson(join(dir, 'snapshot.json'), snapshot); return { ledger_id: id, ledger_dir: dir, ledger: dir, state_root: root, revision: 0, ...(substanceWarningList.length ? { warnings: substanceWarningList } : {}) };
+  writeNew(join(dir, 'contract.json'), contract); const initialEvent = { schema_version: 1, revision: 0, kind: 'initialized', recorded_at: now, previous_event_digest: null, snapshot }; initialEvent.event_digest = envelopeDigest(initialEvent, 'event_digest'); writeFileSync(join(dir, 'events.ndjson'), `${canonicalJson(initialEvent)}\n`, { flag: 'wx', mode: 0o600 }); atomicJson(join(dir, 'snapshot.json'), snapshot);
+  // 顺序与失败语义：先把 ledger 建成（事件链 + 快照落盘），最后才写仓级指针。
+  // 指针不是真源，写失败不能让 init 失败后留下半个 ledger——那样反而丢掉真正有状态的那一份；
+  // 因此写失败降级为 warning，ledger 本身照常可用，代价只是这一轮要手传 --ledger。
+  const pointer = writePointerForInit(repository, id, root, contract.contract_digest, now);
+  if (!pointer.written) initWarnings.push(`仓级指针未写入：${pointer.reason}`);
+  // 指针按 ledger_id 索引：同名 ledger 换 state root 重建会顶掉旧那一份，旧 ledger 从此只能手传 --ledger。
+  else if (pointer.replaced) initWarnings.push(`仓级指针 ${pointer.path} 原先指向 state root ${pointer.replaced}，已被本次 init 覆盖：同名 ledger 只能有一份指针，旧 ledger 之后需要手传 --ledger`);
+  return { ledger_id: id, ledger_dir: dir, ledger: dir, state_root: root, revision: 0, pointer, ...(initWarnings.length ? { warnings: initWarnings } : {}) };
+}
+
+function writePointerForInit(repository, ledgerId, stateRoot, contractDigest, createdAt) {
+  try {
+    return recordLedgerPointer({ repository, ledgerId, stateRoot, contractDigest, createdAt });
+  } catch (error) {
+    return { written: false, path: null, git_common_dir: null, reason: `写入仓级指针失败：${error instanceof Error ? error.message : String(error)}` };
+  }
 }
 
 function cycle(nodes, edges) { const adj = new Map(Object.keys(nodes).map((id) => [id, []])); for (const edge of edges) adj.get(edge.from)?.push(edge.to); const visiting = new Set(), done = new Set(); const visit = (id) => { if (visiting.has(id)) return true; if (done.has(id)) return false; visiting.add(id); for (const next of adj.get(id) ?? []) if (visit(next)) return true; visiting.delete(id); done.add(id); return false; }; return [...adj.keys()].some(visit); }
@@ -379,21 +403,114 @@ function closeLedger(options, flags) {
   const reason = options.reason;
   if (abandon && (typeof reason !== 'string' || !reason.trim())) throw new LedgerError('--abandon 必须同时给出非空 --reason：终态事件要留下这个 ledger 为什么不再继续');
   if (!abandon && reason !== undefined) throw new LedgerError('--reason 只属于 --abandon；正常 close 记录的是完成判定结果，不接受放弃理由');
-  return mutate(dir, revision(options), (snapshot) => {
+  const closed = mutate(dir, revision(options), (snapshot) => {
     if (!abandon) { const gate = completionGate(dir, snapshot); if (!gate.completion_ready) throw new LedgerError(`summary.completion_ready=false，不能正常 close；未满足：${unmetCompletionConditions(gate).join('；')}。确实要放弃这个 ledger 时改用 close --abandon --reason <text>`); }
     // 终态事件同时记下写入时的 runtime 内容摘要与是否由 drift 的 runtime 写入：drift 下的 abandon 必须自带这个标注。
     const lifecycle = { state: abandon ? 'abandoned' : 'closed', closed_at: new Date().toISOString(), reason: abandon ? reason.trim() : null, closed_by_content_digest: skillContentDigest(), skill_drift_at_close: skillDrift(snapshot) };
     return { snapshot: { ...snapshot, lifecycle }, kind: lifecycle.state };
   }, { allowSkillDrift: abandon });
+  // 终态事件写成之后才删指针：终态是真源，指针只是定位信息。删失败只报 warning——
+  // 残留指针会在下一次 doctor --repository 里被识别为「已终态」并显式回收，不会让 close 失败。
+  let pointer;
+  let failure = null;
+  try {
+    pointer = removeLedgerPointer({ repository: readJson(join(dir, 'contract.json')).environment?.repository, ledgerId: closed.ledger_id });
+  } catch (error) {
+    failure = `删除仓级指针失败：${error instanceof Error ? error.message : String(error)}`;
+    pointer = { removed: false, path: null, git_common_dir: null, reason: failure };
+  }
+  return { ...closed, pointer, ...(failure ? { warnings: [failure] } : {}) };
 }
 function rebuild(options) { const dir = ledgerDir(options); return withLock(dir, () => { const loaded = load(dir); const expected = revision(options); if (expected !== null && loaded.snapshot.revision !== expected) throw new LedgerError(`revision conflict: expected ${expected}, actual ${loaded.snapshot.revision}`); if (loaded.journal.trailing) writeFileSync(join(dir, 'events.ndjson'), loaded.journal.complete, { mode: 0o600 }); atomicJson(join(dir, 'snapshot.json'), loaded.snapshot); return { rebuilt: true, revision: loaded.snapshot.revision }; }); }
+// 仓级指针的分类真源：doctor --repository 与 reclaim-pointers 共用这一个函数，
+// 「报告」与「回收」不可能各自漂移。判定一律回读 state root 的事件链，指针内容只用于定位与交叉核对。
+function classifyPointer(entry) {
+  const base = { path: entry.path, ledger_id: entry.ledger_id };
+  if (entry.error) return { ...base, state_root: null, ledger_dir: null, state: 'malformed', reclaimable: true, detail: `指针文件无法解析：${entry.error}` };
+  const pointer = entry.pointer;
+  const dir = ledgerDirectory(pointer);
+  const common = { ...base, ledger_id: pointer.ledger_id, state_root: pointer.state_root, ledger_dir: dir };
+  if (!existsSync(join(dir, 'events.ndjson'))) {
+    return { ...common, state: 'dangling_state_root', reclaimable: true, detail: `state_root ${pointer.state_root} 下找不到 ledger 事件链 ${join(dir, 'events.ndjson')}` };
+  }
+  let snapshot;
+  try { snapshot = load(realpathSync(dir)).snapshot; }
+  catch (error) { return { ...common, state: 'unreadable', reclaimable: true, detail: `ledger 目录 ${dir} 无法读取：${error instanceof Error ? error.message : String(error)}` }; }
+  // contract_digest 只做交叉核对展示，不参与任何判定：指针的新鲜度不能决定 ledger 的状态。
+  const digestMatches = snapshot.contract_digest === pointer.contract_digest;
+  const drift = skillDrift(snapshot);
+  if (snapshot.lifecycle) {
+    return { ...common, state: 'terminal', reclaimable: true, skill_drift: drift, contract_digest_matches: digestMatches, lifecycle_state: snapshot.lifecycle.state, detail: `ledger 已于 ${snapshot.lifecycle.closed_at} 进入终态 ${snapshot.lifecycle.state}` };
+  }
+  if (drift) {
+    // drift 但未终态：指针必须保留，它还需要有人来 close --abandon 或 re-contract。
+    return { ...common, state: 'skill_drift', reclaimable: false, skill_drift: true, contract_digest_matches: digestMatches, lifecycle_state: null, detail: SKILL_DRIFT_REMEDIATION };
+  }
+  return { ...common, state: 'active', reclaimable: false, skill_drift: false, contract_digest_matches: digestMatches, lifecycle_state: null, detail: null };
+}
+
+function scanPointers(options) {
+  const repository = req(options, 'repository');
+  const found = resolveGitCommonDir(repository);
+  if (!found.common_dir) throw new LedgerError(`--repository ${repository} 无法解析 git common dir：${found.reason}；要求传一个 git 仓库（主 checkout 或 linked worktree 均可）的路径`);
+  const pointers = listLedgerPointers(found.common_dir).map(classifyPointer);
+  return { repository: resolve(repository), git_common_dir: found.common_dir, pointer_dir: pointerDirectory(found.common_dir), pointers };
+}
+
+// 只读：只报告，不删任何东西。回收必须显式走 reclaim-pointers——把删除藏进只读命令里，
+// 等于让一次例行体检悄悄改掉仓库状态。
+function pointerDoctor(options) {
+  const scan = scanPointers(options);
+  const reclaimable = scan.pointers.filter((item) => item.reclaimable);
+  return {
+    mode: 'repository',
+    ...scan,
+    healthy: reclaimable.length === 0,
+    reclaimable: reclaimable.map((item) => item.path),
+    retained_skill_drift: scan.pointers.filter((item) => item.state === 'skill_drift').map((item) => item.path),
+    remediation: reclaimable.length ? `显式回收：agentkit orchestrate ledger reclaim-pointers --repository ${scan.repository}` : null,
+  };
+}
+
+function reclaimPointers(options) {
+  const scan = scanPointers(options);
+  const reclaimed = [];
+  const failures = [];
+  for (const item of scan.pointers.filter((candidate) => candidate.reclaimable)) {
+    try {
+      const result = deleteLedgerPointerFile(item.path);
+      reclaimed.push({ path: item.path, ledger_id: item.ledger_id, state: item.state, removed: result.removed, detail: item.detail });
+    } catch (error) {
+      failures.push({ path: item.path, ledger_id: item.ledger_id, reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return {
+    mode: 'repository',
+    ...scan,
+    reclaimed,
+    failures,
+    retained: scan.pointers.filter((item) => !item.reclaimable).map((item) => ({ path: item.path, ledger_id: item.ledger_id, state: item.state })),
+  };
+}
+
+// `doctor` 子命令的档位路由。两个档位各自是独立函数：doctor() 仍然只诊断单个 ledger，
+// pointerDoctor() 只扫仓级指针，没有一个函数同时管两件事。
+function doctorCommand(options) {
+  if (options.repository !== undefined) {
+    if (options.ledger !== undefined) throw new LedgerError('--ledger 与 --repository 互斥：--ledger 诊断单个 ledger 的事件链，--repository 扫描该仓的全部仓级指针；请只传其中一个');
+    return pointerDoctor(options);
+  }
+  if (options.ledger === undefined) throw new LedgerError('doctor 需要 --ledger <ledger 目录> 或 --repository <仓库路径>：前者诊断单个 ledger，后者扫描仓级指针');
+  return doctor(options);
+}
+
 function doctor(options) { const dir = ledgerDir(options); const loaded = load(dir); const snapshot = loaded.snapshot; const contract = validateContract(readJson(join(dir, 'contract.json'))); const findings = []; if (cycle(snapshot.nodes, snapshot.edges)) findings.push('graph_cycle'); for (const node of Object.values(snapshot.nodes)) { if (node.state === 'running' && !node.dispatch) findings.push(`missing_dispatch:${node.node_id}`); if (node.dispatch) { try { validateDispatch(node.dispatch); } catch { findings.push(`dispatch_invalid:${node.node_id}`); } } try { validateNodeVerification(node, contract); } catch { findings.push(`verification_policy_invalid:${node.node_id}`); } if (node.state === 'passed') { try { const assurance = assuranceForNode(dir, snapshot, node, node.verification_ref); if (assurance !== node.verification_assurance) findings.push(`verification_assurance_mismatch:${node.node_id}`); } catch { findings.push(`verification_gate_invalid:${node.node_id}`); } } if (node.tokens !== null && node.tokens !== undefined) { try { validateTokens(node.tokens); } catch { findings.push(`tokens_invalid:${node.node_id}`); } } if (node.duration_ms !== null && node.duration_ms !== undefined) { try { validateDuration(node.duration_ms); } catch { findings.push(`duration_invalid:${node.node_id}`); } } } for (const item of snapshot.attachments) { const path = join(dir, item.ref); if (!existsSync(path) || sha256(Buffer.from(canonicalJson(readJson(path)), 'utf8')) !== item.digest) findings.push(`attachment_invalid:${item.attachment_id}`); } for (const ref of snapshot.reflection_refs) { const value = readJson(join(dir, ref.ref)); if (envelopeDigest(value, 'reflection_digest') !== value.reflection_digest || value.reflection_digest !== ref.reflection_digest) findings.push(`reflection_invalid:${ref.reflection_id}`); for (const evidence of value.evidence_refs ?? []) { const match = /^events\.ndjson#revision=(\d+)$/u.exec(evidence.id ?? ''); const event = match ? loaded.journal.events.find((item) => item.revision === Number(match[1])) : null; if (!event || sha256(Buffer.from(canonicalJson(event), 'utf8')) !== evidence.digest) findings.push(`reflection_evidence_invalid:${ref.reflection_id}`); } } for (const ref of snapshot.improvement_proposal_refs) { const value = readJson(join(dir, ref.ref)); if (value.lifecycle !== 'proposed' || envelopeDigest(value, 'proposal_digest') !== value.proposal_digest || value.proposal_digest !== ref.proposal_digest) findings.push(`proposal_invalid:${ref.proposal_id}`); } const currentDigest = skillContentDigest(); if (skillDrift(snapshot, currentDigest)) findings.push('skill_drift');
   // 实质性问题单独成列，不进 findings：findings 直接决定 healthy，而 doctor 是只读回看路径，
   // 会读到判据出现之前冻结的契约。在这里判 unhealthy 等于让历史结论随 runtime 版本变化。
-  return { healthy: !loaded.repair && !existsSync(join(dir, '.lock')) && !findings.length, recovery_needed: loaded.repair, findings, substance_warnings: substanceWarnings(contract), frozen_content_digest: snapshot.skill_provenance.content_digest, current_content_digest: currentDigest }; }
-function capabilities() { return { skill: 'orchestrate-subagents', protocol_version: ORCHESTRATION_PROTOCOL_VERSION, runtime_version: ORCHESTRATION_RUNTIME_VERSION, contracts: { task_contract: [1], orchestration_ledger: [1], dispatch_record: [2], controller_recheck_record: [1], reflection_record: [1], improvement_proposal: [1], effective_worker_capability: [1], worker_capability_requirements: [1], review_policy: [1] }, features: ['task-graph', 'barriers', 'revision-lock', 'journal-rebuild', 'stable-attachments', 'verification-obligations', 'evidence-binding-gate', 'contract-projection', 'verification-assurance-audit', 'read-only-node-not-applicable-verification', 'dispatch-audit', 'local-tier-routing', 'evidence-bound-dynamic-reroute', 'worker-capability-preflight', 'lightweight-reflection', 'batch-fuse', 'incident-reflection', 'proposed-only-improvement', 'token-accounting', 'review-budget-gate', 'ledger-terminal-close', 'drift-exempt-abandon', 'drift-visible-status'], content_digest: skillContentDigest() }; }
+  return { mode: 'ledger', healthy: !loaded.repair && !existsSync(join(dir, '.lock')) && !findings.length, recovery_needed: loaded.repair, findings, substance_warnings: substanceWarnings(contract), frozen_content_digest: snapshot.skill_provenance.content_digest, current_content_digest: currentDigest }; }
+function capabilities() { return { skill: 'orchestrate-subagents', protocol_version: ORCHESTRATION_PROTOCOL_VERSION, runtime_version: ORCHESTRATION_RUNTIME_VERSION, contracts: { task_contract: [1], orchestration_ledger: [1], ledger_pointer: [1], dispatch_record: [2], controller_recheck_record: [1], reflection_record: [1], improvement_proposal: [1], effective_worker_capability: [1], worker_capability_requirements: [1], review_policy: [1] }, features: ['task-graph', 'barriers', 'revision-lock', 'journal-rebuild', 'stable-attachments', 'verification-obligations', 'evidence-binding-gate', 'contract-projection', 'verification-assurance-audit', 'read-only-node-not-applicable-verification', 'dispatch-audit', 'local-tier-routing', 'evidence-bound-dynamic-reroute', 'worker-capability-preflight', 'lightweight-reflection', 'batch-fuse', 'incident-reflection', 'proposed-only-improvement', 'token-accounting', 'review-budget-gate', 'ledger-terminal-close', 'drift-exempt-abandon', 'drift-visible-status', 'repository-ledger-pointer', 'explicit-pointer-reclaim'], content_digest: skillContentDigest() }; }
 
-export function main(argv = process.argv.slice(2)) { if (isHelpRequest(argv)) return { help: renderCliHelp('orchestration-ledger.mjs', CLI_SPEC, CLI_NOTES) }; const { command, options, flags } = parseCli(argv); if (command === 'capabilities') return capabilities(); if (command === 'init') return init(options, flags); if (command === 'add-node') return addNode(options); if (command === 'add-edge') return addEdge(options); if (command === 'dispatch-record') return dispatchRecord(options); if (command === 'update') return update(options); if (command === 'attach') return attach(options); if (command === 'batch-init') return batchInit(options); if (command === 'batch-record') return batchRecord(options); if (command === 'batch-status') return batchStatus(options); if (command === 'batch-fuse') return batchFuse(options); if (command === 'record-reflection') return recordReflection(options); if (command === 'propose-improvement') return propose(options); if (command === 'close') return closeLedger(options, flags); if (command === 'status') return status(options); if (command === 'inspect') return status(options); if (command === 'rebuild') return rebuild(options); if (command === 'doctor') return doctor(options); throw new LedgerError('未知 ledger 命令'); }
+export function main(argv = process.argv.slice(2)) { if (isHelpRequest(argv)) return { help: renderCliHelp('orchestration-ledger.mjs', CLI_SPEC, CLI_NOTES) }; const { command, options, flags } = parseCli(argv); if (command === 'capabilities') return capabilities(); if (command === 'init') return init(options, flags); if (command === 'add-node') return addNode(options); if (command === 'add-edge') return addEdge(options); if (command === 'dispatch-record') return dispatchRecord(options); if (command === 'update') return update(options); if (command === 'attach') return attach(options); if (command === 'batch-init') return batchInit(options); if (command === 'batch-record') return batchRecord(options); if (command === 'batch-status') return batchStatus(options); if (command === 'batch-fuse') return batchFuse(options); if (command === 'record-reflection') return recordReflection(options); if (command === 'propose-improvement') return propose(options); if (command === 'close') return closeLedger(options, flags); if (command === 'status') return status(options); if (command === 'inspect') return status(options); if (command === 'rebuild') return rebuild(options); if (command === 'doctor') return doctorCommand(options); if (command === 'reclaim-pointers') return reclaimPointers(options); throw new LedgerError('未知 ledger 命令'); }
 function entry() { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return pathToFileURL(resolve(process.argv[1] ?? '')).href === import.meta.url; } }
 export function runCli(argv = process.argv.slice(2)) {
   try {
