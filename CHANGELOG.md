@@ -4,6 +4,24 @@
 
 ## Unreleased
 
+- ledger 状态发现。`orchestrate ledger init` 在 `contract.environment.repository` 所属仓库的
+  git common dir 下写仓级指针 `<git-common-dir>/agentkit/ledgers/<ledger_id>.json`（第 18 份
+  canonical schema `ledger-pointer-v1`），`close`（含 `--abandon`）成功后删除它。**指针不是真源**：
+  只回答"ledger 在哪"，一切判定仍回读 state root 的事件链；指针只写在 `.git/` 下，不进版本控制。
+  写/删失败一律降级为 warning，不让 `init` 失败后留下半个 ledger。
+- 新增顶层 `agentkit status [--json]`：从 cwd 找 git common dir，读全部指针、回读各 state root，
+  筛出未终态的 ledger，单屏给出当前阶段、活跃 worktree、阻塞项、未覆盖节点与下一步命令。多个时
+  全部列出不猜测；受管 worktree 里用 record 的 `ledger` 字段收窄；`skill_drift` 的单独成组，
+  下一步只给 `close --abandon` 与 re-contract。
+- `orchestrate ledger doctor` 新增 `--repository <path>` 档位，扫描并分类该仓的全部指针；
+  回收是显式的 `orchestrate ledger reclaim-pointers --repository <path>`，不藏在只读的 `doctor` 里。
+  **drift 但未进入终态的 ledger 指针一律保留**：它还需要有人来 `close --abandon` 或 re-contract。
+- `worktree spawn` 新增可选 `--ledger <id>`，写进 record 的 `ledger` 字段供 `agentkit status` 收窄；
+  worktree 域只校验 id 格式，格式规则下沉到 `core/ledger-pointer.mjs`，两个域之间不互相 import。
+- 升级影响：`core/ledger-pointer.mjs` 与第 18 份 schema 都在三个域的内容摘要范围内，本次发版后
+  所有在途的 ledger、loop、verify run 都会 `skill_drift`，请先收尾在途任务。升级前 init 的 ledger
+  没有指针，`agentkit status` 找不到它们，仍需手传 `--ledger <ledger 目录>`。
+
 ## 1.1.1 - 2026-09-08
 
 - 修复 `doctor` 对已回收 record 仍生成需要活树才能收敛的 metadata finding。`stack_parent`、

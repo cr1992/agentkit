@@ -72,6 +72,7 @@ npx skills add https://github.com/cr1992/agentkit.git -g --agent '*' --skill man
 
 ```bash
 agentkit capabilities --json
+agentkit status --json
 agentkit doctor --json
 agentkit worktree --help
 agentkit contract --help

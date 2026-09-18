@@ -75,6 +75,7 @@ script entry points remain as compatibility forwarders; new integrations should 
 
 ```bash
 agentkit capabilities --json
+agentkit status --json
 agentkit doctor --json
 agentkit worktree --help
 agentkit contract --help
