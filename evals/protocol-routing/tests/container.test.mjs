@@ -115,9 +115,27 @@ test('容器自检脚本：不含任何真实会话，只跑回放与仓内自�
   assert.match(script, /node --test evals\/protocol-routing\/tests\/\*\.test\.mjs/u);
   assert.match(script, /--driver replay/u);
   assert.match(script, /selftest-skill-install\.mjs/u);
+  // 会话环境里 PATH 上有没有 agentkit 是 issue #15 缺陷 1 的容器侧闸门：
+  // 镜像里故意不做全局安装，垫片必须由驱动器建，且在容器里也成立。
+  assert.match(script, /selftest-agentkit-shim\.mjs/u);
   assert.match(script, /id -u/u, '自检要留下「以非 root 运行」的证据');
   assert.ok(!script.includes('claude-headless'), '自检不得起真实会话');
   assert.ok(!script.includes('--allow-bypass-permissions'), '自检不得开 bypassPermissions');
+});
+
+test('容器自检脚本里的平凡基线数字与用例表一致（正向 6 条、禁止 5 条）', async () => {
+  const { CASES } = await import('../cases.mjs');
+  const { trivialBaseline } = await import('../lib/report.mjs');
+  const script = buildSelftestScript();
+  const none = trivialBaseline(CASES, 'NONE', 3);
+  const write = trivialBaseline(CASES, 'WRITE', 3);
+  // 自检脚本里那几条 grep 是「README 记载的数字」的唯一机械闸门；
+  // 它们和用例表必须由同一个函数算出来，不能各写各的。
+  assert.ok(script.includes(`| 永远 NONE | ${none.positive.k}/${none.positive.n} | ${none.forbidden.k}/${none.forbidden.n} |`), script);
+  assert.ok(script.includes(`| 正向 | ${none.positive.k}/${none.positive.n} |`));
+  assert.ok(script.includes(`| 禁止 | ${none.forbidden.k}/${none.forbidden.n} |`));
+  assert.ok(script.includes(`| 正向 | ${write.positive.k}/${write.positive.n} |`));
+  assert.ok(script.includes(`| 禁止 | ${write.forbidden.k}/${write.forbidden.n} |`));
 });
 
 test('构建镜像：上下文是 container/ 目录，版本可钉', () => {

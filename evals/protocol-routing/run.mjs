@@ -22,6 +22,17 @@ import { CASES, selectCases } from './cases.mjs';
 import { createHeadlessClaudeDriver, createReplayDriver } from './drivers/index.mjs';
 import { redactSecrets } from './lib/redact.mjs';
 import { buildReport, renderMarkdown } from './lib/report.mjs';
+import { classifyRunValidity } from './lib/run-validity.mjs';
+
+/**
+ * 无效运行（基础设施故障）最多重试几次。1 次正常 + 2 次重试 = 最多 3 次尝试。
+ * 仍然无效就记 `invalid`，不进 k/n，报告里单列一节。判据见 lib/run-validity.mjs。
+ */
+export const MAX_ATTEMPTS = 3;
+/** 重试退避（毫秒），按尝试次序取。故障多半是瞬时网络/证书问题，立刻重试大概率还是同一个错。 */
+export const RETRY_BACKOFF_MS = Object.freeze([5000, 20000]);
+
+const defaultSleep = (/** @type {number} */ ms) => new Promise((done) => { setTimeout(done, ms); });
 
 /** 布尔开关：不吃下一个 token。 */
 const FLAGS = new Set(['quiet', 'allow-bypass-permissions']);
@@ -64,8 +75,44 @@ function makeDriver(options, outDir) {
   throw new Error(`未知驱动器 ${options.driver}，可选：replay, claude-headless`);
 }
 
-/** @param {string[]} argv */
-export async function main(argv) {
+/**
+ * 跑一次会话；判定为「无效运行」时退避重试，最多 MAX_ATTEMPTS 次尝试。
+ *
+ * 为什么重试而不是直接丢掉：无效运行的代价是该用例的 n 变小，而 n 本来就只有 3。
+ * 为什么有上限：现场整段不可用时（证书、限流、断网），无限重试只会把一轮评测拖死在
+ * 第一条用例上，而且烧的是真实额度。
+ *
+ * @param {{
+ *   driver: { runSession: (input: any) => Promise<any> },
+ *   evalCase: any,
+ *   runIndex: number,
+ *   maxAttempts?: number,
+ *   backoffMs?: readonly number[],
+ *   sleep?: (ms: number) => Promise<void>,
+ * }} input
+ * @returns {Promise<{ observation: any, attempts: number, validity: import('./lib/run-validity.mjs').Validity, discarded: Array<import('./lib/run-validity.mjs').Validity> }>}
+ */
+export async function runSessionWithRetries({ driver, evalCase, runIndex, maxAttempts = MAX_ATTEMPTS, backoffMs = RETRY_BACKOFF_MS, sleep = undefined }) {
+  const wait = sleep ?? defaultSleep;
+  /** @type {Array<import('./lib/run-validity.mjs').Validity>} */
+  const discarded = [];
+  let observation = null;
+  let validity = { valid: false, signal: null, reason: '没有跑出任何记录' };
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    observation = await driver.runSession({ evalCase, runIndex, attempt });
+    validity = classifyRunValidity(observation);
+    if (validity.valid) return { observation, attempts: attempt, validity, discarded };
+    discarded.push(validity);
+    if (attempt < maxAttempts) await wait(backoffMs[attempt - 1] ?? backoffMs[backoffMs.length - 1] ?? 0);
+  }
+  return { observation, attempts: maxAttempts, validity, discarded };
+}
+
+/**
+ * @param {string[]} argv
+ * @param {{ sleep?: (ms: number) => Promise<void> }} [hooks] 只给自测注入用：把重试退避换成不睡。
+ */
+export async function main(argv, hooks = {}) {
   const options = parseArgs(argv);
   const runs = Number(options.runs);
   if (!Number.isInteger(runs) || runs < 1) throw new Error('--runs 必须是正整数');
@@ -78,11 +125,16 @@ export async function main(argv) {
   const sessions = [];
   /** @type {string[]} */
   const failures = [];
+  /** @type {Array<{ case_id: number, run: number, attempts: number, signal: string | null, reason: string }>} */
+  const invalidRuns = [];
   for (const evalCase of cases) {
     for (let runIndex = 1; runIndex <= runs; runIndex += 1) {
       try {
-        const observation = await driver.runSession({ evalCase, runIndex });
-        sessions.push({ case_id: evalCase.id, run: runIndex, observation });
+        const attempted = await runSessionWithRetries({ driver, evalCase, runIndex, sleep: hooks.sleep });
+        if (attempted.validity.valid) { sessions.push({ case_id: evalCase.id, run: runIndex, observation: attempted.observation }); continue; }
+        // 无效运行：基础设施故障，不是协议行为。重试用尽后记 `invalid`，**不进 k/n**，
+        // 在报告里单列一节（用例、run、原因摘要、重试次数）。判据见 lib/run-validity.mjs。
+        invalidRuns.push({ case_id: evalCase.id, run: runIndex, attempts: attempted.attempts, signal: attempted.validity.signal, reason: attempted.validity.reason });
       } catch (error) {
         // 单个会话起不来不终止整轮，但也不算「不符合」——没跑出来的会话不是数据点。
         // 它表现为该用例的 n 比 --runs 小，同时列进 report.session_failures，退出码 1。
@@ -95,7 +147,7 @@ export async function main(argv) {
   const firstSession = sessions[0]?.observation;
   if (firstSession?.meta?.skills) meta.skills = firstSession.meta.skills;
   if (!meta.model && firstSession?.meta?.model) meta.model = firstSession.meta.model;
-  const report = { ...buildReport({ cases, runs, driver: meta, sessions }), session_failures: failures, selected_cases: cases.map((item) => item.id), total_cases: CASES.length };
+  const report = { ...buildReport({ cases, runs, driver: meta, sessions, invalidRuns }), session_failures: failures, selected_cases: cases.map((item) => item.id), total_cases: CASES.length };
 
   // 脱敏兜底：报告里不该出现 ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN 的取值。
   // 主防线是「取值只经环境变量传递、command.json 只记键名」，这里只是最后一道字面替换，

@@ -1,0 +1,5 @@
+{"type":"session","case_id":0,"run":0,"host":"synthetic","host_version":"n/a","model":"synthetic-always-write","driver":"replay","skills":{},"note":"平凡基线「永远 WRITE」：第一个工具事件就动了 fixture 仓","initial_repo":{"status":"","head":"2222222222222222222222222222222222222222"}}
+{"type":"tool","seq":1,"tool_name":"Read","tool_input":{"file_path":"src/sum.mjs"},"repo":{"status":"","head":"2222222222222222222222222222222222222222"}}
+{"type":"tool","seq":2,"tool_name":"Edit","tool_input":{"file_path":"src/sum.mjs"},"repo":{"status":" M src/sum.mjs","head":"2222222222222222222222222222222222222222"}}
+{"type":"tool","seq":3,"tool_name":"Bash","tool_input":{"command":"node --test test/sum.test.mjs"},"repo":{"status":" M src/sum.mjs","head":"2222222222222222222222222222222222222222"}}
+{"type":"end","exit_code":0,"error":null}

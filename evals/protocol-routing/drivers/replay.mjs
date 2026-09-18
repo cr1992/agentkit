@@ -18,9 +18,13 @@ export function createReplayDriver({ dir }) {
     /** 回放不具备宿主信息；元数据取自录制文件自己写下的那份。 */
     meta: { driver: 'replay', replay_dir: dir },
     needsFixture: false,
-    async runSession({ evalCase, runIndex }) {
+    async runSession({ evalCase, runIndex, attempt = 1 }) {
+      // `attempt` 参与查找是为了能回放「第 1 次无效、重试后有效」这类序列：
+      // 录一份 `run-<n>-attempt-1.jsonl` 放故障，再录 `run-<n>.jsonl` 放正常会话即可。
       const candidates = [
+        join(dir, `case-${evalCase.id}`, `run-${runIndex}-attempt-${attempt}.jsonl`),
         join(dir, `case-${evalCase.id}`, `run-${runIndex}.jsonl`),
+        join(dir, `attempt-${attempt}.jsonl`),
         join(dir, `case-${evalCase.id}.jsonl`),
         join(dir, 'default.jsonl'),
       ];
