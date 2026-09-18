@@ -960,10 +960,12 @@ test('independent_evidence 的 verification_ref 违规文案点名节点、字�
     const attached = main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'artifact', '--input', f.input('artifact.json', artifactRef())]);
     const artifactDigest = attached.nodes.verified.stable_outputs.find((item) => item.type === 'artifact').digest;
 
-    // ① 完全没给 verification_ref。
+    // ① 完全没给 verification_ref：只点名 Evidence Package，不与 Controller Recheck Record 并列。
     const missingRef = refusal(['update', '--ledger', f.ledger_dir, '--node', 'verified', '--input', f.input('missing-ref.json', { state: 'passed' })]);
     assert.match(missingRef, /node\[verified\]\.verification_ref/u, missingRef);
     assert.match(missingRef, /independent_evidence/u, missingRef);
+    assert.match(missingRef, /Evidence Package/u, missingRef);
+    assert.doesNotMatch(missingRef, /Controller Recheck Record/u, missingRef);
     assert.match(missingRef, /\battach\b/u, missingRef);
     assert.match(missingRef, /\bupdate\b/u, missingRef);
 
@@ -982,10 +984,12 @@ test('controller_recheck 的 verification_ref 违规文案点名节点、字段�
     const attached = main(['attach', '--ledger', f.ledger_dir, '--node', 'reviewed', '--type', 'artifact', '--input', f.input('artifact.json', artifactRef())]);
     const artifactDigest = attached.nodes.reviewed.stable_outputs.find((item) => item.type === 'artifact').digest;
 
-    // ① 完全没给 verification_ref。
+    // ① 完全没给 verification_ref：只点名 Controller Recheck Record，不与 Evidence Package 并列。
     const missingRef = refusal(['update', '--ledger', f.ledger_dir, '--node', 'reviewed', '--input', f.input('missing-ref.json', { state: 'passed' })]);
     assert.match(missingRef, /node\[reviewed\]\.verification_ref/u, missingRef);
     assert.match(missingRef, /controller_recheck/u, missingRef);
+    assert.match(missingRef, /Controller Recheck Record/u, missingRef);
+    assert.doesNotMatch(missingRef, /Evidence Package/u, missingRef);
     assert.match(missingRef, /\battach\b/u, missingRef);
     assert.match(missingRef, /\bupdate\b/u, missingRef);
 
@@ -1003,13 +1007,19 @@ test('completion_ready 未满足时的每条 unmet condition 都点名合规命�
   try {
     const empty = refusal(['close', '--ledger', L]);
     assert.match(empty, /没有任何 required 节点/u, empty);
+    assert.match(empty, /完成判定至少需要一个 required 节点/u, empty);
     assert.match(empty, /\badd-node\b/u, empty);
+    // 陈述性质，不劝诫具体取值：不写"required 默认为 true"之类实现细节，也不写"不要显式设为 false"。
+    assert.doesNotMatch(empty, /不要把 required/u, empty);
+    assert.doesNotMatch(empty, /默认.{0,4}true/u, empty);
 
     main(['add-node', '--ledger', L, '--input', f.input('waiting.json', node({ node_id: 'waiting', objective: '还没跑完' }))]);
     const pending = refusal(['close', '--ledger', L]);
     assert.match(pending, /nodes\[\]\.state/u, pending);
     assert.ok(pending.includes('waiting(state=pending)'), pending);
-    assert.match(pending, /\bupdate\b/u, pending);
+    // 条件在前、动作在后：先说明必须先满足验证要求的证据，再说明满足之后才能 update。
+    assert.match(pending, /要求的证据，才能用 update 把 state 改为 passed/u, pending);
+    assert.doesNotMatch(pending, /逐个推进为 passed/u, pending);
   } finally { f.cleanup(); }
 
   const g = makeFixture({ independent: true });

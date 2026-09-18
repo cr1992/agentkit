@@ -275,14 +275,15 @@ function assuranceForNode(dir, snapshot, node, verificationRef) {
   }
   if (node.stable_outputs.length === 0) throw new LedgerError('实现节点没有稳定交付物，不能 passed');
   if (requirement === 'worker_self_check') return requirement;
-  if (!DIGEST_PATTERN.test(verificationRef ?? '')) throw new LedgerError(`node[${node.node_id}].verification_ref 当前为 ${JSON.stringify(verificationRef ?? null)}：${requirement} 要求它是一个 sha256 attachment digest，精确指向该节点已 attach 的${requirement === 'controller_recheck' ? ' Controller Recheck Record' : ' Evidence Package'}；先用 attach 登记对应记录，再在 update 里带上它的 digest`);
   if (requirement === 'controller_recheck') {
+    if (!DIGEST_PATTERN.test(verificationRef ?? '')) throw new LedgerError(`node[${node.node_id}].verification_ref 当前为 ${JSON.stringify(verificationRef ?? null)}：controller_recheck 要求它是一个 sha256 attachment digest，精确指向该节点已 attach 的 Controller Recheck Record；先用 attach 登记该记录，再在 update 里带上它的 digest`);
     const outputs = controllerOutputs(dir, node);
     const report = attachmentValues(dir, node, 'report').find(({ entry, value }) => entry.digest === verificationRef && value.report_type === 'controller_recheck');
     if (!report) throw new LedgerError(`node[${node.node_id}].verification_ref=${verificationRef} 未指向 Controller Recheck Record：controller_recheck 要求 verification_ref 精确匹配该节点已 attach 的一份 controller_recheck 记录；先用 attach 登记该记录，再在 update 里带上它的 digest`);
     validateControllerRecheck(report.value, snapshot, outputs);
     return requirement;
   }
+  if (!DIGEST_PATTERN.test(verificationRef ?? '')) throw new LedgerError(`node[${node.node_id}].verification_ref 当前为 ${JSON.stringify(verificationRef ?? null)}：independent_evidence 要求它是一个 sha256 attachment digest，精确指向该节点已 attach 的 Evidence Package；先用 attach 登记该 Evidence Package，再在 update 里带上它的 digest`);
   const artifacts = attachmentValues(dir, node, 'artifact').map(({ value }) => validateArtifactRef(value));
   if (artifacts.length !== 1) throw new LedgerError('independent_evidence 节点必须且只能绑定一个 Artifact Ref');
   const evidence = attachmentValues(dir, node, 'evidence').find(({ entry }) => entry.digest === verificationRef);
@@ -365,8 +366,8 @@ function completionGate(dir, snapshot) {
 // 只说清楚哪条判据没过、当前值是什么，不给可照抄的合规值。
 function unmetCompletionConditions(gate) {
   const unmet = [];
-  if (!gate.required_total) unmet.push('nodes 里没有任何 required 节点（required 节点数=0）：空 ledger 与只有非 required 节点的 ledger 都不算完成；用 add-node 登记节点，不要把 required 显式设为 false');
-  if (gate.unpassed_required_nodes.length) unmet.push(`nodes[].state：required 节点尚未 passed —— ${gate.unpassed_required_nodes.join('、')}；用 update 把它们逐个推进为 passed，推进前先满足各自 verification.requirement 要求的证据`);
+  if (!gate.required_total) unmet.push('nodes 里没有任何 required 节点（required 节点数=0）：完成判定至少需要一个 required 节点，空 ledger 与只有非 required 节点的 ledger 都不算完成；用 add-node 登记节点');
+  if (gate.unpassed_required_nodes.length) unmet.push(`nodes[].state：required 节点尚未 passed —— ${gate.unpassed_required_nodes.join('、')}；这些节点要先满足各自 verification.requirement 要求的证据，才能用 update 把 state 改为 passed`);
   if (gate.uncovered_implementation_nodes.length) unmet.push(`summary.uncovered_implementation_nodes：契约声明了 verify-agent-output provider，但这些 required 实现节点没有被任何集成验证节点覆盖 —— ${gate.uncovered_implementation_nodes.join('、')}；需要一个 verification.requirement=independent_evidence 且 artifact_scope=integration_candidate 的已 passed 节点，通过 add-edge 的依赖边可达它们`);
   return unmet;
 }
