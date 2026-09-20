@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFile, execFileSync, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -182,6 +182,18 @@ function manager(cwd, args) {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, WORKTREE_ROOT: join(dirname(cwd), '.worktrees') },
   }).trim();
+}
+
+/** 同 manager，但保留退出码：断言"这条命令仍然以 0 退出"时不能靠 execFileSync 抛不抛异常。
+ * @param {string} cwd @param {string[]} args */
+function managerExit(cwd, args) {
+  const result = spawnSync(process.execPath, [MANAGER, ...args], {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, WORKTREE_ROOT: join(dirname(cwd), '.worktrees') },
+  });
+  return { status: result.status, stdout: String(result.stdout ?? '').trim() };
 }
 
 /** @param {string} cwd @param {string[]} args @param {Record<string,string|undefined>} overrides */
@@ -1027,6 +1039,70 @@ test('doctor 报告 primary Profile 与 default base 的语义漂移', (t) => {
     /status 2|Command failed/,
   );
   assert.equal(git(fixture.repo, ['worktree', 'list', '--porcelain']), before);
+});
+
+test('doctor 把已合入的孤儿本地分支列成 info notice，不动 findings 计数与退出码', (t) => {
+  const fixture = makeRemoteRepo();
+  t.after(fixture.cleanup);
+  // 默认分支由 refs/remotes/origin/HEAD 证明：fixture 的本地分支叫 trunk，写死 main 的实现在这里就会露馅。
+  git(fixture.repo, ['remote', 'set-head', 'origin', 'main']);
+  const baseline = JSON.parse(manager(fixture.repo, ['doctor', '--json']));
+  assert.deepEqual(baseline.notices, []);
+
+  const mainSha = git(fixture.repo, ['rev-parse', 'origin/main']);
+  git(fixture.repo, ['branch', 'merged-orphan', mainSha]);
+  git(fixture.repo, ['branch', 'main', mainSha]);
+  const unmergedSha = git(fixture.repo, ['commit-tree', `${mainSha}^{tree}`, '-p', mainSha, '-m', 'chore: unmerged work']);
+  git(fixture.repo, ['branch', 'unmerged-orphan', unmergedSha]);
+
+  const listed = managerExit(fixture.repo, ['doctor', '--json']);
+  assert.equal(listed.status, 0);
+  const doctor = JSON.parse(listed.stdout);
+  assert.equal(doctor.findings.length, baseline.findings.length, '孤儿分支不得改变 findings 计数');
+  const notice = doctor.notices.find((item) => item.code === 'MERGED_ORPHAN_LOCAL_BRANCH');
+  assert.deepEqual(
+    doctor.notices.filter((item) => item.code === 'MERGED_ORPHAN_LOCAL_BRANCH').map((item) => item.branch),
+    ['merged-orphan'],
+    '默认分支本身、当前检出分支与未合入分支都不得列出',
+  );
+  assert.equal(notice.severity, 'info');
+  assert.equal(notice.head_sha, mainSha);
+  assert.equal(notice.default_branch, 'origin/main');
+  assert.equal(notice.cleanup_command, 'git branch -d merged-orphan');
+  assert.equal(doctor.findings.some((item) => item.severity === 'info'), false);
+
+  const text = managerExit(fixture.repo, ['doctor']);
+  assert.equal(text.status, 0);
+  assert.match(text.stdout, new RegExp(`doctor findings=${doctor.findings.length}(?!\\d)`));
+  assert.match(text.stdout, /doctor notices=1/);
+  assert.match(text.stdout, /\[info\] MERGED_ORPHAN_LOCAL_BRANCH git branch -d merged-orphan/);
+
+  // record 登记过的分支：目录已移除，分支仍在，归 reclaim/archive 的分支清理管，不算孤儿。
+  manager(fixture.repo, [
+    'spawn', 'recorded-branch-tree', '--agent', 'codex', '--agent-id', 'orphan-branch-thread', '--purpose', 'record owns this branch',
+  ]);
+  const tracked = JSON.parse(manager(fixture.repo, ['list', '--json'])).worktrees.find((row) => row.kind === 'TRACKED');
+  git(fixture.repo, ['worktree', 'remove', tracked.path]);
+  // 被 worktree 检出但没有 record 的分支同样不算孤儿。
+  git(fixture.repo, ['worktree', 'add', '-b', 'checked-out-orphan', join(fixture.sandbox, 'checked-out-tree'), mainSha]);
+
+  const after = JSON.parse(manager(fixture.repo, ['doctor', '--json']));
+  assert.deepEqual(
+    after.notices.filter((item) => item.code === 'MERGED_ORPHAN_LOCAL_BRANCH').map((item) => item.branch),
+    ['merged-orphan'],
+  );
+  assert.equal(after.findings.some((item) => item.code === 'UNTRACKED_WORKTREE'), true, 'worktree 维度的既有 finding 不受影响');
+});
+
+test('无法证明默认分支时 doctor 跳过孤儿分支清点并说明原因', (t) => {
+  const fixture = makeRepo();
+  t.after(fixture.cleanup);
+  git(fixture.repo, ['branch', 'merged-orphan', 'trunk']);
+  const doctor = JSON.parse(manager(fixture.repo, ['doctor', '--json']));
+  assert.equal(doctor.notices.some((item) => item.code === 'MERGED_ORPHAN_LOCAL_BRANCH'), false);
+  const skipped = doctor.notices.find((item) => item.code === 'MERGED_ORPHAN_BRANCH_SCAN_SKIPPED');
+  assert.equal(skipped.severity, 'info');
+  assert.match(skipped.detail, /source=head/);
 });
 
 test('Profile semantic 模式拒绝纯编号命名，并让 doctor 报告历史漂移', (t) => {
