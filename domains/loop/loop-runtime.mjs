@@ -30,7 +30,7 @@ import { createDigestKit } from '../../core/digest.mjs';
 import { distributionDigest, skillDistributionRoots } from '../../core/content-digest.mjs';
 import { contractSubstance, coverageSubstance, formatSubstanceErrors, profileSubstance, substanceWarnings } from '../../core/contract-substance.mjs';
 
-export const RUNTIME_VERSION = '1.0.0';
+export const RUNTIME_VERSION = '1.1.0';
 const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'run-agent-verify-loop');
 // 摘要覆盖 Skill 目录 + 共享 core + canonical schemas：执行真正依赖的全部分发内容。
 // PACKAGE_ROOT 是模块常量，传入自定义 root 只替换 Skill 目录那一段，便于测试摘要与安装路径无关。

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { distributionDigest, skillDistributionRoots } from '../../core/content-digest.mjs';
 
 export const ORCHESTRATION_PROTOCOL_VERSION = '1.1.0';
-export const ORCHESTRATION_RUNTIME_VERSION = '1.7.0';
+export const ORCHESTRATION_RUNTIME_VERSION = '1.8.0';
 
 const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'orchestrate-subagents');
 // 摘要覆盖 Skill 目录 + 共享 core + canonical schemas：执行真正依赖的全部分发内容。

@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## 1.2.0 - 2026-09-20
+
 - 升级影响：本批改动多数触及 `core/`、`schemas/`、各域 `domains/<域>/` 或 `docs/<域>/`，升级后
   所有升级前 init 的在途 ledger、loop、verify run 都会判定为 `skill_drift`，需要先收尾在途任务
   再升级。升级后 drift 的 ledger 可用 `agentkit orchestrate ledger close --abandon --reason <text>`
@@ -101,6 +103,14 @@
   两种真实评测运行方式——GitHub Actions + `ANTHROPIC_API_KEY`，或本机一次性容器
   （`evals/protocol-routing/container/`）+ `claude setup-token` 生成的订阅 token；容器以只读挂载
   仓库、非 root 用户、`--cap-drop ALL` 等收紧运行。均不进发布包，不在任何 Skill 内容摘要范围内。
+- 本批各域新增用户可见能力，同步各升一个 minor：`orchestrate-subagents` 的
+  `ORCHESTRATION_RUNTIME_VERSION` 1.7.0 → 1.8.0（`ledger close`、`reclaim-pointers`、`status` 新键）；
+  `contract-tool` 的 `capabilities().runtime_version` 1.1.0 → 1.2.0（`scaffold`、`interview-*`）；
+  `verify-agent-output` 的 `RUNTIME_VERSION` 1.3.0 → 1.4.0（实质性检查、`warnings` /
+  `substance_warnings`）；`run-agent-verify-loop` 的 `RUNTIME_VERSION` 1.0.0 → 1.1.0（同上）；
+  `manage-worktrees` 的 `runtime_version` 1.4.0 → 1.5.0（`spawn --ledger`）。
+  `orchestration-reflection`、`worker-capability-preflight`、`review-budget` 本批未改行为，
+  runtime version 不动。
 
 ## 1.1.1 - 2026-09-08
 
