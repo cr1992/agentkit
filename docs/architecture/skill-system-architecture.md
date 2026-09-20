@@ -292,30 +292,38 @@ controller 按任务事实逐项启用能力的判据表，真源是
 
 ### 6.2 能力发现
 
-每个脚本运行时提供：
+能力发现的统一命令是：
 
 ~~~text
-<runtime> capabilities --json
+agentkit capabilities --json
 ~~~
 
-最小输出：
+顶层输出 `cli`、`cli_version`、`runtime_bundle_digest` 与 `skills`；`skills` 下原样保留四个域各自
+`capabilities()` 的载荷。载荷的真源是各域运行时的 `capabilities()`：
+[`domains/orchestrate/orchestration-ledger.mjs`](../../domains/orchestrate/orchestration-ledger.mjs)、
+[`domains/worktree/worktree-mgr.mjs`](../../domains/worktree/worktree-mgr.mjs)、
+[`domains/verify/verification-runtime.mjs`](../../domains/verify/verification-runtime.mjs)、
+[`domains/loop/loop-runtime.mjs`](../../domains/loop/loop-runtime.mjs)；四个域也各自保留
+`capabilities` 子命令，供安装矩阵和兼容层不经 CLI 路由直接复验。本节不复制载荷，只记录哪个字段
+出现在哪些域——下表由 [`tests/architecture-consistency.test.mjs`](../../tests/architecture-consistency.test.mjs)
+对实际输出双向反查，字段出现范围一变即失败。
 
-~~~json
-{
-  "skill": "verify-agent-output",
-  "protocol_version": "1.0.0",
-  "runtime_version": "1.0.0",
-  "contracts": {
-    "task_contract": [1],
-    "artifact_ref": [1],
-    "evidence_package": [1]
-  },
-  "features": ["git-artifact", "l0", "l1", "immutable-evidence"]
-}
-~~~
+| 字段 | 出现范围 | 含义 |
+| --- | --- | --- |
+| `skill` | 四域 | 该域对应的 Skill 名 |
+| `runtime_version` | 四域 | 该域脚本实现的版本 |
+| `contracts` | 四域 | 该域能读写的 envelope 及各自可接受的 schema major |
+| `features` | 四域 | 该域已落地的能力标签，调用方按标签判断可用性 |
+| `content_digest` | 四域 | 该域实际执行所依赖的分发内容摘要 |
+| `protocol_version` | `orchestrate-subagents` | 单值跨实现兼容语义 |
+| `protocol_versions` | `verify-agent-output` | 可接受的跨实现兼容语义列表 |
+| `providers` | `run-agent-verify-loop` | Loop 可冻结的验证 provider 取值 |
+
+协议版本字段按域各自命名与取形，`manage-worktrees` 不报告协议版本：调用方对该域只能按
+`runtime_version` 与 `content_digest` 判断兼容性，不能假设四域有统一的协议版本字段。
 
 controller 或宿主只能在 Skill 已被正常加载后调用 `PATH` 上的 `agentkit`；runtime 不自行扫描兄弟
-Skill 目录或全局安装位置。域级命令也可以通过包内固定入口直接执行，供安装矩阵和兼容层复验。
+Skill 目录或全局安装位置。
 
 `agentkit capabilities --json` 在保留各域原始载荷之外输出 `runtime_bundle_digest`，精确标识同一
 tarball 内的 CLI、core、domains、schema、按需文档、四个 shell 与 `shell-manifest.json`。摘要算法的
@@ -325,9 +333,9 @@ tarball 内的 CLI、core、domains、schema、按需文档、四个 shell 与 `
 重复该门禁。版本失配时写操作 fail closed，`status/inspect/doctor` 等只读诊断仍可运行。诊断项的真源
 是 [`bin/cli.mjs`](../../bin/cli.mjs)。
 
-`protocol_version` 表示跨实现兼容语义，`runtime_version` 表示脚本实现版本，Skill tree
-`content_digest` 表示该域实际执行所依赖的分发内容。三者必须分别报告；软链安装不能依赖 Git 信息、
-mtime 或路径字符串识别版本，CLI 入口判断也必须对调用路径和模块路径做 realpath 归一化。
+跨实现兼容语义、脚本实现版本与分发内容摘要是三个互不替代的维度，谁都不能代表另外两个。软链安装
+不能依赖 Git 信息、mtime 或路径字符串识别版本，CLI 入口判断也必须对调用路径和模块路径做 realpath
+归一化。
 
 调用方必须在合同 freeze 前完成版本交集判断，并把最终 provider 写入合同。没有交集时可以在
 freeze 前选择 standalone provider 或 fail closed；合同 freeze 后发现 provider 缺失、版本不兼容
@@ -335,24 +343,32 @@ freeze 前选择 standalone provider 或 fail closed；合同 freeze 后发现 p
 
 ### 6.3 Provider 选择
 
-公共合同显式记录 provider：
+公共合同里记录 provider 的字段只有三处，取值域的真源是
+[`schemas/task-contract-v1.schema.json`](../../schemas/task-contract-v1.schema.json) 与
+[`domains/orchestrate/contract-tool.mjs`](../../domains/orchestrate/contract-tool.mjs) 的
+`validateContract`：
 
-~~~yaml
-extensions:
-  orchestration:
-    provider: orchestrate-subagents | host-native
-  isolation:
-    provider: manage-worktrees | caller-supplied | none
-  verification:
-    provider: verify-agent-output | embedded | self-check
-  loop:
-    provider: run-agent-verify-loop | none
-~~~
+| 合同字段 | 取值 | 决定什么 |
+| --- | --- | --- |
+| `environment.isolation` | `shared_tree` / `worktree` / `caller_supplied` | 工作区隔离由谁提供 |
+| `extensions.verification.provider` | `none` / `verify-agent-output` / `run-agent-verify-loop` | 验收由谁提供 |
+| `skill_set[].provider_mode` | `primary` / `optional` | 某个 Skill 是必需 provider 还是可选增强 |
+
+`extensions` 里带校验的键只有 `verification`、`review_policy` 与 `projection`，没有独立的编排键或
+隔离键：编排由当前 controller 承担，不靠合同字段选择；隔离写在 `environment.isolation`。
+`extensions` 本身是开放对象，运行时另写一个未进 schema 的 `extensions.interview`（契约访谈的轮次
+与作答记录，
+真源是 [`domains/orchestrate/contract-interview.mjs`](../../domains/orchestrate/contract-interview.mjs)）；
+唯一硬约束是 extension 键不得与公共字段同名。Loop 内部用 `verify-agent-output` 还是 `embedded`
+记录，由 `agentkit loop init --provider` 在 Loop 冻结时选定，不进入公共合同——真源是
+[`domains/loop/loop-runtime.mjs`](../../domains/loop/loop-runtime.mjs)。
+上述键集与取值由 [`tests/architecture-consistency.test.mjs`](../../tests/architecture-consistency.test.mjs)
+对 schema、`validateContract` 与运行时实际写入的键双向反查。
 
 Provider 只能由 controller 在 freeze 前选择。worker、implementer、verifier 和专项 runtime
 不能在运行中自行升级权限、切换 provider 或降低 assurance。
-`self-check` 只表示普通 L2 自查，不路由到 `verify-agent-output`，也不能产生 Evidence 或满足
-Loop 的独立 L1 条件。
+`embedded` 只产生 Embedded Verification Record，不能导出为 Evidence，也不满足需要独立 L1 的
+验收条款；同一 implementer 上下文里的自查同样不构成独立验收。
 
 ### 6.4 触发优先级
 
@@ -645,16 +661,21 @@ Evidence pass 只是节点验收输入，最终任务完成仍由 controller 判
 | Loop 无 verifier provider | embedded L0 + host reviewer，脚本保证 Loop 状态 | 消费标准 Evidence，获得更强绑定与复用 |
 | Skill 无 orchestrator | 当前会话直接担任 controller | 全局任务图、路由、台账和最终验收统一 |
 
-建议 Evidence / Loop 输出记录：
+保证等级没有统一的 `assurance` envelope。它分别记在下面这几个字段里，每个字段各有自己的载体和
+取值域，读的时候要分开读——把它们并成一个整体，就会拿一处的高保证去替另一处作答：
 
-~~~yaml
-assurance:
-  orchestration: host_direct | orchestrated
-  isolation: none | caller_supplied | managed_worktree
-  verification: none | host_protocol | runtime_bound
-  recovery: none | local_journal
-  limitations: []
-~~~
+| 字段 | 载体 | 取值 | 记录什么 |
+| --- | --- | --- | --- |
+| `environment.isolation` | Task Contract | `shared_tree` / `worktree` / `caller_supplied` | 合同冻结时约定的工作区隔离 |
+| `provenance.isolation_assurance` | [Evidence Package](../../schemas/evidence-package-v1.schema.json) | `host_reported` / `user_relayed` | 独立验收的隔离凭据来自宿主还是用户中继 |
+| `provenance.limitations` | [Evidence Package](../../schemas/evidence-package-v1.schema.json) | 字符串数组 | 这次验收没能证明的事，由 verifier 运行时按实际情况追加 |
+| `independent_context.assurance` | [Embedded Verification Record](../../schemas/embedded-verification-record-v1.schema.json) | `host_reported` / `user_relayed` | embedded 模式下 reviewer 独立性的凭据来源 |
+| `verification_assurance` | [Orchestration Ledger](../../schemas/orchestration-ledger-v1.schema.json) 的 node | `none` / `worker_self_check` / `controller_recheck` / `independent_evidence` / `not_applicable` | 单个节点这次实际拿到的验收等级 |
+| `network_isolation_assurance` | verify run / loop 的 state snapshot | `host_reported` / `not_required` | 网络隔离是宿主声明的还是本就不要求 |
+
+字段名与取值由 [`tests/architecture-consistency.test.mjs`](../../tests/architecture-consistency.test.mjs)
+对上述 schema 与 [`domains/loop/loop-runtime.mjs`](../../domains/loop/loop-runtime.mjs)、
+[`domains/verify/verification-runtime.mjs`](../../domains/verify/verification-runtime.mjs) 双向反查。
 
 保证等级只允许如实降低，不允许用文案把低保证模式包装成高保证模式。
 
@@ -713,117 +734,43 @@ assurance:
 
 ## 13. 测试策略
 
-### 13.1 单 Skill 测试
+### 13.1 门禁入口
 
-`orchestrate-subagents`：
+`npm test` 先跑 [`tools/validate-skills.mjs`](../../tools/validate-skills.mjs)，再用 `node --test` 跑四组用例：
 
-- contract normalize / digest；
-- task graph revision；
-- worker 状态迁移；
-- reviewer view 去污染；
-- batch ledger、跨独立 Loop 失败指纹与批级熔断恢复；
-- 合同 / 路由 reflection 与改进候选只写 proposed；
-- orphan / barrier / resource doctor；
-- 宿主能力缓存和模型路由。
-- 软链安装路径下所有 CLI 入口真实执行而不是静默 exit 0；
-- worker effective capability binding / expiry、拒绝与审批通道故障分类、无需能力时不强制探针；
-- 轻量 Reflection 不依赖 ledger，仍校验证据摘要并只生成 proposed Proposal；
-- 模型发现不可用、用户显式不可验证与宿主默认未暴露三种状态不混写。
-- reviewer 预算按 Artifact 限制 primary/escalation 数量，拒绝重复 lens、smoke 前 review、超预算输入和
-  safety stop；escalation 必须有可验证触发原因；
-- 四个 `SKILL.md` 与 frontmatter description 的单项/总字符预算使用 tokenizer-independent 测试守住；
-  reference 路由按真实操作场景加载，避免每次触发支付异常恢复与其他模式的上下文成本；
+| glob | 覆盖 |
+| --- | --- |
+| `tests/*.test.mjs` | 跨域集成、分发载荷、文档与架构反查 |
+| `domains/*/*.test.mjs` | 四个域运行时的单域用例 |
+| `scripts/*.test.mjs` | 仓库维护脚本 |
+| `evals/*/tests/*.test.mjs` | 协议路由评测台自身的用例 |
 
-`manage-worktrees`：
+这张表的机器真源是 [`package.json`](../../package.json) 的 `test` 脚本。本节不复制用例清单：每个套件
+实际跑了什么，以文件里 `test('…')` 的标题为准——手抄的清单会和 `tests/` 分叉，标题不会。
 
-- 继续运行现有 manager、scan、profile、trace、provider 测试；
-- 增加 Artifact Ref 和 Worktree Binding schema；
-- 保证 `task_status` / `worktree_state` 双状态无损 round-trip；
-- SHA-1 / SHA-256 repository；
-- owner epoch、drift 和回收边界。
-- manager-owned rebase 的成功、冲突 continue、abort 与 crash recovery；pending 时交付命令 fail-closed；
-- retarget 祖先门禁、stack parent drift 诊断、旧 Artifact 失效；
-- `touch --mr --watch-target` 的原子结构化登记与 URL 校验；
-- incident reflection 不泄露凭证、原始日志或未授权路径；
-- batch-result 的 SHA/指纹/target/有序输入/Evidence 绑定、终态不可覆盖、passed step 门禁；
-- evidence archive 的 HEAD CAS、ref collision/readback、dirty/stash/Git 中间态/submodule、幂等恢复与精确恢复；
-- `--pushed` 必须有候选 branch 外的持久 ref，原有 pushed/superseded 回收路径保持兼容；
+### 13.2 覆盖面按目录反查
 
-`verify-agent-output`：
+用例按真源所在位置就近放置，含用例的目录是
+[`tests/`](../../tests)、[`domains/orchestrate/`](../../domains/orchestrate)、
+[`domains/worktree/`](../../domains/worktree)、[`domains/verify/`](../../domains/verify)、
+[`domains/loop/`](../../domains/loop)、[`scripts/`](../../scripts) 与
+[`evals/protocol-routing/tests/`](../../evals/protocol-routing/tests)。
 
-- 合同、Verification Profile schema / 迁移映射与 Artifact digest；
-- smoke → L1 → final 状态机；
-- protected path；
-- argv 执行与环境 allowlist；
-- 预写脱敏和内容寻址日志；
-- Evidence 不变量；
-- 漏检、误报、Profile gap reflection 与 Evidence 相互独立且不可回写；
-- 无独立上下文时 abort；用户中继第二会话时记录 provenance；
-- 未知 `contract_item_id` 与非法 path grammar 拒绝；
-- aborted / stale_precondition；
-- crash recovery。
-- `prepare-run` 对源输入只读、自动摘要、前置失败不创建 run；
-- `record-review --stdin` 的 digest 回填、严格 JSON、互斥与大小门禁；
-- compact / verbose CLI 输出与每个子命令 `--help`；
+[`tests/architecture-consistency.test.mjs`](../../tests/architecture-consistency.test.mjs) 对这三件事反查：
+上表的 glob 与 `package.json` 逐字相同；每个含用例的目录都在本节留有可解析指针；仓库里不存在
+任何 `*.test.mjs` 落在 glob 之外——落在外面的用例文件永远不会被门禁跑到，等于没有。
 
-`run-agent-verify-loop`：
+### 13.3 协议路由评测
 
-- revision / lock 冲突；
-- `/run-agent-verify-loop + 目标` 生成合同草案、缺验收时不启动；
-- 可选 `goal_ref` 绑定不改变 Loop / Goal completion 边界；
-- embedded record provider，且不能导出为 Evidence；
-- embedded adapter 与 Review Result v1 兼容，且不重定义 verdict；
-- Evidence provider；
-- contract / artifact / run 绑定；
-- state-root 级 Evidence run ID 原子防重放；
-- max iterations；
-- identical failure signature；
-- verification abort；
-- human gate；
-- completed / stopped 自动生成 Convergence Report；
-- reflection 和 improvement proposal 不改变当前 iteration / fuse / verdict；
-- snapshot rebuild。
+§13.1 的门禁只验证机械不变量。「同一个真实请求会不会被路由到正确的 Skill」由独立的评测台回答，
+用例真源是 [`evals/protocol-routing/cases.mjs`](../../evals/protocol-routing/cases.mjs)：正向用例断言
+会话确实走到某个 `agentkit` 命令，禁止用例断言整条会话没有发起被禁动作。当前共 `11` 条，其中正向
+`6` 条、禁止 `5` 条；这三个数字由
+[`tests/architecture-consistency.test.mjs`](../../tests/architecture-consistency.test.mjs) 对 `cases.mjs`
+反查，请求原文不在本节复制。
 
-### 13.2 组合测试
-
-- orchestrator 使用 managed worktree 派发多个 writer；
-- worktree Artifact Ref 进入 verifier；
-- verifier Evidence 进入 Loop；
-- Loop 终态回到 orchestrator；
-- provider 缺失时只允许 freeze 前选择 standalone；freeze 后 abort；
-- embedded record 不能被通用 Evidence consumer 接受；
-- schema 无交集时拒绝；
-- 同一个 Evidence run 重复消费时拒绝；
-- 分支在 L1 期间移动；
-- controller 中断后从各自 journal 恢复；
-- 四个 Skill 安装顺序任意。
-- 单 Artifact、单 reviewer 不误触发完整 orchestrator；
-- 批量条款只在 orchestration ledger 和 batch fuse 已通过恢复测试后迁移；
-- 发布文档与四个 Skill 的架构摘要一致；
-- Skill 内容摘要被合同冻结，运行中 Skill 文件变化触发 abort / re-contract；
-- Skill tree manifest 在不同安装绝对路径下产生相同 content digest；
-- Reflection Record 只能引用不可变证据，不能修改旧 Evidence；
-- evidence ref digest 不匹配时拒绝高置信 reflection；
-- Improvement Proposal 在四个执行 Skill 中只能停留在 proposed；
-- proposal 命令不得写入 Skill 安装目录或业务仓库；
-
-### 13.3 Forward tests
-
-至少覆盖以下真实请求：
-
-- “让两个 Agent 并行调查，不要改文件”；
-- “给两个写任务分别建 worktree”；
-- “只独立 review 这个 SHA，一次失败就停”；
-- “只有当前实现者上下文，不能伪造独立验收 pass”；
-- “一个 Agent 修，另一个验，最多三轮”；
-- “没有 verifier Skill，使用 embedded record 运行明确低保证的 Loop”；
-- “同时装了四个 Skill，但这个小任务不要全开”；
-- “验证通过，但发布仍需我确认”。
-- “Skill 的规则与仓库真源冲突，记录证据并停止重签，不能现场改 Skill”；
-- “用户纠正了 Agent，形成低噪声 reflection 和待评估改进候选”；
-- “Loop 成功但过程低效，生成收敛报告而不污染 Artifact verdict”。
-- “Kiro 类宿主 schema 不暴露 worker 权限，先按节点需求探测；审批通道故障后停止同类派发”。
-- “轻量编排发现 Skill 缺口，不补造 ledger 也能形成有证据 Reflection”。
+评测台需要真实模型会话，按次计费，因此不进 `npm test`；运行方式与判据见
+[`evals/protocol-routing/README.md`](../../evals/protocol-routing/README.md)。
 
 ## 15. 反思、沉淀与受控改进
 
@@ -966,8 +913,12 @@ v1 不包含自动聚类、自动改 Skill、自动 accepted、自动发布或�
   [`tests/package-distribution.test.mjs`](../../tests/package-distribution.test.mjs) 锁定。本地实现必须
   实现 RFC 8785 本身，不得另立一套 canonical 语义：重复 key 拒绝与跨 Skill digest 兼容分别由
   `domains/verify/verification-runtime.test.mjs` 和
-  [`tests/content-digest.test.mjs`](../../tests/content-digest.test.mjs) 守住，RFC 官方测试向量仍需进入
-  回归集。
+  [`tests/content-digest.test.mjs`](../../tests/content-digest.test.mjs) 守住；RFC 8785 正文 §3.2.2、
+  §3.2.3、§3.2.4 与附录 B 的官方测试向量在
+  [`tests/jcs-rfc8785.test.mjs`](../../tests/jcs-rfc8785.test.mjs) 内联为回归集。严格档（verify / loop）
+  实现 RFC 的两条 MUST-error 条款，拒绝非有限 number 与未配对代理对；宽松档
+  （orchestrate / content digest）刻意保留 `JSON.stringify` 口径，把这两类输入分别变成 `null`
+  与转义后放行，该偏离同样由上述向量锁定，收敛严格度是一次独立决策。
 - **ADR-6**：Reflection / Proposal 的默认 state root、保留周期、跨项目去重键和用户导出授权。
 
 未决 ADR 可以影响实现细节，但不能推翻“独立可用、组合增强、脚本保证机械不变量”的总体边界。
