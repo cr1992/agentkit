@@ -1,25 +1,46 @@
 #!/usr/bin/env node
 // @ts-check
 // PostToolUse 探针：每个工具事件结束后，对 fixture 仓取一次 `git status --porcelain` + `HEAD`，
-// 追加一行 JSON 到探针文件。`WRITE` 判据的原始数据只来自这里，不解析命令文本。
+// 需要时再对台账取一次 `orchestrate ledger status`，追加一行 JSON 到探针文件。
+// `WRITE` 判据与「发起那一下之前台账处在什么状态」的原始数据都只来自这里，不解析命令文本。
 //
 // 之所以用宿主 hook 而不是轮询：hook 在工具返回之后、下一个工具开始之前同步触发，
 // 快照与事件严格一一对应；轮询的采样点落在两个事件之间，无法归因到具体事件。
 // 代价是顺序按**完成**时间而非**发起**时间排，并行工具调用时两者可能不一致——见 README 已知盲区。
 //
+// 台账快照只在 `PROTOCOL_ROUTING_LEDGER` 非空时取（第 7、10、11 条那样带台账的现场）；
+// 取不到就写 null，判定侧按 fail-closed 处理（见 lib/ledger-probe.mjs）。
+//
 // 用法：node probe.mjs <fixture 仓> <探针文件>
 // 也接受环境变量 PROTOCOL_ROUTING_REPO / PROTOCOL_ROUTING_PROBE；argv 优先。
+// 台账相关：PROTOCOL_ROUTING_LEDGER（台账目录）、PROTOCOL_ROUTING_AGENTKIT（被测 checkout 的入口）。
 
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
+import { summarizeLedgerStatus } from './ledger-probe.mjs';
 
 const repo = process.argv[2] ?? process.env.PROTOCOL_ROUTING_REPO;
 const probe = process.argv[3] ?? process.env.PROTOCOL_ROUTING_PROBE;
+const ledgerDir = process.env.PROTOCOL_ROUTING_LEDGER;
+const agentkitBin = process.env.PROTOCOL_ROUTING_AGENTKIT;
 
 const git = (/** @type {string[]} */ args) => {
   try { return execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim(); }
   catch { return null; }
 };
+
+/** 台账快照；没配台账、或这一刻读不出来（比如会话正把它改到一半）都返回 null。 */
+function ledgerSnapshot() {
+  if (!ledgerDir || !agentkitBin) return null;
+  try {
+    const raw = execFileSync(process.execPath, [agentkitBin, 'orchestrate', 'ledger', 'status', '--ledger', ledgerDir], {
+      encoding: 'utf8',
+      maxBuffer: 32 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return summarizeLedgerStatus(JSON.parse(raw));
+  } catch { return null; }
+}
 
 let payload = {};
 try {
@@ -34,6 +55,7 @@ if (repo && probe) {
     tool_name: payload.tool_name ?? null,
     tool_use_id: payload.tool_use_id ?? payload.toolUseID ?? null,
     repo: { status: git(['status', '--porcelain']), head: git(['rev-parse', 'HEAD']) },
+    ledger: ledgerSnapshot(),
   })}\n`);
 }
 

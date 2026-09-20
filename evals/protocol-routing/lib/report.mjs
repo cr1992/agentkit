@@ -77,7 +77,7 @@ export function buildReport({ cases, runs, driver, sessions, invalidRuns = [] })
   for (const session of sessions) {
     const evalCase = byCase.get(session.case_id);
     if (!evalCase) continue;
-    const classification = classify({ initial_repo: session.observation.initial_repo, events: session.observation.events });
+    const classification = classify({ initial_repo: session.observation.initial_repo, initial_ledger: session.observation.initial_ledger ?? null, events: session.observation.events });
     const options = { payloads: session.observation.payloads };
     const verdict = evalCase.assert(classification, options);
     perCase.get(evalCase.id)?.push({

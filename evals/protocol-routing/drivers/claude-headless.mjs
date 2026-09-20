@@ -25,8 +25,10 @@ import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { AGENTKIT_BIN, agentkitJson } from '../lib/agentkit.mjs';
 import { createAgentkitShim, prependToPath } from '../lib/agentkit-shim.mjs';
 import { createFixtureRepo, repoSummary } from '../lib/fixture-repo.mjs';
+import { summarizeLedgerStatus } from '../lib/ledger-probe.mjs';
 import { buildPrecondition, renderPrompt } from '../lib/preconditions.mjs';
 import { installSkills } from '../lib/skill-install.mjs';
 import { serializeObservation } from '../lib/observation.mjs';
@@ -112,7 +114,7 @@ function pairEvents(uses, probes) {
   uses.forEach((use, index) => {
     const probe = (use.id && byId.get(use.id)) || positional[cursor++];
     if (!probe) { out.unpaired += 1; return; }
-    out.events.push({ seq: index + 1, tool_name: use.tool_name, tool_input: use.tool_input, repo: probe.repo });
+    out.events.push({ seq: index + 1, tool_name: use.tool_name, tool_input: use.tool_input, repo: probe.repo, ledger: probe.ledger ?? null });
   });
   return out;
 }
@@ -123,6 +125,17 @@ function pairEvents(uses, probes) {
  * 都得看载荷；内联一份是为了让 observation.jsonl 自带足够信息，离开这台机器也能复判。
  * 读不到就留空——正向用例因此不给分，禁止用例因此按违规处理（见 cases.mjs）。
  */
+/**
+ * 会话开始前的台账快照。没有台账的现场返回 null。
+ * 和探针用的是同一个口径函数，所以「第一个事件之前」与「第 n 个事件之前」形状一致。
+ * @param {string | undefined} ledgerDir
+ */
+function initialLedgerSnapshot(ledgerDir) {
+  if (!ledgerDir) return null;
+  try { return summarizeLedgerStatus(agentkitJson(['orchestrate', 'ledger', 'status', '--ledger', ledgerDir])); }
+  catch { return null; }
+}
+
 function collectPayloads(events) {
   /** @type {Record<string, unknown>} */
   const payloads = {};
@@ -176,6 +189,7 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
       const prompt = renderPrompt(evalCase.prompt, precondition.vars);
       writeFileSync(join(session, 'prompt.txt'), `${prompt}\n`);
       const initialRepo = repoSummary(repo);
+      const initialLedger = initialLedgerSnapshot(precondition.vars.LEDGER_DIR);
 
       // --add-dir 只开到前置状态真正用到的 state root：会话不该顺手读到自己的 settings.json
       // 与 skill 安装目录，那会把探针本身变成上下文的一部分。
@@ -201,6 +215,8 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
         XDG_CONFIG_HOME: join(home, '.config'),
         PROTOCOL_ROUTING_REPO: repo,
         PROTOCOL_ROUTING_PROBE: probeFile,
+        // 探针要对台账取快照的现场（第 7、10、11 条）才有这两项；没有台账时探针写 null。
+        ...(precondition.vars.LEDGER_DIR ? { PROTOCOL_ROUTING_LEDGER: precondition.vars.LEDGER_DIR, PROTOCOL_ROUTING_AGENTKIT: AGENTKIT_BIN } : {}),
       });
       // 留档只记键名，不记取值——ANTHROPIC_API_KEY 之类的值不进会话目录。
       writeFileSync(join(session, 'command.json'), `${JSON.stringify({ bin, args, cwd: repo, env_keys: Object.keys(env).sort() }, null, 2)}\n`);
@@ -252,6 +268,8 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
           unpaired_tool_uses: paired.unpaired,
         },
         initial_repo: initialRepo,
+        // 会话开始前的台账快照：第 7、10、11 条判「发起那一下之前台账什么状态」的起点。
+        initial_ledger: initialLedger,
         events: paired.events,
         payloads: collectPayloads(paired.events),
         // host_result 是「这次算不算数据点」的唯一可靠信号，见 lib/run-validity.mjs。

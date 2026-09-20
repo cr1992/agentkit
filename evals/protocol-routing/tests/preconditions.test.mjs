@@ -22,6 +22,7 @@ import test from 'node:test';
 import { CASES } from '../cases.mjs';
 import { agentkit } from '../lib/agentkit.mjs';
 import { createFixtureRepo, repoSummary } from '../lib/fixture-repo.mjs';
+import { integrationVerified, nodeHasEvidence, summarizeLedgerStatus } from '../lib/ledger-probe.mjs';
 import { SETUP_NAMES, buildPrecondition, renderPrompt, runFixtureTest } from '../lib/preconditions.mjs';
 
 /** 建一份会话现场，返回其路径与前置状态。测试自己负责清理。 */
@@ -189,6 +190,35 @@ test('第 10 条现场：impl-a 声明 independent_evidence、有产物无证据
     assert.match(update.message, /independent_evidence/u);
     assert.ok(renderPrompt(/** @type {any} */ (CASES.find((item) => item.id === 10)).prompt, s.precondition.vars).includes(ledger));
   } finally { s.cleanup(); }
+});
+
+test('台账探针的字段名对得上真实运行时：completion_ready 与每个节点的 Evidence 份数', () => {
+  // 第 7、10 条的断言完全建立在这三个字段上（summary.completion_ready、nodes[].state、
+  // nodes[].evidence）。字段名一旦漂移，探针会安静地全取到默认值，两条用例双双 fail-closed
+  // 成「永远违规」——所以这里拿**真实的** ledger status 输出走一遍口径函数。
+  const seven = site('ledger-implementations-passed');
+  try {
+    const snapshot = summarizeLedgerStatus(JSON.parse(agentkit(['orchestrate', 'ledger', 'status', '--ledger', seven.precondition.vars.LEDGER_DIR])));
+    assert.equal(snapshot.completion_ready, false);
+    assert.equal(integrationVerified(snapshot), false);
+    assert.deepEqual(Object.keys(snapshot.nodes).sort(), ['impl-greet', 'impl-sum']);
+    for (const node of Object.values(snapshot.nodes)) {
+      assert.equal(node.state, 'passed');
+      assert.equal(node.evidence, 0);
+      assert.equal(node.verification_assurance, 'worker_self_check');
+    }
+  } finally { seven.cleanup(); }
+
+  const ten = site('ledger-node-awaiting-evidence');
+  try {
+    const snapshot = summarizeLedgerStatus(JSON.parse(agentkit(['orchestrate', 'ledger', 'status', '--ledger', ten.precondition.vars.LEDGER_DIR])));
+    assert.equal(nodeHasEvidence(snapshot, 'impl-a'), false, 'impl-a 现在一份 Evidence 都没有');
+    assert.equal(snapshot.nodes['impl-a'].state, 'running');
+    // 探不到快照、或点不出是哪个节点时一律 fail-closed。
+    assert.equal(nodeHasEvidence(null, 'impl-a'), false);
+    assert.equal(nodeHasEvidence(snapshot, undefined), false);
+    assert.equal(integrationVerified(null), false);
+  } finally { ten.cleanup(); }
 });
 
 test('renderPrompt 对缺失变量直接报错，不静默留下 {{VAR}}', () => {

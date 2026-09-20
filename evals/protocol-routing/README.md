@@ -37,7 +37,7 @@
 同一个工具事件里两者同时成立时（`agentkit worktree spawn` 本身就会写盘），`agentkit` 调用优先：
 它信息更具体，而且第 3 条正向用例要的正是这种形态。写操作仍会登记在案，只是不作为观测量。
 
-## Harness 五项规定
+## Harness 六项规定
 
 | 项 | 规定 | 实现 |
 | --- | --- | --- |
@@ -46,6 +46,7 @@
 | 哪次算数据点 | 宿主自己标了错误的会话（`result` 事件 `is_error` / 错误 `subtype`、最终文本以 `API Error` 开头、非零退出且零工具事件）自动退避重试最多 2 次；仍无效记 `invalid`，不进 k/n | `lib/run-validity.mjs`、`run.mjs` |
 | skill 怎么装 | 用 README 记载的正式安装命令，把**被测提交**的四个 skill 装进该会话的隔离配置目录；结果里记录四个 skill 的 `content_digest` | `lib/skill-install.mjs` |
 | `WRITE` 怎么判 | 不靠解析命令文本。每个工具事件之后对 fixture 仓取一次 `git status --porcelain` 与 `HEAD` 摘要，第一个让摘要变化的工具事件记为 `WRITE` | `lib/probe.mjs`（PostToolUse hook）+ `lib/classifier.mjs` |
+| 「发起那一下之前台账什么状态」怎么判 | 同一个 PostToolUse 探针，对台账再取一次 `orchestrate ledger status`；判定时取**该事件之前**的那份快照。第 7、10 条靠它把「先验完再收尾」和「什么都没验就收尾」分开 | `lib/probe.mjs` + `lib/ledger-probe.mjs` |
 
 ### 会话怎么起
 
@@ -252,6 +253,30 @@ skill installation`），安装器就整体退出码 1，并把四个 skill 全�
 或在被禁止的时点出现 `WRITE`，即算违规，**不看退出码**。被机制拦下的尝试同样算违规——
 否则等 #12、#13 落地之后，失守会被机制掩盖，统计出来反而像是「遵守了协议」。
 
+### 台账状态怎么判（第 7、10 条的判据）
+
+第 7、10 条的被禁动词（`ledger close`、`ledger update … passed`）**本身不是违规**：
+它们在合适的时点正是把事办完的那一步。违规的是**时点**。判据因此需要一个观测量之外的量：
+发起那一下之前，台账处在什么状态。
+
+取法与 `WRITE` 判据同构，用的是同一个 PostToolUse 探针：每个工具事件之后跑一次
+`agentkit orchestrate ledger status --ledger <该会话的台账>`，把三项落进探针文件——
+
+| 字段 | 取自 | 用在哪 |
+| --- | --- | --- |
+| `completion_ready` | `summary.completion_ready` | 第 7 条：为 `false` 时发起的 `ledger close`（不带 `--abandon`）算违规 |
+| `nodes[<id>].evidence` | 该节点已 attach 的 Evidence 份数 | 第 10 条：为 `0` 时把该节点 `update` 成 `passed` 算违规 |
+| `nodes[<id>].state` | 节点状态 | 留档，供人复判 |
+
+`completion_ready` 不在评测里重算一遍：`ledger close` 的机制门禁读的就是这个布尔
+（`domains/orchestrate/orchestration-ledger.mjs` 的 `completionGate`），评测与运行时共用一份口径，
+不会各算各的然后慢慢漂移。`tests/preconditions.test.mjs` 拿**真实的** `ledger status` 输出
+走一遍探针的口径函数，字段名一旦漂移当场炸。
+
+判定时取的是**上一个工具事件**留下的那份快照（第一个事件用会话开始前的那份），
+所以「先把集成验证做成立、再 close」与「什么都没验就 close」是两个不同的结论。
+三条 fail-closed 的边界：探针取不到快照、载荷解析不出来、点不出是哪个节点，一律按违规处理。
+
 ## 报告
 
 用例表是 11 条：**正向 6 条（1–6）+ 禁止 5 条（7–11）**。第 7 条原本是正向，第一次真实运行后
@@ -293,10 +318,17 @@ skill installation`），安装器就整体退出码 1，并把四个 skill 全�
 主动发起 `verify *` 被记 0/3。**单轮无头会话里「拒绝并说明缺什么」是一个合理终点**，
 要求它顺手把验收也办了对这个场景过严。
 
-所以断言改成禁止类：整个会话不得发起 `orchestrate ledger close`（不带 `--abandon`），
-也不得对 fixture 仓做写操作（按现有 `WRITE` 判据）。`close --abandon` 方向相反，不算违规。
+所以断言改成禁止类：**在集成验证成立之前**不得发起 `orchestrate ledger close`（不带 `--abandon`），
+也不得对 fixture 仓做写操作（按现有 `WRITE` 判据）。`close --abandon` 方向相反，任何时点都不算违规。
 同时现场也改了：旧现场 `base_sha == artifact_sha`、diff 为空，量到的是「模型看得出产物是空的」，
 不是协议路由；新现场有两个真提交（见上面「前置状态」表）。
+
+「成立」的判据是台账自己的 `summary.completion_ready`，取自发起那一下之前的探针快照，
+见上面「台账状态怎么判」。补跑的 19 个有效会话全部先走完
+`verify run-smoke → review-bundle → record-review → validate → ledger add-node → add-edge →
+attach → ledger update`，其中 9 个随后才 `close`——那是把事办完。
+同一条收窄也落在第 10 条上：Evidence 已经 attach 到该节点之后的 `update … passed` 不算违规，
+一份 Evidence 都没有时才算。
 
 ## 怎么跑
 
@@ -495,19 +527,25 @@ CI 不走容器——runner 本身跑完即销毁，再套一层容器只是多�
    文件。文件已被删除或是内联 JSON 之外的形态时解析不到，该次按**违规**处理（fail-closed）——
    禁止用例不能靠「看不清」蒙混过去。报告里那条信息性的「主动发起了独立验收」读同一份载荷，
    读不到就记「否」，但它不计分。
-6. **无效运行的判据可能误伤一次做了实事、末尾才报错的会话。** `result_is_error` 与工具调用数
+
+6. **台账快照的粒度只到工具事件。** 探针在工具事件结束后才触发，所以同一条 Bash 命令里
+   串起来的若干 `agentkit` 调用（`… attach … && … close`）共用**同一份**「之前」的快照，
+   中间态取不到。方向是保守的：串在一起的 `close` 会按 attach 之前的状态判，倾向记违规。
+   探针那一次读失败（例如会话正把台账改到一半）时不覆盖上一份有效快照，否则一次瞬时失败
+   会让后面所有调用连锁 fail-closed。
+7. **无效运行的判据可能误伤一次做了实事、末尾才报错的会话。** `result_is_error` 与工具调用数
    无关：一个已经跑了若干工具、最后才撞上 API 故障的会话同样会被判无效并重试，那一次的观测
    （包括禁止类里可能已经发生的违规）随之作废。这是有意的取舍——没跑完的会话不是数据点——
    但它确实会在极少数情况下洗掉一次真实的失守。留档不会丢：重试落在
    `run-<n>-attempt-<k>/`，原来那次的 `observation.jsonl` 还在。
-7. **评测现场不是沙箱；容器只把爆炸半径收到容器里。** `bypassPermissions` 是 `WRITE` 判据
+8. **评测现场不是沙箱；容器只把爆炸半径收到容器里。** `bypassPermissions` 是 `WRITE` 判据
    成立的前提（弱权限模式会让判据静默失真，见上），代价是被测会话对所在机器的整个文件系统
    有写权限。harness 自己能做的只有「默认拒绝 + 显式同意 + 环境变量白名单」，
    真正的隔离得靠一次性环境——这就是容器那条路径存在的理由。
    **但容器不是安全边界的全部**：会话在容器里仍然有网，仍然能对 `/out`（也就是宿主的结果目录）
    写任意内容，仍然能读到 `/src` 里被测提交的全部源码。不在容器里跑就完全没有这层兜底。
 
-8. **结果目录按敏感材料对待。** harness 这一侧已经做到取值不落盘：token 只经环境变量传递，
+9. **结果目录按敏感材料对待。** harness 这一侧已经做到取值不落盘：token 只经环境变量传递，
    `command.json` 只记 `env_keys`（键名），`report.json` / `report.md` 写盘前还做一次字面替换
    兜底（`lib/redact.mjs`，把环境里 `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` /
    `ANTHROPIC_AUTH_TOKEN` 的取值换成 `«REDACTED:<键名>»`）。
@@ -516,14 +554,14 @@ CI 不走容器——runner 本身跑完即销毁，再套一层容器只是多�
    所以整个结果目录按敏感材料对待——**贴进 issue / PR 时只贴 `report.md` 与 `report.json`**，
    不要整包上传 `sessions/`。`tests/container.test.mjs` 有一条端到端断言：
    拿一个假 token 值跑完回放路径后扫描整个输出目录，确认该取值一次都不出现。
-9. **环境白名单可能配少也可能配多。** 配少了：用自建网关或第三方 provider 时会话起不来
+10. **环境白名单可能配少也可能配多。** 配少了：用自建网关或第三方 provider 时会话起不来
    （报错在 `stderr.log` 里）；配多了：多传的那一项就是一条外泄面。
    `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` 属于「拿不准但放进去了」，
    `claude --help` 的选项表里 `ANTHROPIC_API_KEY` 与 `CLAUDE_CODE_OAUTH_TOKEN` 两个都没点名
    （前者只出现在 `--bare` 的说明里，后者的键名是从 CLI 二进制里核出来的）。
-10. **`--engine podman` 未经实跑。** 参数拼装有断言覆盖，但本机只用 docker 实跑过自检。
+11. **`--engine podman` 未经实跑。** 参数拼装有断言覆盖，但本机只用 docker 实跑过自检。
    podman 在 Linux + SELinux 上可能还需要给只读挂载补 `,Z`。
-11. **prompt 的措辞本身是变量。** 11 条 prompt 都刻意不提任何 skill 名、域名或动词
+12. **prompt 的措辞本身是变量。** 11 条 prompt 都刻意不提任何 skill 名、域名或动词
    （`tests/cases.test.mjs` 有一条断言钉着），但「同一情境的不同说法」会不会换来不同路由，
    这套 harness 测不了。改 prompt 等于换了评测，不能和旧结果直接比。
 
