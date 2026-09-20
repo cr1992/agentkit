@@ -22,6 +22,7 @@ import {
   buildImageArgs,
   buildRunArgs,
   buildSelftestScript,
+  buildShardJobs,
   parseRunnerArgs,
   resolveAuthEnvKeys,
   shellQuote,
@@ -156,6 +157,53 @@ test('参数切分：本脚本吃掉自己的选项，其余原样透传给 run.
   // `--` 之后的一切无条件透传，包括和本脚本同名的选项。
   assert.deepEqual(parseRunnerArgs(['--out', '/tmp/x', '--', '--image', 'z']).passthrough, ['--image', 'z']);
   assert.deepEqual(parseRunnerArgs(['--out', '/tmp/x', '--selftest']).options.selftest, true);
+});
+
+test('分片：每片一条命令行、一个独立结果目录，安全面逐片成立', () => {
+  const jobs = buildShardJobs({
+    shards: 3,
+    selftest: false,
+    passthrough: ['--model', 'm', '--runs', '3'],
+    image: DEFAULT_IMAGE,
+    repoDir: '/host/agentkit',
+    outDir: '/host/out',
+    options: { memory: '4g', 'pids-limit': '512' },
+    authEnvKeys: ['CLAUDE_CODE_OAUTH_TOKEN'],
+  });
+  assert.deepEqual(jobs.map((job) => job.index), [1, 2, 3]);
+  assert.deepEqual(jobs.map((job) => job.outDir), ['/host/out/shard-1', '/host/out/shard-2', '/host/out/shard-3']);
+  for (const job of jobs) {
+    const joined = job.args.join(' ');
+    // 每片各自挂自己的结果目录；仓库仍然只读，降权项一个都不少。
+    assert.ok(job.args.includes(`${job.outDir}:/out`), '每片挂自己的结果目录');
+    assert.ok(job.args.includes('/host/agentkit:/src:ro'));
+    assert.ok(joined.includes('--cap-drop ALL') && joined.includes('--security-opt no-new-privileges'));
+    assert.ok(joined.includes('--pids-limit 512') && joined.includes('--memory 4g'));
+    assert.ok(!joined.includes('--privileged') && !joined.includes('docker.sock'));
+    // 分片参数由运行器派；透传的原参数原样在。
+    assert.ok(joined.includes(`'--shard' '${job.index}/3'`), joined);
+    assert.ok(joined.includes(`'--model' 'm'`) && joined.includes(`'--runs' '3'`));
+  }
+  // 单片退化成原来那一条：结果直接写 --out，不加 --shard。
+  const single = buildShardJobs({
+    shards: 1, selftest: false, passthrough: ['--model', 'm'],
+    image: DEFAULT_IMAGE, repoDir: '/host/agentkit', outDir: '/host/out',
+    options: { memory: '4g', 'pids-limit': '512' }, authEnvKeys: [],
+  });
+  assert.equal(single.length, 1);
+  assert.equal(single[0].outDir, '/host/out');
+  assert.ok(!single[0].args.join(' ').includes('--shard'));
+});
+
+test('分片参数校验：正整数，且不与手动透传的 --shard 叠用', () => {
+  assert.equal(parseRunnerArgs(['--out', '/tmp/x']).options.shards, '1', '默认不分片');
+  assert.equal(parseRunnerArgs(['--out', '/tmp/x', '--shards', '3']).options.shards, '3');
+  assert.throws(() => parseRunnerArgs(['--out', '/tmp/x', '--shards', '0']), /--shards 必须是正整数/u);
+  assert.throws(() => parseRunnerArgs(['--out', '/tmp/x', '--shards', 'x']), /--shards 必须是正整数/u);
+  // 两层分片叠在一起没人看得懂：run.mjs 会取到后一个 --shard，结果安静地跑错。
+  assert.throws(() => parseRunnerArgs(['--out', '/tmp/x', '--shards', '3', '--shard', '1/2']), /不能同时用/u);
+  // 单片时手动 --shard 仍然透传得下去（给「只补跑某一片」留的口子）。
+  assert.deepEqual(parseRunnerArgs(['--out', '/tmp/x', '--shard', '1/3']).passthrough, ['--shard', '1/3']);
 });
 
 test('参数切分：缺 --out 或引擎不认识当场报错', () => {

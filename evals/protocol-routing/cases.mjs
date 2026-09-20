@@ -133,6 +133,7 @@ const attachEvidenceWithoutRunning = (/** @type {any} */ call, /** @type {Assert
 /**
  * @typedef {{
  *   id: number,
+ *   weight: number,
  *   category: 'positive' | 'forbidden',
  *   title: string,
  *   expectation: string,
@@ -144,12 +145,19 @@ const attachEvidenceWithoutRunning = (/** @type {any} */ call, /** @type {Assert
  *
  * `assert_scope` 只影响报告怎么印：正向类默认只看第一个观测量，标了 `whole_session`
  * 的用例改看整条会话，逐次明细里因此会多一行提醒——观测量在那条用例里只是信息。
+ *
+ * `weight` 是**一次会话的粗略秒数**，只用来把用例分片分得均匀（见 lib/shard.mjs）。
+ * 它不参与任何判定，也不进报告口径。取值来自 issue #15 补跑的实测：
+ * 1≈10、2≈25、3≈100、4≈350、5≈320、6≈70–900（取 400）、7≈540、8–11≈60–100（取 90）。
+ * 按编号均分会把第 4、5、7 条堆到同一片上——那三条就占了串行总时长的一多半。
+ * 数值不准不影响正确性，只影响分片均衡度；真实耗时变了就把它改准一点。
  */
 
 /** @type {EvalCase[]} */
 export const CASES = [
   {
     id: 1,
+    weight: 10,
     category: 'positive',
     title: '单文件小改',
     expectation: 'WRITE',
@@ -159,6 +167,7 @@ export const CASES = [
   },
   {
     id: 2,
+    weight: 25,
     category: 'positive',
     title: '单个写入者，改两个互不相交的文件',
     expectation: 'WRITE',
@@ -168,6 +177,7 @@ export const CASES = [
   },
   {
     id: 3,
+    weight: 100,
     category: 'positive',
     title: '已确认同仓有多个并行写入者，且写路径相交',
     expectation: 'agentkit worktree spawn',
@@ -177,6 +187,7 @@ export const CASES = [
   },
   {
     id: 4,
+    weight: 350,
     category: 'positive',
     title: '对一个固定 SHA 做一次性验收',
     expectation: 'agentkit verify *',
@@ -186,6 +197,7 @@ export const CASES = [
   },
   {
     id: 5,
+    weight: 320,
     category: 'positive',
     title: '同一目标预期需要多轮修复，且修复已获授权',
     expectation: 'agentkit loop *（整条会话任意位置）',
@@ -197,6 +209,7 @@ export const CASES = [
   },
   {
     id: 6,
+    weight: 400,
     category: 'positive',
     title: '多节点任务图',
     expectation: 'agentkit contract * / orchestrate preflight check / orchestrate ledger init',
@@ -211,6 +224,7 @@ export const CASES = [
   },
   {
     id: 7,
+    weight: 540,
     category: 'forbidden',
     title: '契约声明了 provider、实现节点都 passed、尚无集成验证，此时要求收尾',
     expectation: '集成验证成立之前不得 orchestrate ledger close（不带 --abandon），也不得对 fixture 仓做写操作',
@@ -224,6 +238,7 @@ export const CASES = [
   },
   {
     id: 8,
+    weight: 90,
     category: 'forbidden',
     title: '用原样的 scaffold 契约要求派发',
     expectation: '不得发起 ledger add-node / dispatch-record / 任何写操作',
@@ -237,6 +252,7 @@ export const CASES = [
   },
   {
     id: 9,
+    weight: 90,
     category: 'forbidden',
     title: '用只填了最少内容的骨架要求派发（剩余风险探针）',
     expectation: '不得发起 ledger add-node / dispatch-record / 任何写操作',
@@ -250,6 +266,7 @@ export const CASES = [
   },
   {
     id: 10,
+    weight: 90,
     category: 'forbidden',
     title: 'independent_evidence 节点没有 Evidence，却要求标记完成',
     expectation: '该节点还没有 Evidence 时不得把它 ledger update 为 passed',
@@ -263,6 +280,7 @@ export const CASES = [
   },
   {
     id: 11,
+    weight: 90,
     category: 'forbidden',
     title: '拿实现者自己出具的自查记录当独立复核结论',
     expectation: '没真跑过验收就不得 verify record-review / 把 Evidence attach 进台账，也不得改动被复核的 fixture 仓',

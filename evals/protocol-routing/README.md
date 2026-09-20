@@ -2,7 +2,7 @@
 
 对应 issue [#15](https://github.com/cr1992/agentkit/issues/15)。
 
-仓库里 350 个测试（`npm test` 的 424 条减去本目录的 74 条）全部落在机械层：
+仓库里 352 个测试（`npm test` 的 449 条减去本目录的 97 条）全部落在机械层：
 它们能证明运行时按契约拒绝非法输入，证明不了 controller
 **有没有按协议路由**。这套 harness 补的就是这一段：给一个真实用户请求，看会话的第一个实质动作
 落在哪里。
@@ -331,6 +331,54 @@ skill installation`），安装器就整体退出码 1，并把四个 skill 全�
 
 输出 `report.json`（机器读）与 `report.md`（人读）。
 
+### 会话什么时候被提前终止
+
+**只有正向、且只看第一个观测量的那几条（1、2、3、4、6）**，且只在断言**已经成立**之后。
+那类用例的判定在第一个可观测动作出现的那一刻就定死了，后面再跑什么都改不了结论——
+第 4 条在第 8 个事件就出分，之后还要跑 4–8 分钟（issue #15 的后续项 4）。
+
+驱动器一边收 stream-json 一边把 `tool_use` 攒出来，和探针文件里已落盘的快照配对，
+喂给**同一个 `assert`**；成立就 `SIGTERM`（5 秒后补 `SIGKILL`）。
+判据和最终判定共用一个函数，所以截断到成立那一刻的事件流与完整事件流判出来的是同一个结论，
+`tests/early-termination.test.mjs` 对此有一条断言。
+
+不终止的三类，理由各不相同：
+
+- **禁止类一条都不终止。** 违规可能发生在任何一个事件上，提前收手等于把失守洗掉。
+- **标了 `assert_scope: 'whole_session'` 的正向类（第 5 条）不终止。** 它的断言是
+  「整条会话里出现过」，现在没出现不代表后面不会出现。
+- **断言不成立时不终止。** 只省「已经拿分」那一类；路由去错地方的会话照常跑到自然结束。
+
+被终止的会话是**有效数据点**，不是故障：它拿不到 `result` 事件、退出码也不是 0，
+所以 `classifyRunValidity()` 把 `early_terminated` 排在所有故障判据**之前**——
+否则每一次提前终止都会被当成崩溃重试一遍，省下的时间原样还回去。
+
+### 分片并行与报告合并
+
+```bash
+# 三片同时跑，跑完合并成一份（容器路径见下面，会自动合并）
+node evals/protocol-routing/run.mjs … --shard 1/3 --out /tmp/pr-eval/shard-1 &
+node evals/protocol-routing/run.mjs … --shard 2/3 --out /tmp/pr-eval/shard-2 &
+node evals/protocol-routing/run.mjs … --shard 3/3 --out /tmp/pr-eval/shard-3 &
+wait
+node evals/protocol-routing/merge-reports.mjs --out /tmp/pr-eval /tmp/pr-eval/shard-*
+```
+
+**按耗时装箱，不按编号均分。** `cases.mjs` 里每条用例带一个 `weight`（一次会话的粗略秒数，
+取自补跑实测：1≈10、2≈25、3≈100、4≈350、5≈320、6≈400、7≈540、8–11≈90）。串行一轮 105 分钟，
+其中第 4、5、7 条就占 61 分钟；按编号均分会把它们堆到同一片上，并行等于白做。
+`lib/shard.mjs` 用 LPT 贪心装箱，确定性——同一组输入永远分出同一份结果。
+`weight` 不参与任何判定、不进报告口径；数值不准只影响均衡度。
+
+**合并不自带口径。** 两栏、逐条 k/n、无效运行、会话失败照搬；平凡基线拿合并后的**有效 n**
+重算一遍，走的是串行路径同一个 `trivialBaseline()`。`tests/shard.test.mjs` 用回放驱动器
+串行跑一份、分 3 片跑再合并一份，逐条 k/n、两栏、两条基线、无效运行、会话失败逐项对等，
+连 `report.md` 里那几行表格都逐字比过。
+
+合并前先挡三类拼不得的输入：`--runs` 不同、模型 / 宿主版本 / skill `content_digest` 不同、
+用例在多份报告里重复出现。**缺一片时宁可不合**——一份少了几条用例的合并报告和一份完整报告
+长得一模一样，那才是危险的失败模式。
+
 ### 用例 7 为什么从正向改成禁止
 
 第一次真实运行里，三次运行模型都正确指出「独立验收从未跑过」并拒绝宣布完成，却因为没有
@@ -470,6 +518,19 @@ node evals/protocol-routing/container/run-in-container.mjs \
 无条件补上（容器就是它要求的那个一次性环境），不用自己加。
 `container/run-in-container.sh` 是等价的 shell 入口。
 
+**5. 分片并行（同样 33 个会话，墙钟时间约为串行的三分之一）**
+
+```bash
+node evals/protocol-routing/container/run-in-container.mjs \
+  --out /tmp/pr-eval --model <模型 ID> --runs 3 --shards 3
+```
+
+起 3 个容器同时跑，各片结果写 `<out>/shard-<i>/`，跑完在宿主上合并成 `<out>/report.json` 与
+`<out>/report.md`。分片口径见「分片并行与报告合并」：**合并报告与串行报告逐项相等**。
+每一片都是一个独立容器，安全面逐片成立（仓库只读、只挂自己那一片的结果目录、降权项不变），
+`tests/container.test.mjs` 对每片各有一组断言。
+某一片没跑出 `report.json` 时运行器**不做合并**并非零退出——各片留档仍在 `<out>/shard-<i>/`。
+
 #### 运行器自己的选项
 
 | 选项 | 默认 | 说明 |
@@ -480,6 +541,7 @@ node evals/protocol-routing/container/run-in-container.mjs \
 | `--claude-version <版本>` | `latest` | 构建时钉住宿主 CLI 版本，复现用 |
 | `--repo <路径>` | 本仓库根 | 被测 checkout，只读挂载 |
 | `--memory` / `--pids-limit` | `4g` / `512` | 资源上限 |
+| `--shards <n>` | `1` | 起 n 个容器并行，各片结果写 `<out>/shard-<i>/`，跑完自动合并成 `<out>/report.json` |
 | `--no-build` | 关 | 跳过构建，直接用已有镜像 |
 | `--selftest` | 关 | 不需要模型的容器自检 |
 | 其余一切 | — | 原样透传给 `run.mjs` |
@@ -626,7 +688,8 @@ CI 不走容器——runner 本身跑完即销毁，再套一层容器只是多�
 
 ```
 evals/protocol-routing/
-├── run.mjs                     # 入口；无效运行的退避重试也在这里
+├── run.mjs                     # 入口；无效运行的退避重试、--shard 分片也在这里
+├── merge-reports.mjs           # 把若干分片的 report.json 合并成一份
 ├── cases.mjs                   # 11 条用例（正向 6 + 禁止 5；情境、prompt、前置状态、断言）
 │                               #   断言口径三种：第一个观测量 / session_contains / 禁止类
 ├── drivers/
@@ -647,6 +710,8 @@ evals/protocol-routing/
 │   ├── agentkit.mjs            # 调用被测提交自己的 agentkit
 │   ├── agentkit-shim.mjs       # 会话 PATH 上的 agentkit 垫片
 │   ├── run-validity.mjs        # 「这一次算不算数据点」的判据
+│   ├── shard.mjs               # 按耗时把用例装箱分片
+│   ├── merge.mjs               # 分片报告合并（口径与串行逐项相等）
 │   └── report.mjs              # 逐条 k/n、两栏、平凡基线、无效运行、信息列
 ├── container/                  # 本机容器运行（订阅 token）
 │   ├── Dockerfile              # node:22-slim + git + claude CLI，以非 root 用户跑
