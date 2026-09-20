@@ -235,7 +235,7 @@ test('capabilities --json 保持统一能力发现兼容', () => {
   const capabilities = JSON.parse(output);
   assert.equal(capabilities.skill, 'orchestrate-subagents');
   assert.equal(capabilities.protocol_version, '1.1.0');
-  assert.equal(capabilities.runtime_version, '1.7.0');
+  assert.equal(capabilities.runtime_version, '1.8.0');
   assert.ok(capabilities.features.includes('read-only-node-not-applicable-verification'));
   assert.ok(capabilities.features.includes('worker-capability-preflight'));
   assert.ok(capabilities.features.includes('lightweight-reflection'));

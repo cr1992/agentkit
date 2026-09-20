@@ -222,7 +222,7 @@ export function main(argv = process.argv.slice(2)) {
     validateContract(frozen, { substance: true, warnings });
     return { frozen: true, contract_id: frozen.contract_id, contract_digest: frozen.contract_digest, ...(warnings.length ? { warnings } : {}), contract: frozen };
   }
-  if (command === 'capabilities') return { tool: 'contract-tool', runtime_version: '1.1.0', task_contract_versions: [1], features: ['strict-json', 'canonical-digest', 'review-view', 'resign-diff', 'contract-projection', 'contract-scaffold', 'contract-interview'] };
+  if (command === 'capabilities') return { tool: 'contract-tool', runtime_version: '1.2.0', task_contract_versions: [1], features: ['strict-json', 'canonical-digest', 'review-view', 'resign-diff', 'contract-projection', 'contract-scaffold', 'contract-interview'] };
   throw new ContractError(`命令必须是 ${Object.keys(CLI_SPEC).join('/')}`);
 }
 

@@ -77,7 +77,7 @@ state root 按设计落在业务仓库之外，新会话在主 checkout 里没�
 各脚本原有的错误形状与非零退出。
 
 `capabilities` 同时输出独立的 `protocol_version`、`runtime_version` 和 Skill tree `content_digest`。
-当前协议版本为 `1.1.0`，ledger runtime 为 `1.7.0`；三者分别表达兼容语义、脚本实现和精确安装内容，
+当前协议版本为 `1.1.0`，ledger runtime 为 `1.8.0`；三者分别表达兼容语义、脚本实现和精确安装内容，
 不能互相替代。
 
 ## Reviewer 预算门禁
