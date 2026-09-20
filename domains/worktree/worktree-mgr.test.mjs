@@ -1563,39 +1563,31 @@ test('unwatch 返回时 watcher 进程组必须已退出，之后没有后台写
 test('心跳过期时 unwatch 不按组发信号，避免打到复用了旧 pid 的无关进程', async (t) => {
   const fixture = makeRemoteRepo();
   const task = 'auto-unwatch-stale-pid';
-  // decoy 冒充「崩溃 worker 留下的陈旧 pid 后来被系统复用」：它自己是 detached 进程组 leader，
-  // 守卫一旦失效就会被 kill(-pid) 连带打掉。
-  const decoy = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { detached: true, stdio: 'ignore' });
-  decoy.unref();
+  let pid = 0;
   t.after(() => {
-    try { process.kill(-decoy.pid, 'SIGKILL'); } catch {}
+    if (pid) { try { process.kill(-pid, 'SIGKILL'); } catch {} }
     try { manager(fixture.repo, ['unwatch', task]); } catch {}
     fixture.cleanup();
   });
   prepareWatchedTask(fixture, task);
   const armed = recordFor(fixture, task);
-  // worker 崩溃：来不及走退出路径，心跳文件连同那个 pid 一起留在原地。
-  process.kill(armed.auto_reclaim.pid, 'SIGTERM');
-  await waitFor(() => !processIsAlive(armed.auto_reclaim.pid), 'watcher 未在 SIGTERM 后退出');
-
-  const traceRoot = join(fixture.repo, '.git', 'worktree-trace', 'v1');
-  const recordPath = join(traceRoot, 'records', `${armed.worktree_id}.json`);
-  const heartbeatPath = join(traceRoot, 'watchers', `${armed.worktree_id}.json`);
-  const record = JSON.parse(readFileSync(recordPath, 'utf8'));
-  record.auto_reclaim.pid = decoy.pid;
-  writeFileSync(recordPath, `${JSON.stringify(record, null, 2)}\n`);
+  pid = armed.auto_reclaim.pid;
+  // record 是 event chain 上的缓存，pid 改不动；所以用真 worker 本身构造「只有新鲜度不成立」：
+  // SIGSTOP 让它活着但不再刷心跳，再把心跳拨老。此时 token、两处 pid、存活全部对得上，
+  // 和「陈旧 pid 被复用成别的进程组 leader」在守卫眼里是同一个形状。
+  process.kill(pid, 'SIGSTOP');
+  const heartbeatPath = join(fixture.repo, '.git', 'worktree-trace', 'v1', 'watchers', `${armed.worktree_id}.json`);
   const heartbeat = JSON.parse(readFileSync(heartbeatPath, 'utf8'));
-  heartbeat.pid = decoy.pid;
+  assert.equal(heartbeat.pid, pid);
   heartbeat.heartbeat_at = new Date(Date.now() - 600_000).toISOString();
   writeFileSync(heartbeatPath, `${JSON.stringify(heartbeat, null, 2)}\n`);
 
-  // token 与两处 pid 全部对得上，只有心跳过期：拦住这一次信号的只能是新鲜度判据。
-  // not-running 是「压根没进发信号那条路径」的终态；守卫一旦失效，这里会变成 terminated/timeout。
-  assert.match(manager(fixture.repo, ['unwatch', task]), /watcher=not-running/);
-  // exitCode/signalCode 由本进程直接观测，不受「已退出但尚未被回收」影响。
-  assert.equal(decoy.exitCode, null, 'decoy 进程被 unwatch 终止了');
-  assert.equal(decoy.signalCode, null, 'decoy 进程收到了 unwatch 发出的信号');
-  assert.equal(processGroupIsAlive(decoy.pid), true);
+  // unverified 是「登记的 pid 还活着、但没进发信号那条路径」的终态。守卫一旦失效，SIGTERM 会挂在
+  // 被停住的进程上，unwatch 等满超时后报 timeout。
+  const output = manager(fixture.repo, ['unwatch', task]);
+  assert.match(output, /watcher=unverified/);
+  assert.match(output, /WARN .*没有向它发信号/);
+  assert.equal(processGroupIsAlive(pid), true);
   assert.equal(recordFor(fixture, task).auto_reclaim.state, 'disarmed');
 });
 

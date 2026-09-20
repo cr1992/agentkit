@@ -30,6 +30,7 @@ export function createCommands(deps) {
     removeWatcherHeartbeat,
     parseWatchInterval,
     stopWatcherProcessGroup,
+    processIsAlive,
     watcherHealth,
     refreshTargetRef,
     refreshTargetRefCached,
@@ -721,14 +722,19 @@ export function createCommands(deps) {
       };
     });
     removeWatcherHeartbeat(loaded.context.common_dir, record.worktree_id, token);
-    const stop = stopWatcherProcessGroup(watcherPid);
+    // 判定不成立时不发信号；登记的 pid 若仍存活，如实报 unverified，而不是 not-running。
+    const registeredPid = Number(record.auto_reclaim?.pid);
+    const stop = watcherPid === 0 && processIsAlive(registeredPid)
+      ? { stopped: false, reason: 'unverified' }
+      : stopWatcherProcessGroup(watcherPid);
     log(`auto-reclaim watcher 已解除: ${record.worktree_id.slice(0, 8)} watcher=${stop.reason}`);
-    if (!stop.stopped) log(`WARN ${unstoppedWatcherReason(stop.reason, watcherPid)}`);
+    if (!stop.stopped) log(`WARN ${unstoppedWatcherReason(stop.reason, watcherPid || registeredPid)}`);
   }
 
   /** @param {string} reason @param {number} pid */
   function unstoppedWatcherReason(reason, pid) {
     const tail = '删除或移动该 worktree 前请先确认它已结束。';
+    if (reason === 'unverified') return `登记的 watcher pid ${pid} 仍存活，但心跳不足以证明它属于本次租约，没有向它发信号；若它确是 watcher，会在下一轮轮询时自行退出，${tail}`;
     if (reason === 'signal-denied') return `无权向 watcher 进程组 ${pid} 发信号，它没有被终止；${tail}`;
     if (reason === 'unsupported-platform') return `当前平台不支持按进程组终止 watcher，进程组 ${pid} 仍在运行；它会在下一轮轮询时自行退出，${tail}`;
     return `watcher 进程组 ${pid} 未在 ${WATCHER_STOP_TIMEOUT_MS}ms 内退出；${tail}`;

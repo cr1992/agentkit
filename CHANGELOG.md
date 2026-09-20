@@ -10,7 +10,7 @@
   现在解除事件落盘后按进程组终止该次租约的 watcher，worker 与它在途的 `git fetch` 子进程一起收尾，
   等整组退出才返回。发信号的前提是心跳判定健康（token 一致、pid 存活、心跳未过期）且与 record 登记
   同一个 pid，否则退回 worker 自行轮询退出——崩溃 worker 留下的陈旧 pid 可能已被系统复用成别的
-  进程组 leader。输出新增 `watcher=<终态>` 后缀，`signal-denied` / `timeout` / `unsupported-platform`
+  进程组 leader。输出新增 `watcher=<终态>` 后缀，`unverified`（登记的 pid 仍存活但未通过判定）/ `signal-denied` / `timeout` / `unsupported-platform`
   （非 POSIX 平台没有进程组信号）各自打印独立告警。
 
 ## 1.2.0 - 2026-09-20
