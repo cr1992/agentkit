@@ -4,6 +4,20 @@
 
 ## Unreleased
 
+- 订正架构真源里四处已经和实现矛盾的内容：§6.2 的能力发现样例（写的是 `protocol_version` 字符串，
+  实际 `verify-agent-output` 返回 `protocol_versions` 数组，四个域的协议版本字段并不统一）、
+  §6.3 的 Provider 选择 YAML（列了 `extensions.orchestration` / `isolation` / `loop` 三个从不存在的
+  键，以及 `host-native` / `caller-supplied` / `self-check` 三个从不存在的取值）、§11 末尾建议记录的
+  统一 `assurance` envelope（五个字段名与取值全仓零命中；真实的保证等级分别记在 Evidence Package 的
+  `provenance.isolation_assurance` 与 `provenance.limitations`、Embedded Verification Record 的
+  `independent_context.assurance`、ledger node 的 `verification_assurance` 与 verify/loop snapshot 的
+  `network_isolation_assurance` 上，各有各的取值域，不能互相代答）、§13 的手抄测试清单。
+  四处都改成指向真源的指针，并各自加了反查测试。
+  **schema 不变**：`extensions` 仍只定义 `verification`、`review_policy`、`projection`，
+  合同字段与取值没有任何变化。
+- 内部回归集补齐两处此前只在文档里承诺、仓内没有用例的覆盖：真实 `--object-format=sha256` 仓库上的
+  Artifact 身份，以及 `core/digest.mjs` 对 RFC 8785（JCS）官方测试向量的一致性。两者都只锁定现状，
+  产品行为与既有 digest 不变。
 - 修复 `agentkit worktree unwatch` 只翻 record 状态、不等后台 watcher 退出的竞态。此前命令返回后
   detached worker 最快也要等下一轮轮询才发现自己被解除，期间仍在写心跳、target cache 和 `FETCH_HEAD`；
   紧接着删除或移动该 worktree 会与这些写入相撞（在 CI 上表现为 teardown `rmSync` 报 `ENOTEMPTY`）。
@@ -12,6 +26,14 @@
   同一个 pid，否则退回 worker 自行轮询退出——崩溃 worker 留下的陈旧 pid 可能已被系统复用成别的
   进程组 leader。输出新增 `watcher=<终态>` 后缀，`unverified`（登记的 pid 仍存活但未通过判定）/ `signal-denied` / `timeout` / `unsupported-platform`
   （非 POSIX 平台没有进程组信号）各自打印独立告警。
+- `agentkit worktree doctor` 新增信息性 notice `MERGED_ORPHAN_LOCAL_BRANCH`：已是默认分支祖先、
+  不属于任何 record、也没有被任何 worktree 检出的本地分支逐条列出，并给出 `git branch -d <branch>`。
+  宿主自带隔离建的分支和不删 head 分支的合并接口都会留下这种 ref，而 record 里没有它们，`reclaim`
+  的分支清理没有机会起作用。notice 与 finding 分开：不计入 `findings=N`、不标 error、不改变退出码、
+  不自动删除，`--json` 输出新增并列的 `notices` 数组。默认分支先看 `refs/remotes/origin/HEAD`，再退到
+  spawn 用的 base 解析；只能解析到描述当前分支自己的来源时整类跳过，报 `MERGED_ORPHAN_BRANCH_SCAN_SKIPPED`
+  和原因，不猜 `main`。远端分支仍不在扫描范围内：判定要联网，删远端 ref 是对外动作，由托管平台的
+  「合并后自动删除」收。
 
 ## 1.2.0 - 2026-09-20
 

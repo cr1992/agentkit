@@ -103,6 +103,7 @@ Reflection 只记证据化观察，Improvement Proposal 永远保持 `proposed`�
 仓库 dirty、任务大或包含新文件本身都不足以要求隔离；先确认第二写入者、归属冲突或路径相交。
 裁决隔离后使用 `manage-worktrees`，它不改变任务图、权限或验收。不可用时必须先读
 无 manage-worktrees 时的隔离下限（`agentkit docs orchestrate isolation-fallback`）。
+写 worker 需要隔离时用 `agentkit worktree spawn --ledger <id>` 建树；宿主自带的隔离不进 record，不受 `reclaim` 和 `doctor` 管。
 
 共享树中 worker 不得切换分支，只按路径 stage / commit；禁止 `git add -A`、`git commit -am`、裸 `stash`、`reset --hard`、`checkout -- .` 和并发 merge，controller 是唯一 integrator。
 
