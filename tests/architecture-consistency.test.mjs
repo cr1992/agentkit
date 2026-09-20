@@ -20,11 +20,26 @@ function section(heading) {
   return end === -1 ? body : body.slice(0, end);
 }
 
-/** 解析小节里第一张 Markdown 表格，返回按单元格切开的数据行（不含表头与分隔行）。 */
-function tableRows(body) {
-  const lines = body.split('\n').filter((line) => line.trimStart().startsWith('|'));
-  assert.ok(lines.length > 2, '小节里没有可解析的 Markdown 表格');
-  return lines.slice(2).map((line) => line.trim().replace(/^\||\|$/gu, '').split('|').map((cell) => cell.trim()));
+/**
+ * 解析小节里第 `index` 张 Markdown 表格（默认第一张），返回按单元格切开的数据行，
+ * 不含表头与分隔行。表格之间以非 `|` 开头的行分隔。
+ */
+function tableRows(body, index = 0) {
+  const tables = [];
+  let current = null;
+  for (const line of body.split('\n')) {
+    if (line.trimStart().startsWith('|')) {
+      current ??= [];
+      current.push(line);
+    } else if (current) {
+      tables.push(current);
+      current = null;
+    }
+  }
+  if (current) tables.push(current);
+  const table = tables[index];
+  assert.ok(table && table.length > 2, `小节里没有第 ${index + 1} 张可解析的 Markdown 表格`);
+  return table.slice(2).map((line) => line.trim().replace(/^\||\|$/gu, '').split('|').map((cell) => cell.trim()));
 }
 
 /** 单元格里反引号包起来的记号，按出现顺序返回。 */
@@ -280,4 +295,55 @@ test('架构真源 §13.3 的评测用例数量与 cases.mjs 一致', async () =
   assert.ok(body.includes(`正向\n\`${POSITIVE_CASES.length}\` 条`) || body.includes(`正向 \`${POSITIVE_CASES.length}\` 条`), `§13.3 的正向用例数应为 ${POSITIVE_CASES.length}`);
   assert.ok(body.includes(`禁止 \`${FORBIDDEN_CASES.length}\` 条`), `§13.3 的禁止用例数应为 ${FORBIDDEN_CASES.length}`);
   assert.equal(POSITIVE_CASES.length + FORBIDDEN_CASES.length, CASES.length);
+});
+
+// 反查：架构真源 §11 不再建议一个并不存在的统一 assurance envelope，而是逐个字段记录保证等级
+// 记在哪里。每一行都对真源双向比对——真源 enum 增减、字段改名，或文档少写一行，都会失败。
+test('架构真源 §11 的保证等级字段与 schema、运行时取值域双向一致', () => {
+  const body = section('## 11. 独立模式与组合模式的保证等级');
+  const schema = (name) => JSON.parse(readFileSync(resolve(ROOT, 'schemas', `${name}-v1.schema.json`), 'utf8'));
+
+  /** 运行时里 `<field>: <条件> ? 'a' : 'b'` 这类三元赋值的取值域，用于没有 schema 的 snapshot 字段。 */
+  function runtimeTernaryValues(relativePath, field) {
+    const source = readFileSync(resolve(ROOT, relativePath), 'utf8');
+    const match = new RegExp(`${field}:[^\\n]*?\\?\\s*'([a-z_]+)'\\s*:\\s*'([a-z_]+)'`, 'u').exec(source);
+    assert.ok(match, `${relativePath} 里找不到 ${field} 的取值`);
+    return [match[1], match[2]].sort();
+  }
+
+  // verify 与 loop 必须对同一个 snapshot 字段给出同一个取值域，否则两侧记录的保证等级不可比。
+  const networkValues = runtimeTernaryValues('domains/loop/loop-runtime.mjs', 'network_isolation_assurance');
+  assert.deepEqual(runtimeTernaryValues('domains/verify/verification-runtime.mjs', 'network_isolation_assurance'), networkValues);
+
+  const expected = new Map([
+    ['environment.isolation', (() => {
+      const source = readFileSync(resolve(ROOT, 'domains', 'orchestrate', 'contract-tool.mjs'), 'utf8');
+      const literal = /\[([^\]]+)\]\.includes\(contract\.environment\?\.isolation\)/u.exec(source);
+      assert.ok(literal, 'contract-tool.mjs 里找不到 environment.isolation 的取值域字面量');
+      return literal[1].split(',').map((item) => item.trim().replace(/^'|'$/gu, '')).sort();
+    })()],
+    ['provenance.isolation_assurance', [...schema('evidence-package').properties.provenance.properties.isolation_assurance.enum].sort()],
+    ['independent_context.assurance', [...schema('embedded-verification-record').properties.independent_context.properties.assurance.enum].sort()],
+    ['verification_assurance', [...schema('orchestration-ledger').$defs.node.properties.verification_assurance.enum].sort()],
+    ['network_isolation_assurance', networkValues],
+  ]);
+
+  // §11 的第一张表是能力对照表，保证等级字段表是第二张。
+  const rows = new Map(tableRows(body, 1).map((row) => [codeSpans(row[0])[0], codeSpans(row[2]).sort()]));
+  for (const [field, values] of expected) {
+    assert.deepEqual(rows.get(field), values, `§11 记录 ${field} 的取值为 ${(rows.get(field) ?? []).join('、') || '（缺这一行）'}，真源是 ${values.join('、')}`);
+  }
+
+  // limitations 没有枚举，只断言它仍是 Evidence Package 的必填数组，且 §11 没给它编造取值域。
+  const provenance = schema('evidence-package').properties.provenance;
+  assert.ok(provenance.required.includes('limitations'));
+  assert.equal(provenance.properties.limitations.type, 'array');
+  assert.deepEqual(rows.get('provenance.limitations'), []);
+
+  // 反方向：表里不得出现真源之外的字段行，杜绝再长出 orchestration / recovery 这类凭空字段。
+  assert.deepEqual(
+    [...rows.keys()].filter((field) => !expected.has(field) && field !== 'provenance.limitations').sort(),
+    [],
+    '§11 的保证等级表里出现了真源中不存在的字段',
+  );
 });

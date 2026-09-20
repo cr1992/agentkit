@@ -661,16 +661,21 @@ Evidence pass 只是节点验收输入，最终任务完成仍由 controller 判
 | Loop 无 verifier provider | embedded L0 + host reviewer，脚本保证 Loop 状态 | 消费标准 Evidence，获得更强绑定与复用 |
 | Skill 无 orchestrator | 当前会话直接担任 controller | 全局任务图、路由、台账和最终验收统一 |
 
-建议 Evidence / Loop 输出记录：
+保证等级没有统一的 `assurance` envelope。它分别记在下面这几个字段里，每个字段各有自己的载体和
+取值域，读的时候要分开读——把它们并成一个整体，就会拿一处的高保证去替另一处作答：
 
-~~~yaml
-assurance:
-  orchestration: host_direct | orchestrated
-  isolation: none | caller_supplied | managed_worktree
-  verification: none | host_protocol | runtime_bound
-  recovery: none | local_journal
-  limitations: []
-~~~
+| 字段 | 载体 | 取值 | 记录什么 |
+| --- | --- | --- | --- |
+| `environment.isolation` | Task Contract | `shared_tree` / `worktree` / `caller_supplied` | 合同冻结时约定的工作区隔离 |
+| `provenance.isolation_assurance` | [Evidence Package](../../schemas/evidence-package-v1.schema.json) | `host_reported` / `user_relayed` | 独立验收的隔离凭据来自宿主还是用户中继 |
+| `provenance.limitations` | [Evidence Package](../../schemas/evidence-package-v1.schema.json) | 字符串数组 | 这次验收没能证明的事，由 verifier 运行时按实际情况追加 |
+| `independent_context.assurance` | [Embedded Verification Record](../../schemas/embedded-verification-record-v1.schema.json) | `host_reported` / `user_relayed` | embedded 模式下 reviewer 独立性的凭据来源 |
+| `verification_assurance` | [Orchestration Ledger](../../schemas/orchestration-ledger-v1.schema.json) 的 node | `none` / `worker_self_check` / `controller_recheck` / `independent_evidence` / `not_applicable` | 单个节点这次实际拿到的验收等级 |
+| `network_isolation_assurance` | verify run / loop 的 state snapshot | `host_reported` / `not_required` | 网络隔离是宿主声明的还是本就不要求 |
+
+字段名与取值由 [`tests/architecture-consistency.test.mjs`](../../tests/architecture-consistency.test.mjs)
+对上述 schema 与 [`domains/loop/loop-runtime.mjs`](../../domains/loop/loop-runtime.mjs)、
+[`domains/verify/verification-runtime.mjs`](../../domains/verify/verification-runtime.mjs) 双向反查。
 
 保证等级只允许如实降低，不允许用文案把低保证模式包装成高保证模式。
 

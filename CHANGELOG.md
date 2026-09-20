@@ -4,11 +4,15 @@
 
 ## Unreleased
 
-- 订正架构真源里三处已经和实现矛盾的内容：§6.2 的能力发现样例（写的是 `protocol_version` 字符串，
+- 订正架构真源里四处已经和实现矛盾的内容：§6.2 的能力发现样例（写的是 `protocol_version` 字符串，
   实际 `verify-agent-output` 返回 `protocol_versions` 数组，四个域的协议版本字段并不统一）、
   §6.3 的 Provider 选择 YAML（列了 `extensions.orchestration` / `isolation` / `loop` 三个从不存在的
-  键，以及 `host-native` / `caller-supplied` / `self-check` 三个从不存在的取值）、§13 的手抄测试清单。
-  三处都改成指向真源的指针，并各自加了反查测试，照着文档做却对不上实现的情况到此为止。
+  键，以及 `host-native` / `caller-supplied` / `self-check` 三个从不存在的取值）、§11 末尾建议记录的
+  统一 `assurance` envelope（五个字段名与取值全仓零命中；真实的保证等级分别记在 Evidence Package 的
+  `provenance.isolation_assurance` 与 `provenance.limitations`、Embedded Verification Record 的
+  `independent_context.assurance`、ledger node 的 `verification_assurance` 与 verify/loop snapshot 的
+  `network_isolation_assurance` 上，各有各的取值域，不能互相代答）、§13 的手抄测试清单。
+  四处都改成指向真源的指针，并各自加了反查测试，照着文档做却对不上实现的情况到此为止。
   **schema 不变**：`extensions` 仍只定义 `verification`、`review_policy`、`projection`，
   合同字段与取值没有任何变化。
 - 内部回归集补齐两处此前只在文档里承诺、仓内没有用例的覆盖：真实 `--object-format=sha256` 仓库上的
