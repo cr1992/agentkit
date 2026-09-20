@@ -354,12 +354,16 @@ freeze 前选择 standalone provider 或 fail closed；合同 freeze 后发现 p
 | `extensions.verification.provider` | `none` / `verify-agent-output` / `run-agent-verify-loop` | 验收由谁提供 |
 | `skill_set[].provider_mode` | `primary` / `optional` | 某个 Skill 是必需 provider 还是可选增强 |
 
-`extensions` 只定义 `verification`、`review_policy` 与 `projection` 三个键，没有独立的编排键或隔离
-键：编排由当前 controller 承担，不靠合同字段选择；隔离写在 `environment.isolation`。Loop 内部用
-`verify-agent-output` 还是 `embedded` 记录，由 `agentkit loop init --provider` 在 Loop 冻结时选定，
-不进入公共合同——真源是 [`domains/loop/loop-runtime.mjs`](../../domains/loop/loop-runtime.mjs)。
+`extensions` 里带校验的键只有 `verification`、`review_policy` 与 `projection`，没有独立的编排键或
+隔离键：编排由当前 controller 承担，不靠合同字段选择；隔离写在 `environment.isolation`。
+`extensions` 本身是开放对象，运行时另写一个未进 schema 的 `extensions.interview`（契约访谈的轮次
+与作答记录，
+真源是 [`domains/orchestrate/contract-interview.mjs`](../../domains/orchestrate/contract-interview.mjs)）；
+唯一硬约束是 extension 键不得与公共字段同名。Loop 内部用 `verify-agent-output` 还是 `embedded`
+记录，由 `agentkit loop init --provider` 在 Loop 冻结时选定，不进入公共合同——真源是
+[`domains/loop/loop-runtime.mjs`](../../domains/loop/loop-runtime.mjs)。
 上述键集与取值由 [`tests/architecture-consistency.test.mjs`](../../tests/architecture-consistency.test.mjs)
-对 schema 与 `validateContract` 双向反查。
+对 schema、`validateContract` 与运行时实际写入的键双向反查。
 
 Provider 只能由 controller 在 freeze 前选择。worker、implementer、verifier 和专项 runtime
 不能在运行中自行升级权限、切换 provider 或降低 assurance。
@@ -904,8 +908,12 @@ v1 不包含自动聚类、自动改 Skill、自动 accepted、自动发布或�
   [`tests/package-distribution.test.mjs`](../../tests/package-distribution.test.mjs) 锁定。本地实现必须
   实现 RFC 8785 本身，不得另立一套 canonical 语义：重复 key 拒绝与跨 Skill digest 兼容分别由
   `domains/verify/verification-runtime.test.mjs` 和
-  [`tests/content-digest.test.mjs`](../../tests/content-digest.test.mjs) 守住，RFC 官方测试向量仍需进入
-  回归集。
+  [`tests/content-digest.test.mjs`](../../tests/content-digest.test.mjs) 守住；RFC 8785 正文 §3.2.2、
+  §3.2.3、§3.2.4 与附录 B 的官方测试向量在
+  [`tests/jcs-rfc8785.test.mjs`](../../tests/jcs-rfc8785.test.mjs) 内联为回归集。严格档（verify / loop）
+  实现 RFC 的两条 MUST-error 条款，拒绝非有限 number 与未配对代理对；宽松档
+  （orchestrate / content digest）刻意保留 `JSON.stringify` 口径，把这两类输入分别变成 `null`
+  与转义后放行，该偏离同样由上述向量锁定，收敛严格度是一次独立决策。
 - **ADR-6**：Reflection / Proposal 的默认 state root、保留周期、跨项目去重键和用户导出授权。
 
 未决 ADR 可以影响实现细节，但不能推翻“独立可用、组合增强、脚本保证机械不变量”的总体边界。

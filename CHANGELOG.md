@@ -4,6 +4,16 @@
 
 ## Unreleased
 
+- 订正架构真源里三处已经和实现矛盾的内容：§6.2 的能力发现样例（写的是 `protocol_version` 字符串，
+  实际 `verify-agent-output` 返回 `protocol_versions` 数组，四个域的协议版本字段并不统一）、
+  §6.3 的 Provider 选择 YAML（列了 `extensions.orchestration` / `isolation` / `loop` 三个从不存在的
+  键，以及 `host-native` / `caller-supplied` / `self-check` 三个从不存在的取值）、§13 的手抄测试清单。
+  三处都改成指向真源的指针，并各自加了反查测试，照着文档做却对不上实现的情况到此为止。
+  **schema 不变**：`extensions` 仍只定义 `verification`、`review_policy`、`projection`，
+  合同字段与取值没有任何变化。
+- 内部回归集补齐两处此前只在文档里承诺、仓内没有用例的覆盖：真实 `--object-format=sha256` 仓库上的
+  Artifact 身份，以及 `core/digest.mjs` 对 RFC 8785（JCS）官方测试向量的一致性。两者都只锁定现状，
+  产品行为与既有 digest 不变。
 - 修复 `agentkit worktree unwatch` 只翻 record 状态、不等后台 watcher 退出的竞态。此前命令返回后
   detached worker 最快也要等下一轮轮询才发现自己被解除，期间仍在写心跳、target cache 和 `FETCH_HEAD`；
   紧接着删除或移动该 worktree 会与这些写入相撞（在 CI 上表现为 teardown `rmSync` 报 `ENOTEMPTY`）。

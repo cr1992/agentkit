@@ -155,21 +155,41 @@ test('架构真源 §6.2 的 capabilities 字段表与真实输出双向一致',
   );
 });
 
-// 反查：架构真源 §6.3 里出现的 extensions 键必须都是 schema 定义过的，schema 定义过的也必须都被
-// 记录；provider 取值与 schema / validateContract 的取值域逐项相等。
+/**
+ * 合同 `extensions` 的真源有两处：schema 里带校验的键，以及运行时直接赋值写进去的键
+ * （`extensions` 没有 `additionalProperties: false`，`interview` 就是这样一个未进 schema 的实际键）。
+ * 任何一处都算"存在"，两处都没有的键就是文档凭空写出来的。
+ */
+function knownExtensionKeys() {
+  const contractSchema = JSON.parse(readFileSync(resolve(ROOT, 'schemas', 'task-contract-v1.schema.json'), 'utf8'));
+  const keys = new Set(Object.keys(contractSchema.properties.extensions.properties));
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) { walk(path); continue; }
+      if (!entry.name.endsWith('.mjs') || entry.name.endsWith('.test.mjs')) continue;
+      for (const match of readFileSync(path, 'utf8').matchAll(/\.extensions\.([a-z_][a-z0-9_]*)\s*=[^=]/gu)) keys.add(match[1]);
+    }
+  };
+  walk(resolve(ROOT, 'domains'));
+  return { contractSchema, schemaKeys: Object.keys(contractSchema.properties.extensions.properties).sort(), allKeys: keys };
+}
+
+// 反查：架构真源里出现的 extensions 键必须真实存在（schema 定义或运行时写入），schema 定义过的
+// 也必须都被 §6.3 记录；provider 取值与 schema / validateContract 的取值域逐项相等。
 test('架构真源 §6.3 的合同 provider 字段与 schema、validateContract 一致', async () => {
   const body = section('### 6.3 Provider 选择');
-  const contractSchema = JSON.parse(readFileSync(resolve(ROOT, 'schemas', 'task-contract-v1.schema.json'), 'utf8'));
-  const extensionKeys = Object.keys(contractSchema.properties.extensions.properties).sort();
+  const { contractSchema, schemaKeys, allKeys } = knownExtensionKeys();
 
   // 全文口径：任何一节重新引入 `extensions.orchestration` 这类不存在的键都会被这里抓到。
-  const mentioned = new Set([...readFileSync(ARCHITECTURE, 'utf8').matchAll(/extensions\.([a-z_]+)/gu)].map((match) => match[1]));
+  // 负向断言的边界：`extensions.worktreeConfig` 是 Git 配置键，不是合同字段，靠后瞻断言排除。
+  const mentioned = new Set([...readFileSync(ARCHITECTURE, 'utf8').matchAll(/extensions\.([a-z_][a-z0-9_]*)(?![A-Za-z0-9])/gu)].map((match) => match[1]));
   assert.deepEqual(
-    [...mentioned].filter((key) => !extensionKeys.includes(key)).sort(),
+    [...mentioned].filter((key) => !allKeys.has(key)).sort(),
     [],
-    `架构真源提到了 schema 未定义的 extensions 键；schema 只有 ${extensionKeys.join('、')}`,
+    `架构真源提到了并不存在的 extensions 键；现有的是 ${[...allKeys].sort().join('、')}`,
   );
-  for (const key of extensionKeys) assert.ok(body.includes(`\`${key}\``), `§6.3 未记录 extensions 键 ${key}`);
+  for (const key of schemaKeys) assert.ok(body.includes(`\`${key}\``), `§6.3 未记录 extensions 键 ${key}`);
 
   const rows = new Map(tableRows(body).map((row) => [codeSpans(row[0])[0], codeSpans(row[1]).sort()]));
   assert.deepEqual(
