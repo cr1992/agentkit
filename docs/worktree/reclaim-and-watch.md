@@ -16,6 +16,11 @@ agentkit worktree watch-service install
 回收前置条件。`watch-service status` 检查 plist、launchd job 与当前 Node/runtime 路径，`uninstall` 解除。
 未安装时只有进程级自动回收，不得称作跨会话保证。change request 已关闭且明确不会合入时用 `unwatch`。
 
+`unwatch` 不只翻 record 状态：写入解除事件后，它按进程组终止该次租约的 watcher，把 worker 与它在途的
+`git fetch` 子进程一起收尾，并等到整组退出才返回。只有心跳与 record 登记的 pid 一致时才发信号，避免打到
+被复用的 pid 上。因此命令返回即代表没有后台写入者还在写该仓库，可以直接删除或移动这棵 worktree；发信号
+被拒或超时未退出会在输出里显式告警，这两种情况需要自行确认进程已结束再动目录。
+
 ## 已推送成果
 
 ```bash

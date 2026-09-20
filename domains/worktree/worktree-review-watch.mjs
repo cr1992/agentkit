@@ -28,6 +28,7 @@ export function createCommands(deps) {
     writeWatcherHeartbeat,
     removeWatcherHeartbeat,
     parseWatchInterval,
+    stopWatcherProcessGroup,
     watcherHealth,
     refreshTargetRef,
     refreshTargetRefCached,
@@ -704,6 +705,10 @@ export function createCommands(deps) {
     if (active.state === 'merge_detected') {
       die('目标分支已确认包含冻结的 MR head，自动回收已进入提交阶段，不能再 unwatch。');
     }
+    // 心跳与 record 各自登记过同一个 pid，两边一致才认它属于本次租约；只认其中一边会在
+    // worker 早已死亡、pid 被复用时把信号打到无关进程组上。心跳先于 disarm 读，disarm 之后
+    // 它会被删掉。
+    const watcherPid = disarmablePid(loaded.context.common_dir, record, token);
     record = appendReclaimEvent(loaded.context.common_dir, record, 'auto_reclaim_disarmed', (next) => {
       next.auto_reclaim.state = 'disarmed';
       next.auto_reclaim.disarmed_at = new Date().toISOString();
@@ -717,7 +722,22 @@ export function createCommands(deps) {
       };
     });
     removeWatcherHeartbeat(loaded.context.common_dir, record.worktree_id, token);
-    log(`auto-reclaim watcher 已解除: ${record.worktree_id.slice(0, 8)}`);
+    const stop = stopWatcherProcessGroup(watcherPid);
+    log(`auto-reclaim watcher 已解除: ${record.worktree_id.slice(0, 8)} watcher=${stop.reason}`);
+    if (!stop.stopped) {
+      log(`WARN watcher 进程组 ${watcherPid} 未在超时内退出；删除或移动该 worktree 前请先确认它已结束。`);
+    }
+  }
+
+  /**
+   * 返回可安全按进程组终止的 watcher pid；任一登记对不上就返回 0，交给 worker 自行轮询退出。
+   * @param {string} commonDir @param {Record<string,any>} record @param {string} token
+   */
+  function disarmablePid(commonDir, record, token) {
+    const heartbeat = readWatcherHeartbeat(commonDir, record.worktree_id);
+    if (!heartbeat.ok || heartbeat.state?.token !== token) return 0;
+    const pid = Number(heartbeat.state?.pid);
+    return pid === Number(record.auto_reclaim?.pid) ? pid : 0;
   }
 
   function cmdWatchWorker(args) {

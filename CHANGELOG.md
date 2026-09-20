@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- 修复 `agentkit worktree unwatch` 只翻 record 状态、不等后台 watcher 退出的竞态。此前命令返回后
+  detached worker 最快也要等下一轮轮询才发现自己被解除，期间仍在写心跳、target cache 和 `FETCH_HEAD`；
+  紧接着删除或移动该 worktree 会与这些写入相撞（在 CI 上表现为 teardown `rmSync` 报 `ENOTEMPTY`）。
+  现在解除事件落盘后按进程组终止该次租约的 watcher，worker 与它在途的 `git fetch` 子进程一起收尾，
+  等整组退出才返回；只有心跳与 record 登记同一个 pid 时才发信号。输出新增 `watcher=<终态>` 后缀，
+  发信号被拒或超时未退出时额外打印告警。
+
 ## 1.2.0 - 2026-09-20
 
 - 升级影响：本批改动多数触及 `core/`、`schemas/`、各域 `domains/<域>/` 或 `docs/<域>/`，升级后
