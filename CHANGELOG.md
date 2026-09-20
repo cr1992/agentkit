@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- 修复验证日志脱敏漏掉 GitHub token。内置模式原先要求 `ghp` / `glpat` / `sk` 后面跟连字符，而 GitHub token 用
+  下划线（`ghp_…`、`github_pat_…`），写进 L0 日志时不会被抹掉。模式集改为按各家前缀分别匹配，并补上
+  `gho_` / `ghu_` / `ghs_` / `ghr_`、Slack `xox?-` 与 AWS `AKIA` / `ASIA` access key id；每种形态有测试锁定。
+  脱敏仍是第二道防线：秘密不该经 `env_allowlist` 进入验证进程。
 - 订正架构真源里四处已经和实现矛盾的内容：§6.2 的能力发现样例（写的是 `protocol_version` 字符串，
   实际 `verify-agent-output` 返回 `protocol_versions` 数组，四个域的协议版本字段并不统一）、
   §6.3 的 Provider 选择 YAML（列了 `extensions.orchestration` / `isolation` / `loop` 三个从不存在的

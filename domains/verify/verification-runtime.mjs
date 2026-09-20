@@ -445,15 +445,26 @@ function pathInside(candidate, parent) {
   return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
 }
 
+// 固定模式集，只增不减，宁可多抹。它是第二道防线：秘密一开始就不该经 env_allowlist 进入验证进程。
+// 各家前缀的分隔符不同（GitHub 用下划线，GitLab / Slack / sk- 系用连字符），不能共用一个分隔符。
+const SECRET_SHAPED_TOKEN = new RegExp([
+  String.raw`\bgh[pousr]_[A-Za-z0-9]{20,}`,
+  String.raw`\bgithub_pat_[A-Za-z0-9_]{20,}`,
+  String.raw`\bglpat-[A-Za-z0-9_-]{12,}`,
+  String.raw`\bsk-[A-Za-z0-9_-]{12,}`,
+  String.raw`\bxox[abposr]-[A-Za-z0-9-]{10,}`,
+  String.raw`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`,
+].join('|'), 'gu');
+
 /** @param {string} text @param {Record<string,string>} environment @param {number} maxBytes */
-function sanitizeLog(text, environment, maxBytes) {
+export function sanitizeLog(text, environment, maxBytes) {
   let sanitized = text;
   for (const [name, value] of Object.entries(environment)) {
     if (value && /(token|secret|password|credential|api[_-]?key)/iu.test(name)) sanitized = sanitized.split(value).join('[REDACTED]');
   }
   sanitized = sanitized
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, 'Bearer [REDACTED]')
-    .replace(/\b(?:ghp|glpat|sk)-[A-Za-z0-9_-]{12,}\b/gu, '[REDACTED]');
+    .replace(SECRET_SHAPED_TOKEN, '[REDACTED]');
   const bytes = Buffer.from(sanitized, 'utf8');
   if (bytes.length <= maxBytes) return sanitized;
   return `${bytes.subarray(0, maxBytes).toString('utf8')}\n[TRUNCATED]\n`;
