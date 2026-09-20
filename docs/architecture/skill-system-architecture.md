@@ -895,7 +895,7 @@ v1 不包含自动聚类、自动改 Skill、自动 accepted、自动发布或�
 
 ## 17. ADR
 
-编号保留原值。ADR-1 与 ADR-5 已由实现回答，写明结论与真源；其余四条仍未决。
+编号保留原值。六条都已定，各自写明结论与真源。
 
 - **ADR-1（已定）**：三个 state root 的默认布局是
   `<系统临时目录>/orchestration-ledger-state/ledgers/<ledger-id>`、
@@ -905,9 +905,25 @@ v1 不包含自动聚类、自动改 Skill、自动 accepted、自动发布或�
   [`domains/orchestrate/orchestration-ledger.mjs`](../../domains/orchestrate/orchestration-ledger.mjs)、
   [`domains/verify/verification-runtime.mjs`](../../domains/verify/verification-runtime.mjs) 与
   [`domains/loop/loop-runtime.mjs`](../../domains/loop/loop-runtime.mjs) 的 `init`。
-- **ADR-2**：日志大小上限和脱敏配置格式。
-- **ADR-3**：standalone verifier 如何获得 clean pinned workdir，同时不复制 worktree 生命周期能力。
-- **ADR-4**：不依赖 `manage-worktrees` 时 repository identity 的跨 clone 语义。
+- **ADR-2（已定）**：日志上限是 Verification Profile 的 `runtime.max_log_bytes`，超出按字节截断并标记
+  `[TRUNCATED]`，脱敏先于截断。脱敏不进 Profile：Profile 是被验收方可以影响的输入，让它定义什么算秘密
+  等于让被审查者配置审查，正则进 JSON 还会带来 ReDoS 与跨实现语义问题。脱敏是运行时内置的固定模式集，
+  只增不减、宁可多抹，真源是
+  [`domains/verify/verification-runtime.mjs`](../../domains/verify/verification-runtime.mjs) 的
+  `sanitizeLog`，每种形态由
+  [`domains/verify/log-redaction.test.mjs`](../../domains/verify/log-redaction.test.mjs) 锁定。它是第二道
+  防线，第一道是 `env_allowlist`：秘密不该进入验证进程的环境。
+- **ADR-3（已定）**：`verify-agent-output` 永不创建、切换或清理 workdir；clean pinned workdir 是调用方的
+  前置条件，verify 只校验它——worktree 根、`HEAD` 等于 `artifact_sha`、工作区 clean、object format 一致，
+  任一不满足即 `stale_precondition`，并在 run-smoke、record-review、run-final 之前各重验一次，真源是
+  `verifyGitArtifact`。有 `manage-worktrees` 时用 `agentkit worktree spawn --base <artifact_sha>` 取得；
+  没有时 `git worktree add --detach <dir> <artifact_sha>`，用完 `git worktree remove`。verify 一旦自己
+  建树，就得回答清理、崩溃残留与并发占用，那是 worktree 域的全部职责。
+- **ADR-4（已定）**：repository identity 是从 Artifact 可达的 root commit 集合的摘要
+  （`git:<object_format>:sha256(...)`），不含 remote URL、路径或 clone 时间，真源是 `verifyGitArtifact`。
+  同一仓库的任意完整 clone、fork、mirror 得到同一 identity：Evidence 绑定的是 `artifact_sha`，identity
+  只用来挡「拿另一个仓库里的东西来验」。shallow clone 会把 graft 点当成 root、算出不同的 identity，
+  所以被明确拒绝并提示 `git fetch --unshallow`；改写 root 的历史重写会改变 identity，这是正确的。
 - **ADR-5（已定）**：canonical JSON 与 envelope 摘要采用零依赖的本地实现，不锁定版本依赖；真源是
   [`core/digest.mjs`](../../core/digest.mjs)，零依赖由
   [`tests/package-distribution.test.mjs`](../../tests/package-distribution.test.mjs) 锁定。本地实现必须
@@ -919,6 +935,10 @@ v1 不包含自动聚类、自动改 Skill、自动 accepted、自动发布或�
   实现 RFC 的两条 MUST-error 条款，拒绝非有限 number 与未配对代理对；宽松档
   （orchestrate / content digest）刻意保留 `JSON.stringify` 口径，把这两类输入分别变成 `null`
   与转义后放行，该偏离同样由上述向量锁定，收敛严格度是一次独立决策。
-- **ADR-6**：Reflection / Proposal 的默认 state root、保留周期、跨项目去重键和用户导出授权。
+- **ADR-6（已定）**：Reflection / Proposal 不设默认 state root，`--state-root` 必填——默认值会在用户机器上
+  悄悄攒出一个跨项目的观察库，而跨项目正是需要授权的那一步。工具不管保留周期：记录跟随所属 ledger / run
+  的 state root，生命周期等于那个目录。不定义跨项目去重键，没有任何跨项目聚合的消费方。工具不提供把
+  Reflection / Proposal 发往仓库外的命令，导出只能是用户自己拷文件；真源是
+  [`domains/orchestrate/orchestration-reflection.mjs`](../../domains/orchestrate/orchestration-reflection.mjs)。
 
-未决 ADR 可以影响实现细节，但不能推翻“独立可用、组合增强、脚本保证机械不变量”的总体边界。
+ADR 可以影响实现细节，但不能推翻“独立可用、组合增强、脚本保证机械不变量”的总体边界。

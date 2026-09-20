@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- `agentkit verify` 在 shallow clone 上明确拒绝并提示 `git fetch --unshallow`。shallow clone 会把 graft 点
+  当成 root commit，算出的 repository identity 与完整 clone 不同，此前表现为一条费解的
+  `repository identity 已变化`。
+- 架构真源 §17 的四条待定 ADR 定稿：脱敏是运行时内置的固定模式集、不进 Profile；verify 永不创建
+  workdir；repository identity 是可达 root commit 集合的摘要；Reflection / Proposal 不设默认 state
+  root、工具不提供导出命令。
+
 ## 1.3.0 - 2026-09-20
 
 - 修复验证日志脱敏漏掉 GitHub token。内置模式原先要求 `ghp` / `glpat` / `sk` 后面跟连字符，而 GitHub token 用

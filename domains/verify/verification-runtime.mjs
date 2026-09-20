@@ -301,6 +301,11 @@ export function verifyGitArtifact(artifact, workdir, frozenIdentity = null) {
   if (head !== artifact.artifact_sha) throw new OperationalAbort('stale_precondition', 'HEAD 已偏离冻结 artifact_sha');
   const dirty = /** @type {Buffer} */ (git(['status', '--porcelain=v1', '-z', '--untracked-files=all'], root, 'buffer'));
   if (dirty.length > 0) throw new OperationalAbort('stale_precondition', '验证 workdir 不是 clean 状态');
+  // shallow clone 会把 graft 点当成 root commit，算出的 identity 与完整 clone 不同；明确拒绝，
+  // 不让调用方去猜一条「repository identity 已变化」是什么意思。
+  if (String(git(['rev-parse', '--is-shallow-repository'], root)).trim() === 'true') {
+    throw new OperationalAbort('stale_precondition', '验证 workdir 是 shallow clone，repository identity 需要完整历史；先 git fetch --unshallow');
+  }
   const roots = String(git(['rev-list', '--max-parents=0', artifact.artifact_sha], root)).trim().split('\n').filter(Boolean).sort();
   const runtimeIdentity = `git:${objectFormat}:${sha256(Buffer.from(canonicalJson(roots), 'utf8'))}`;
   if (frozenIdentity && runtimeIdentity !== frozenIdentity) throw new OperationalAbort('stale_precondition', 'repository identity 已变化');
