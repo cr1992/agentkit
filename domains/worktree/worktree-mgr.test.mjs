@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -226,10 +226,16 @@ function makeRepo() {
   git(repo, ['init', '-b', 'trunk']);
   git(repo, ['config', 'user.name', 'Manager Test']);
   git(repo, ['config', 'user.email', 'manager-test@example.invalid']);
+  // Git 的自动维护会 detach 成后台进程往 .git 里写；fixture 目录随时会被 teardown 删掉，
+  // 不给它留任何自发写入的理由。
+  git(repo, ['config', 'gc.auto', '0']);
+  git(repo, ['config', 'maintenance.auto', 'false']);
   writeFileSync(join(repo, 'README.md'), 'fixture\n');
   git(repo, ['add', 'README.md']);
   git(repo, ['commit', '-m', 'chore: init']);
-  return { sandbox, repo, cleanup: () => rmSync(sandbox, { recursive: true, force: true }) };
+  // maxRetries 只兜底 teardown 与宿主 indexer/AV 之类外部扫描的瞬时占用；测试自己起的
+  // 后台写入者必须在 cleanup 之前被停掉，不能靠重试掩盖。
+  return { sandbox, repo, cleanup: () => rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) };
 }
 
 function makeRemoteRepo() {
@@ -237,6 +243,10 @@ function makeRemoteRepo() {
   const remote = join(fixture.sandbox, 'origin.git');
   mkdirSync(remote);
   git(remote, ['init', '--bare']);
+  // receive-pack 收包后会触发同样会 detach 的自动 gc，裸源仓与工作仓一起关掉。
+  git(remote, ['config', 'gc.auto', '0']);
+  git(remote, ['config', 'maintenance.auto', 'false']);
+  git(remote, ['config', 'receive.autogc', 'false']);
   git(fixture.repo, ['remote', 'add', 'origin', remote]);
   git(fixture.repo, ['push', 'origin', 'trunk:main']);
   git(fixture.repo, ['fetch', 'origin', 'main']);
@@ -279,6 +289,16 @@ async function waitFor(predicate, message, timeoutMs = 10_000) {
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
   }
   assert.fail(message);
+}
+
+/** watcher 是 detached 进程组 leader；负号 pid 一次探到 worker 和它在途的 git 子进程。 */
+function processGroupIsAlive(pid) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
 }
 
 function prepareReviewTask(fixture, task) {
@@ -1516,6 +1536,59 @@ test('merge_detected 前 unwatch 赢得 record lock 后旧 watcher 不得复活�
   assert.equal(recordFor(fixture, task).auto_reclaim.state, 'disarmed');
   const audit = JSON.parse(manager(fixture.repo, ['audit', task, '--json']));
   assert.equal(audit.events.some((event) => event.event_type === 'merge_detected'), false);
+});
+
+test('unwatch 返回时 watcher 进程组必须已退出，之后没有后台写入者碰 worktree', (t) => {
+  const fixture = makeRemoteRepo();
+  const task = 'auto-unwatch-quiesce';
+  t.after(() => {
+    try { manager(fixture.repo, ['unwatch', task]); } catch {}
+    fixture.cleanup();
+  });
+  prepareWatchedTask(fixture, task);
+  const pid = recordFor(fixture, task).auto_reclaim.pid;
+  assert.equal(processGroupIsAlive(pid), true, 'watcher 进程组应在 unwatch 前存活');
+
+  // terminated 是被信号收尾，not-running 是 worker 恰好在解除事件落盘的间隙自行退出；两者都
+  // 表示这次租约再无进程。
+  assert.match(manager(fixture.repo, ['unwatch', task]), /watcher=(terminated|not-running)/);
+  // 不轮询等待：unwatch 是同步契约，返回即代表 worker 连同在途 git 子进程都已收尾，
+  // 调用方可以立刻删除 worktree 而不会与后台写入相撞。
+  assert.equal(processGroupIsAlive(pid), false, 'unwatch 返回后 watcher 进程组仍在运行');
+
+  const heartbeat = join(fixture.repo, '.git', 'worktree-trace', 'v1', 'watchers', `${recordFor(fixture, task).worktree_id}.json`);
+  assert.equal(existsSync(heartbeat), false);
+});
+
+test('心跳过期时 unwatch 不按组发信号，避免打到复用了旧 pid 的无关进程', async (t) => {
+  const fixture = makeRemoteRepo();
+  const task = 'auto-unwatch-stale-pid';
+  let pid = 0;
+  t.after(() => {
+    if (pid) { try { process.kill(-pid, 'SIGKILL'); } catch {} }
+    try { manager(fixture.repo, ['unwatch', task]); } catch {}
+    fixture.cleanup();
+  });
+  prepareWatchedTask(fixture, task);
+  const armed = recordFor(fixture, task);
+  pid = armed.auto_reclaim.pid;
+  // record 是 event chain 上的缓存，pid 改不动；所以用真 worker 本身构造「只有新鲜度不成立」：
+  // SIGSTOP 让它活着但不再刷心跳，再把心跳拨老。此时 token、两处 pid、存活全部对得上，
+  // 和「陈旧 pid 被复用成别的进程组 leader」在守卫眼里是同一个形状。
+  process.kill(pid, 'SIGSTOP');
+  const heartbeatPath = join(fixture.repo, '.git', 'worktree-trace', 'v1', 'watchers', `${armed.worktree_id}.json`);
+  const heartbeat = JSON.parse(readFileSync(heartbeatPath, 'utf8'));
+  assert.equal(heartbeat.pid, pid);
+  heartbeat.heartbeat_at = new Date(Date.now() - 600_000).toISOString();
+  writeFileSync(heartbeatPath, `${JSON.stringify(heartbeat, null, 2)}\n`);
+
+  // unverified 是「登记的 pid 还活着、但没进发信号那条路径」的终态。守卫一旦失效，SIGTERM 会挂在
+  // 被停住的进程上，unwatch 等满超时后报 timeout。
+  const output = manager(fixture.repo, ['unwatch', task]);
+  assert.match(output, /watcher=unverified/);
+  assert.match(output, /WARN .*没有向它发信号/);
+  assert.equal(processGroupIsAlive(pid), true);
+  assert.equal(recordFor(fixture, task).auto_reclaim.state, 'disarmed');
 });
 
 test('MR 已合入但 stash/dirty 时 watcher 保留并在阻塞清除后自动重试', async (t) => {

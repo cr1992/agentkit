@@ -39,6 +39,9 @@ export const WATCH_MAX_INTERVAL_MS = 60 * 60_000;
 export const WATCH_HEARTBEAT_MIN_STALE_MS = 5_000;
 export const WATCH_TARGET_CACHE_MAX_AGE_MS = 15_000;
 export const WATCH_TARGET_LEASE_STALE_MS = FETCH_TIMEOUT_MS * 2;
+// 上限覆盖「worker 正卡在一次 FETCH_TIMEOUT_MS 的 fetch 里」这种最慢收尾。
+export const WATCHER_STOP_TIMEOUT_MS = FETCH_TIMEOUT_MS + 2_000;
+export const WATCHER_STOP_POLL_MS = 20;
 export const WATCH_SLEEP_CELL = new Int32Array(new SharedArrayBuffer(4));
 export const TERMINAL_TASK_STATES = new Set(['done', 'abandoned']);
 export const TASK_TRANSITIONS = {
@@ -107,6 +110,44 @@ export function processIsAlive(pid, probe = process.kill) {
     // kill(2) 的 EPERM 表示进程存在、只是当前 sandbox/user 无权 signal；不能误报 stale。
     return Boolean(error && typeof error === 'object' && error.code === 'EPERM');
   }
+}
+
+/** watcher 是 detached 进程组 leader，负号 pid 探的是整组而不是单个进程。@param {number} pid */
+function watcherGroupIsAlive(pid) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return Boolean(error && typeof error === 'object' && error.code === 'EPERM');
+  }
+}
+
+/**
+ * watcher worker 与它同步派生的 git 子进程同属一个 detached 进程组。解除监听只翻 record 状态
+ * 时，worker 最快也要等下一轮轮询才退出，期间仍在 common-dir 与 .git 里写心跳、target cache 和
+ * FETCH_HEAD；调用方紧接着删除或移动 worktree 就会撞上这些写入。因此终态判据是「整组已退出」：
+ * 按组发 SIGTERM 让 worker 连同在途 git 一起收尾，再轮询到组内无进程为止。
+ * @param {number} pid @param {{timeoutMs?:number,platform?:string}} [options]
+ * @returns {{stopped:boolean,reason:'not-running'|'terminated'|'signal-denied'|'timeout'|'unsupported-platform'}}
+ */
+export function stopWatcherProcessGroup(pid, options = {}) {
+  // pid<=1 时 kill(-pid) 会广播给整个会话甚至 init，必须先挡掉。
+  if (!Number.isInteger(pid) || pid <= 1) return { stopped: true, reason: 'not-running' };
+  // 负号 pid 是 POSIX 进程组语义；Windows 上 Node 不支持，只能退回 worker 自己轮询退出。
+  if ((options.platform ?? process.platform) === 'win32') return { stopped: false, reason: 'unsupported-platform' };
+  if (!watcherGroupIsAlive(pid)) return { stopped: true, reason: 'not-running' };
+  try {
+    process.kill(-pid, 'SIGTERM');
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ESRCH') return { stopped: true, reason: 'not-running' };
+    return { stopped: false, reason: 'signal-denied' };
+  }
+  const deadline = Date.now() + (options.timeoutMs ?? WATCHER_STOP_TIMEOUT_MS);
+  while (Date.now() < deadline) {
+    if (!watcherGroupIsAlive(pid)) return { stopped: true, reason: 'terminated' };
+    sleep(WATCHER_STOP_POLL_MS);
+  }
+  return { stopped: false, reason: 'timeout' };
 }
 
 /** @param {string} commonDir */

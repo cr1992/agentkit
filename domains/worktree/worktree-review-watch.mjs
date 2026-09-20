@@ -21,6 +21,7 @@ export function createCommands(deps) {
     WATCH_MIN_INTERVAL_MS,
     WATCH_MAX_INTERVAL_MS,
     WATCH_TARGET_CACHE_MAX_AGE_MS,
+    WATCHER_STOP_TIMEOUT_MS,
     git,
     gitTry,
     sleep,
@@ -28,6 +29,8 @@ export function createCommands(deps) {
     writeWatcherHeartbeat,
     removeWatcherHeartbeat,
     parseWatchInterval,
+    stopWatcherProcessGroup,
+    processIsAlive,
     watcherHealth,
     refreshTargetRef,
     refreshTargetRefCached,
@@ -704,6 +707,8 @@ export function createCommands(deps) {
     if (active.state === 'merge_detected') {
       die('目标分支已确认包含冻结的 MR head，自动回收已进入提交阶段，不能再 unwatch。');
     }
+    // 必须在 disarm 之前判定：watcherHealth 只对仍武装的 record 成立，disarm 之后心跳也会被删。
+    const watcherPid = disarmablePid(loaded.context.common_dir, record);
     record = appendReclaimEvent(loaded.context.common_dir, record, 'auto_reclaim_disarmed', (next) => {
       next.auto_reclaim.state = 'disarmed';
       next.auto_reclaim.disarmed_at = new Date().toISOString();
@@ -717,7 +722,36 @@ export function createCommands(deps) {
       };
     });
     removeWatcherHeartbeat(loaded.context.common_dir, record.worktree_id, token);
-    log(`auto-reclaim watcher 已解除: ${record.worktree_id.slice(0, 8)}`);
+    // 判定不成立时不发信号；登记的 pid 若仍存活，如实报 unverified，而不是 not-running。
+    const registeredPid = Number(record.auto_reclaim?.pid);
+    const stop = watcherPid === 0 && processIsAlive(registeredPid)
+      ? { stopped: false, reason: 'unverified' }
+      : stopWatcherProcessGroup(watcherPid);
+    log(`auto-reclaim watcher 已解除: ${record.worktree_id.slice(0, 8)} watcher=${stop.reason}`);
+    if (!stop.stopped) log(`WARN ${unstoppedWatcherReason(stop.reason, watcherPid || registeredPid)}`);
+  }
+
+  /** @param {string} reason @param {number} pid */
+  function unstoppedWatcherReason(reason, pid) {
+    const tail = '删除或移动该 worktree 前请先确认它已结束。';
+    if (reason === 'unverified') return `登记的 watcher pid ${pid} 仍存活，但心跳不足以证明它属于本次租约，没有向它发信号；若它确是 watcher，会在下一轮轮询时自行退出，${tail}`;
+    if (reason === 'signal-denied') return `无权向 watcher 进程组 ${pid} 发信号，它没有被终止；${tail}`;
+    if (reason === 'unsupported-platform') return `当前平台不支持按进程组终止 watcher，进程组 ${pid} 仍在运行；它会在下一轮轮询时自行退出，${tail}`;
+    return `watcher 进程组 ${pid} 未在 ${WATCHER_STOP_TIMEOUT_MS}ms 内退出；${tail}`;
+  }
+
+  /**
+   * 返回可安全按进程组终止的 watcher pid；判定不成立就返回 0，交给 worker 自行轮询退出。
+   * watcherHealth 同时校验 token 一致、pid 存活与心跳未过期；心跳新鲜度是这里的承重项——
+   * 崩溃的 worker 来不及删心跳，陈旧登记会一直留着同一个 pid，等它被系统复用成别的进程组
+   * leader，只比对 token 和 pid 就会把信号打到无关进程组上。
+   * @param {string} commonDir @param {Record<string,any>} record
+   */
+  function disarmablePid(commonDir, record) {
+    const heartbeat = readWatcherHeartbeat(commonDir, record.worktree_id);
+    if (!watcherHealth(record, heartbeat).healthy) return 0;
+    const pid = Number(heartbeat.state?.pid);
+    return pid === Number(record.auto_reclaim?.pid) ? pid : 0;
   }
 
   function cmdWatchWorker(args) {
