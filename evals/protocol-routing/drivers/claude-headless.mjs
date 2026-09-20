@@ -27,6 +27,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGENTKIT_BIN, agentkitJson } from '../lib/agentkit.mjs';
 import { createAgentkitShim, prependToPath } from '../lib/agentkit-shim.mjs';
+import { classify } from '../lib/classifier.mjs';
 import { createFixtureRepo, repoSummary } from '../lib/fixture-repo.mjs';
 import { summarizeLedgerStatus } from '../lib/ledger-probe.mjs';
 import { buildPrecondition, renderPrompt } from '../lib/preconditions.mjs';
@@ -99,6 +100,41 @@ function parseStream(text) {
 }
 
 /**
+ * 增量扫描 stream-json：边收边把 `tool_use` 块攒出来，用于「正向断言成立就终止会话」。
+ *
+ * 为什么不复用 `parseStream()`：那个吃整份文本，会话每来一个 chunk 就整份重解一次，
+ * 长会话上是平方级。这里只处理**新到的完整行**，半行留在缓冲里等下一个 chunk。
+ *
+ * @returns {{ uses: Array<{ id: string | null, tool_name: string, tool_input: any }>, push: (chunk: string) => number }}
+ */
+export function createToolUseScanner() {
+  let pending = '';
+  /** @type {Array<{ id: string | null, tool_name: string, tool_input: any }>} */
+  const uses = [];
+  return {
+    uses,
+    push(chunk) {
+      pending += chunk;
+      let added = 0;
+      let index = pending.indexOf('\n');
+      while (index >= 0) {
+        const line = pending.slice(0, index).trim();
+        pending = pending.slice(index + 1);
+        index = pending.indexOf('\n');
+        if (!line.startsWith('{')) continue;
+        let record;
+        try { record = JSON.parse(line); } catch { continue; }
+        if (record.type !== 'assistant' || !Array.isArray(record.message?.content)) continue;
+        for (const block of record.message.content) {
+          if (block?.type === 'tool_use') { uses.push({ id: block.id ?? null, tool_name: block.name, tool_input: block.input }); added += 1; }
+        }
+      }
+      return added;
+    },
+  };
+}
+
+/**
  * 把 tool_use 序列与探针快照配对。
  * 有 tool_use_id 就按 id 配；没有就按顺序配——后者在并行工具调用时可能错位，属已知盲区。
  * @param {Array<{ id: string | null, tool_name: string, tool_input: any }>} uses
@@ -120,11 +156,22 @@ function pairEvents(uses, probes) {
 }
 
 /**
- * 会话结束后把 `--input` 一类参数指向的 JSON 文件内联进观测记录。
- * 第 7 条要判「声明了 independent_evidence 的 add-node」、第 10 条要判「改成 passed」，
- * 都得看载荷；内联一份是为了让 observation.jsonl 自带足够信息，离开这台机器也能复判。
- * 读不到就留空——正向用例因此不给分，禁止用例因此按违规处理（见 cases.mjs）。
+ * 这条用例能不能在断言成立之后提前终止会话。
+ *
+ * 只有**正向、且只看第一个观测量**的用例可以：那类用例的判定在第一个可观测动作出现的
+ * 那一刻就已经定死，后面再跑什么都改不了结论，继续跑纯属烧时间和额度
+ * （用例 4 在第 8 个事件就出分，之后还要跑 4–8 分钟，issue #15 的后续项 4）。
+ *
+ * 禁止类**必须看完整条会话**——违规可能发生在任何一个事件上，提前收手等于把失守洗掉。
+ * 标了 `assert_scope: 'whole_session'` 的正向用例（第 5 条）同理不终止：
+ * 它的断言就是「整条会话里出现过」，现在没出现不代表后面不会出现。
+ *
+ * @param {{ category: string, assert_scope?: string }} evalCase
  */
+export function canTerminateEarly(evalCase) {
+  return evalCase.category === 'positive' && evalCase.assert_scope !== 'whole_session';
+}
+
 /**
  * 会话开始前的台账快照。没有台账的现场返回 null。
  * 和探针用的是同一个口径函数，所以「第一个事件之前」与「第 n 个事件之前」形状一致。
@@ -136,6 +183,12 @@ function initialLedgerSnapshot(ledgerDir) {
   catch { return null; }
 }
 
+/**
+ * 会话结束后把 `--input` 一类参数指向的 JSON 文件内联进观测记录。
+ * 第 7 条要判「声明了 independent_evidence 的 add-node」、第 10 条要判「改成 passed」，
+ * 都得看载荷；内联一份是为了让 observation.jsonl 自带足够信息，离开这台机器也能复判。
+ * 读不到就留空——正向用例因此不给分，禁止用例因此按违规处理（见 cases.mjs）。
+ */
 function collectPayloads(events) {
   /** @type {Record<string, unknown>} */
   const payloads = {};
@@ -233,6 +286,9 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
       // 留档只记键名，不记取值——ANTHROPIC_API_KEY 之类的值不进会话目录。
       writeFileSync(join(session, 'command.json'), `${JSON.stringify({ bin, args, cwd: repo, env_keys: Object.keys(env).sort() }, null, 2)}\n`);
 
+      // 提前终止：正向且只看第一个观测量的用例，判定一旦成立就没有再跑下去的理由。
+      // 判据和最终判定**用的是同一个 assert**，只是喂给它一份截止到此刻的分类结果。
+      const earlyEligible = canTerminateEarly(evalCase);
       const run = await new Promise((resolvePromise) => {
         const child = spawn(bin, args, {
           cwd: repo,
@@ -241,11 +297,36 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
         });
         let stdout = '';
         let stderr = '';
+        /** @type {{ at_seq: number, reason: string } | null} */
+        let early = null;
+        const scanner = createToolUseScanner();
         const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
-        child.stdout.on('data', (chunk) => { stdout += chunk; });
+        /** @type {NodeJS.Timeout | null} */
+        let hardKill = null;
+        const finish = (/** @type {number | null} */ code, /** @type {string} */ extraStderr = '') => {
+          clearTimeout(timer);
+          if (hardKill) clearTimeout(hardKill);
+          resolvePromise({ code, stdout, stderr: `${stderr}${extraStderr}`, early });
+        };
+        child.stdout.on('data', (chunk) => {
+          stdout += chunk;
+          if (!earlyEligible || early || scanner.push(String(chunk)) === 0) return;
+          // 探针文件按事件追加；还没落盘的 tool_use 在这里配不上，下一个 chunk 再看。
+          let probes = [];
+          try { probes = readFileSync(probeFile, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line)); }
+          catch { return; }
+          const paired = pairEvents(scanner.uses, probes);
+          if (!paired.events.length) return;
+          const verdict = evalCase.assert(classify({ initial_repo: initialRepo, initial_ledger: initialLedger, events: paired.events }), {});
+          if (!verdict.satisfied) return;
+          early = { at_seq: paired.events.at(-1).seq, reason: verdict.reason };
+          // 先 SIGTERM 给宿主一个收尾的机会（它要写自己的会话记录），再补一刀。
+          child.kill('SIGTERM');
+          hardKill = setTimeout(() => child.kill('SIGKILL'), 5000);
+        });
         child.stderr.on('data', (chunk) => { stderr += chunk; });
-        child.on('close', (code) => { clearTimeout(timer); resolvePromise({ code, stdout, stderr }); });
-        child.on('error', (error) => { clearTimeout(timer); resolvePromise({ code: null, stdout, stderr: `${stderr}\n${error.message}` }); });
+        child.on('close', (code) => { finish(code); });
+        child.on('error', (error) => { finish(null, `\n${error.message}`); });
       });
       writeFileSync(join(session, 'stream.jsonl'), run.stdout);
       if (run.stderr) writeFileSync(join(session, 'stderr.log'), run.stderr);
@@ -280,6 +361,8 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
           agentkit_shim: { dir: shim.dir, path: shim.path, target: shim.target },
           pairing: paired.pairing,
           unpaired_tool_uses: paired.unpaired,
+          // 这条用例允许不允许提前终止（禁止类与 whole_session 的正向类都不允许）。
+          early_termination_eligible: earlyEligible,
         },
         initial_repo: initialRepo,
         // 会话开始前的台账快照：第 7、10、11 条判「发起那一下之前台账什么状态」的起点。
@@ -287,7 +370,9 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
         events: paired.events,
         payloads: collectPayloads(paired.events),
         // host_result 是「这次算不算数据点」的唯一可靠信号，见 lib/run-validity.mjs。
-        end: { exit_code: run.code, error: run.stderr ? run.stderr.slice(0, 2000) : null, host_result: hostResult },
+        // early_terminated 非空时这次会话是被 harness 主动掐掉的，不是故障——
+        // 那种情况下拿不到 result 事件，退出码也不是 0，判据必须先看它。
+        end: { exit_code: run.code, error: run.stderr ? run.stderr.slice(0, 2000) : null, host_result: hostResult, early_terminated: run.early ?? null },
       };
       writeFileSync(join(session, 'observation.jsonl'), serializeObservation(observation));
       return { ...observation, source: join(session, 'observation.jsonl') };
