@@ -233,7 +233,7 @@ export function buildSelftestScript() {
     'echo "OK: 回放基线与 README 记载一致"',
     'echo "== 会话环境里 agentkit 可解析且版本正确 =="',
     'node evals/protocol-routing/container/selftest-agentkit-shim.mjs',
-    'echo "== skill 安装（容器内、隔离配置目录） =="',
+    'echo "== skill 安装（容器内装一次 + 缓存复用 + 复制进隔离配置目录） =="',
     'node evals/protocol-routing/container/selftest-skill-install.mjs',
     `echo "SELFTEST OK uid=$(id -u) user=$(id -un)"`,
   ].join('\n');

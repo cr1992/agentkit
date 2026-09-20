@@ -121,6 +121,9 @@ export async function main(argv, hooks = {}) {
   // 先建驱动器再建目录：被拒绝时（例如没显式同意 bypassPermissions）不该留下空目录。
   const driver = makeDriver(options, outDir);
   mkdirSync(outDir, { recursive: true });
+  // 开跑前的一次性准备（skill 每轮装一次，见 lib/skill-install.mjs）。
+  // 故意不 catch：装不上就整轮当场停，而不是让每个会话各丢一个样本。
+  const prepared = driver.prepare ? await driver.prepare() : null;
   /** @type {Array<{ case_id: number, run: number, observation: any }>} */
   const sessions = [];
   /** @type {string[]} */
@@ -143,7 +146,7 @@ export async function main(argv, hooks = {}) {
     }
   }
 
-  const meta = { ...driver.meta };
+  const meta = { ...driver.meta, ...(prepared ?? {}) };
   const firstSession = sessions[0]?.observation;
   if (firstSession?.meta?.skills) meta.skills = firstSession.meta.skills;
   if (!meta.model && firstSession?.meta?.model) meta.model = firstSession.meta.model;

@@ -30,7 +30,7 @@ import { createAgentkitShim, prependToPath } from '../lib/agentkit-shim.mjs';
 import { createFixtureRepo, repoSummary } from '../lib/fixture-repo.mjs';
 import { summarizeLedgerStatus } from '../lib/ledger-probe.mjs';
 import { buildPrecondition, renderPrompt } from '../lib/preconditions.mjs';
-import { installSkills } from '../lib/skill-install.mjs';
+import { installSkills, prepareSkillCache } from '../lib/skill-install.mjs';
 import { serializeObservation } from '../lib/observation.mjs';
 import { buildSessionEnv } from '../lib/session-env.mjs';
 
@@ -158,11 +158,23 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
   // 在建驱动器的时候就拒绝，而不是等第一个会话——那时已经建过 fixture 仓、装过 skill 了。
   if (!allowBypassPermissions) throw new Error(BYPASS_REFUSAL);
   const version = hostVersion(bin);
+  /** @type {import('../lib/skill-install.mjs').SkillCache | null} */
+  let skillCache = null;
   return {
     name: 'claude-headless',
     meta: { driver: 'claude-headless', host: 'claude-code', host_version: version, model },
     needsFixture: true,
+    /**
+     * 开跑前的一次性准备。**每轮只装一次 skill**，各会话从缓存复制（见 lib/skill-install.mjs）。
+     * 装不上就在这里抛：`run.mjs` 还没进用例循环，整轮当场停，不会表现成「跑到一半丢样本」。
+     */
+    async prepare() {
+      skillCache = prepareSkillCache({ cacheDir: join(outDir, 'skill-cache') });
+      return { skill_cache: { dir: skillCache.dir, reused: skillCache.reused, installer_exit_code: skillCache.installer?.exit_code ?? null } };
+    },
     async runSession({ evalCase, runIndex, attempt = 1 }) {
+      // 正常路径上 run.mjs 已经调过 prepare()；这里兜底，让驱动器单独被调用时也成立。
+      if (!skillCache) skillCache = prepareSkillCache({ cacheDir: join(outDir, 'skill-cache') });
       // 重试落在自己的目录里，不覆盖上一次的留档——无效运行的现场是排障材料，不能被冲掉。
       // 第 1 次尝试仍然叫 `run-<n>`，README 里那几条冒烟检查命令因此不用改。
       const session = join(outDir, 'sessions', `case-${evalCase.id}`, attempt > 1 ? `run-${runIndex}-attempt-${attempt}` : `run-${runIndex}`);
@@ -172,7 +184,7 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
 
       const home = join(session, 'home');
       const configDir = join(home, '.claude');
-      const installation = installSkills({ configDir, home });
+      const installation = installSkills({ configDir, home, cache: skillCache });
       // PATH 上的 `agentkit`：四个 SKILL.md 通篇指示调用它，真实安装态下由 `npm i -g` 提供，
       // 评测现场没有。垫片转发到**被测 checkout** 的 bin/agentkit.mjs，见 lib/agentkit-shim.mjs。
       const shim = createAgentkitShim({ dir: join(session, 'bin') });
@@ -256,7 +268,9 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
           installed_skills: installation.skills,
           // 安装器自己的回报（退出码 + JSON）：只留档。判「装没装上」看的是文件系统，
           // 见 lib/skill-install.mjs 顶部那段「不看退出码」的理由。
+          // 本轮只装一次，这里记的是那一次的回报；`skill_source` 记这个会话是从哪拿到的。
           skill_installer: installation.installer,
+          skill_source: installation.source,
           setup: evalCase.setup,
           setup_notes: precondition.notes,
           setup_vars: precondition.vars,

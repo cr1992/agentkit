@@ -44,7 +44,7 @@
 | 会话怎么起 | 用宿主 CLI 的无头模式逐用例起新会话，工具事件流完整落盘为 JSONL；每份结果记录宿主名、宿主版本、模型 ID | `drivers/claude-headless.mjs` |
 | 现场 | 每个会话一份全新 fixture 仓拷贝（临时目录、独立 git 仓、独立 state root、独立 `HOME` 与 `CLAUDE_CONFIG_DIR`），会话之间不共享任何状态；用例需要的前置状态由脚本预先建好；PATH 上有一个指向被测 checkout 的 `agentkit` | `lib/fixture-repo.mjs`、`lib/preconditions.mjs`、`lib/agentkit-shim.mjs` |
 | 哪次算数据点 | 宿主自己标了错误的会话（`result` 事件 `is_error` / 错误 `subtype`、最终文本以 `API Error` 开头、非零退出且零工具事件）自动退避重试最多 2 次；仍无效记 `invalid`，不进 k/n | `lib/run-validity.mjs`、`run.mjs` |
-| skill 怎么装 | 用 README 记载的正式安装命令，把**被测提交**的四个 skill 装进该会话的隔离配置目录；结果里记录四个 skill 的 `content_digest` | `lib/skill-install.mjs` |
+| skill 怎么装 | 用 README 记载的正式安装命令，把**被测提交**的四个 skill 装进本轮的 skill 缓存，**每轮只装一次**；各会话从缓存复制，不触网。装不上在开跑前就报错退出。结果里记录四个 skill 的 `content_digest` | `lib/skill-install.mjs` |
 | `WRITE` 怎么判 | 不靠解析命令文本。每个工具事件之后对 fixture 仓取一次 `git status --porcelain` 与 `HEAD` 摘要，第一个让摘要变化的工具事件记为 `WRITE` | `lib/probe.mjs`（PostToolUse hook）+ `lib/classifier.mjs` |
 | 「发起那一下之前台账什么状态」怎么判 | 同一个 PostToolUse 探针，对台账再取一次 `orchestrate ledger status`；判定时取**该事件之前**的那份快照。第 7、10 条靠它把「先验完再收尾」和「什么都没验就收尾」分开 | `lib/probe.mjs` + `lib/ledger-probe.mjs` |
 
@@ -234,6 +234,23 @@ HOME=<会话 home> CLAUDE_CONFIG_DIR=<会话 home>/.claude \
 
 装完会校验四个 `SKILL.md` 都在；缺任何一个直接失败。`content_digest` 取自被测提交自己的
 `agentkit capabilities --json`，是报告里唯一能回溯到源码的锚点。
+
+**每轮只装一次。** 这条命令跑在 `<out>/skill-cache/` 上，由 `run.mjs` 在进用例循环**之前**
+调用一次（驱动器的 `prepare()`）；每个会话随后只把缓存里那四个目录复制进自己的隔离配置目录。
+旧实现是每个会话各装一遍：一轮 33 个会话就是 33 次 `npx -y skills`，既慢，网络一抖还丢样本
+（n=10 补跑里 3 个会话因 `ECONNRESET` 记成会话失败，issue #15 的后续项 3）。
+
+三条随之成立：
+
+- **装不上在开跑前就报。** `prepare()` 抛出的错误不被捕获，整轮当场停，不再表现成
+  「跑到第几个会话突然少一个样本」。
+- **断网也能起会话。** 缓存已完整时 `prepareSkillCache()` 连安装器都不调用，会话侧的
+  `installSkills()` 则**根本没有起子进程的路径**，只有 `cpSync`。
+  `tests/skill-install.test.mjs` 拿一个「一被调用就抛」的安装器哨兵钉住前者，
+  并在 npm registry 指向不可达地址的环境里跑完后者。
+- **会话之间仍然隔离。** 复制而不是软链 / 硬链：会话在 `bypassPermissions` 下能改自己的
+  配置目录，共享一份会让一个会话的改动漏给后面所有会话。测试里改掉一个会话的 `SKILL.md`，
+  断言另一个会话和缓存都不受影响。
 
 **判据只看文件系统，不看安装器的退出码。** `--agent '*'` 会把 skill 铺给安装器认识的全部
 79 个 agent，其中只要有一个不支持全局安装（2026-09 实测：`Eve does not support global
@@ -622,7 +639,7 @@ evals/protocol-routing/
 │   ├── observation.mjs         # 驱动器与分类器之间的 JSONL 格式
 │   ├── fixture-repo.mjs        # fixture 仓生成与摘要
 │   ├── preconditions.mjs       # 前置状态构造
-│   ├── skill-install.mjs       # 隔离配置目录安装四个 skill
+│   ├── skill-install.mjs       # 每轮装一次 skill，各会话从缓存复制
 │   ├── session-env.mjs         # 传给被测会话的环境变量白名单
 │   ├── redact.mjs              # 报告写盘前的认证取值脱敏兜底
 │   ├── probe.mjs               # PostToolUse hook：逐事件仓库摘要 + 台账快照
@@ -635,7 +652,7 @@ evals/protocol-routing/
 │   ├── Dockerfile              # node:22-slim + git + claude CLI，以非 root 用户跑
 │   ├── run-in-container.mjs    # 运行器；拼命令行的部分是纯函数，有断言钉着安全面
 │   ├── run-in-container.sh     # 等价的 shell 入口
-│   ├── selftest-skill-install.mjs  # 容器自检的一环：容器内装一遍四个 skill
+│   ├── selftest-skill-install.mjs  # 容器自检的一环：容器内装一遍并走一次缓存复用
 │   └── selftest-agentkit-shim.mjs  # 容器自检的一环：会话环境里 agentkit 可解析且版本正确
 ├── fixtures/replay/            # 预录会话（合成的平凡基线 + 合成的 API Error 故障）
 └── tests/                      # 自测，已接进 npm test
