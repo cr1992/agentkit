@@ -12,7 +12,7 @@
   `provenance.isolation_assurance` 与 `provenance.limitations`、Embedded Verification Record 的
   `independent_context.assurance`、ledger node 的 `verification_assurance` 与 verify/loop snapshot 的
   `network_isolation_assurance` 上，各有各的取值域，不能互相代答）、§13 的手抄测试清单。
-  四处都改成指向真源的指针，并各自加了反查测试，照着文档做却对不上实现的情况到此为止。
+  四处都改成指向真源的指针，并各自加了反查测试。
   **schema 不变**：`extensions` 仍只定义 `verification`、`review_policy`、`projection`，
   合同字段与取值没有任何变化。
 - 内部回归集补齐两处此前只在文档里承诺、仓内没有用例的覆盖：真实 `--object-format=sha256` 仓库上的
