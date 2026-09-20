@@ -17,7 +17,7 @@
   },
   "type": "module",
   "bin": {
-    "agentkit": "./bin/agentkit.mjs"
+    "agentkit": "bin/agentkit.mjs"
   },
   "engines": {
     "node": ">=22"
