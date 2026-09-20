@@ -38,7 +38,7 @@ import {
 } from '../../core/contract-substance.mjs';
 import { buildScaffoldContract } from '../../core/contract-scaffold.mjs';
 
-export const RUNTIME_VERSION = '1.4.0';
+export const RUNTIME_VERSION = '1.4.1';
 export const PROTOCOL_VERSION = 1;
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const FINDING_CLASSES = new Set(['functional', 'scope', 'verification_definition', 'safety']);

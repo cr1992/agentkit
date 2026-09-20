@@ -138,7 +138,7 @@ export const verifyArtifactEnvelope = artifactCommands.verifyArtifactEnvelope;
 
 function cmdCapabilities(args) {
   rejectUnknownFlags(args.flags, ['json']);
-  console.log(JSON.stringify({ skill: 'manage-worktrees', runtime_version: '1.5.0', contracts: { worktree_binding: [1], artifact_ref: [1], reflection_record: [1], improvement_proposal: [1], batch_result: [1] }, features: ['git-common-dir-ledger', 'ownership-epochs', 'artifact-verification', 'incident-reflection', 'proposed-only-improvement', 'batch-integrate', 'batch-conflict-scan', 'declared-post-integrate-steps', 'batch-result', 'evidence-archive-reclaim', 'durable-pushed-ref-proof', 'auto-armed-review-watch', 'persistent-review-watch-intent', 'launchd-watch-service', 'review-target-advance-prediction', 'explicit-review-refresh', 'managed-history-rewrite', 'stack-parent-attribution', 'structured-change-registration'], content_digest: worktreeSkillDigest() }, null, 2));
+  console.log(JSON.stringify({ skill: 'manage-worktrees', runtime_version: '1.6.0', contracts: { worktree_binding: [1], artifact_ref: [1], reflection_record: [1], improvement_proposal: [1], batch_result: [1] }, features: ['git-common-dir-ledger', 'ownership-epochs', 'artifact-verification', 'incident-reflection', 'proposed-only-improvement', 'batch-integrate', 'batch-conflict-scan', 'declared-post-integrate-steps', 'batch-result', 'evidence-archive-reclaim', 'durable-pushed-ref-proof', 'auto-armed-review-watch', 'persistent-review-watch-intent', 'launchd-watch-service', 'review-target-advance-prediction', 'explicit-review-refresh', 'managed-history-rewrite', 'stack-parent-attribution', 'structured-change-registration'], content_digest: worktreeSkillDigest() }, null, 2));
 }
 
 function usage() {

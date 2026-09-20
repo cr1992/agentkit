@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## 1.3.0 - 2026-09-20
+
 - 修复验证日志脱敏漏掉 GitHub token。内置模式原先要求 `ghp` / `glpat` / `sk` 后面跟连字符，而 GitHub token 用
   下划线（`ghp_…`、`github_pat_…`），写进 L0 日志时不会被抹掉。模式集改为按各家前缀分别匹配，并补上
   `gho_` / `ghu_` / `ghs_` / `ghr_`、Slack `xox?-` 与 AWS `AKIA` / `ASIA` access key id；每种形态有测试锁定。
