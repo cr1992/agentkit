@@ -107,6 +107,21 @@ agentkit worktree reclaim old-task \
 
 `--discard` 不是布尔开关，SHA 必须与实时旧 HEAD 完全一致；归档和丢弃策略登记后不得互换。
 
+## 分支回收边界
+
+`reclaim` 只收本地 ref：删除目录后清理这棵树自己的 local branch，不触碰任何远端。PR 合入后的远端
+head 分支由托管平台的「合并后自动删除」收——GitHub 的 `delete_branch_on_merge`、GitLab 的
+`remove_source_branch`——工具不扫远端，也不替你删：判定要联网，删远端 ref 是对外动作。REST
+`PUT /pulls/{n}/merge` 这类接口本身不删 head 分支，仓库没开自动删除时远端会持续积累。
+
+本地侧的兜底是 `doctor`：已是默认分支祖先、不属于任何 record、也没有被任何 worktree 检出的本地
+分支，作为 `[info] MERGED_ORPHAN_LOCAL_BRANCH` notice 逐条列出，并给出 `git branch -d <branch>`。
+宿主自带的隔离建的分支不进 record，`reclaim` 的分支清理没有机会起作用，只能在这里被看见。notice
+既不是 error 也不计入 `findings=N`，不改变退出码，也不自动删除：判据只做存在性检查，删不删由人
+决定。默认分支的判定先看 `refs/remotes/origin/HEAD`，再退到 spawn 用的 base 解析（Profile
+`default_base`、其他 remote 的 HEAD、well-known remote 分支）；只能解析到描述当前分支自己的来源时
+整类跳过，输出 `MERGED_ORPHAN_BRANCH_SCAN_SKIPPED` 和原因，不猜 `main`。
+
 ## 故障与不变量
 
 - `abandoned` 只冻结写入，不等于已回收；`doctor` 持续报告残留树和断裂替代关系。

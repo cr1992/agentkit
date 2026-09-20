@@ -21,6 +21,8 @@ export function createCommands(deps) {
     readEventChain,
     traceLayout,
     gitTry,
+    isAncestor,
+    resolveBaseRef,
     contentDigest,
     watcherPath,
     readWatcherHeartbeat,
@@ -474,6 +476,108 @@ export function createCommands(deps) {
     }
   }
 
+  /** 默认分支只接受可证明的来源：`profile` 是仓库自己登记的治理边界，`remote_head` /
+   * `well_known_remote` 由远端 ref 决定。`upstream` 与 `head` 只描述当前分支自己，不足以充当
+   * 仓库默认分支。 */
+  const PROVABLE_DEFAULT_BRANCH_SOURCES = new Set(['profile', 'remote_head', 'well_known_remote']);
+
+  /** `origin/main` 这类远端跟踪名对应的本地分支名；无法归因到某个 remote 时按原名处理。
+   * @param {string} cwd @param {string} ref */
+  function localBranchNameOf(cwd, ref) {
+    const remotes = gitTry(['remote'], cwd);
+    if (remotes.ok) {
+      for (const remote of remotes.out.split('\n').filter(Boolean)) {
+        if (ref.startsWith(`${remote}/`)) return ref.slice(remote.length + 1);
+      }
+    }
+    return ref;
+  }
+
+  /** @param {ReturnType<typeof loadRepositoryProfile>} loaded */
+  function resolveDefaultBranch(loaded) {
+    const cwd = loaded.context.current_worktree;
+    const originHead = gitTry(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], cwd);
+    let ref = originHead.ok && originHead.out ? originHead.out : null;
+    let source = ref ? 'origin_head' : null;
+    if (!ref) {
+      let resolved;
+      try {
+        resolved = resolveBaseRef(cwd, loaded.profile.default_base ?? null, null);
+      } catch (error) {
+        return { ref: null, reason: error instanceof Error ? error.message : String(error) };
+      }
+      if (!PROVABLE_DEFAULT_BRANCH_SOURCES.has(resolved.source)) {
+        return { ref: null, reason: `base 解析只得到 source=${resolved.source}，它描述当前分支而不是仓库默认分支。` };
+      }
+      ref = resolved.ref;
+      source = resolved.source;
+    }
+    const tip = gitTry(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], cwd);
+    if (!tip.ok || !tip.out) return { ref: null, reason: `默认分支候选 ${ref} 在本仓解析不到 commit。` };
+    return { ref, source, sha: tip.out, local_name: localBranchNameOf(cwd, ref) };
+  }
+
+  /** 已是默认分支祖先、不属于任何 record、也没有被任何 worktree 检出的本地分支：宿主自带隔离和
+   * 不删 head 分支的合并接口都会留下这种 ref，而 record 里没有它们，reclaim 的分支清理没有机会
+   * 起作用。判据只做存在性检查，所以既不是 error 也不进 findings：逐个列出并给出人工执行的
+   * `git branch -d`。默认分支无法被证明时整类跳过——猜一个 `main` 会把未合入分支误报成可删。
+   * @param {ReturnType<typeof loadRepositoryProfile>} loaded
+   * @param {ReturnType<typeof buildListing>} listing
+   * @param {Record<string,any>[]} notices */
+  function collectDoctorOrphanBranchNotices(loaded, listing, notices) {
+    const cwd = loaded.context.current_worktree;
+    const defaultBranch = resolveDefaultBranch(loaded);
+    if (!defaultBranch.ref) {
+      notices.push({
+        code: 'MERGED_ORPHAN_BRANCH_SCAN_SKIPPED',
+        severity: 'info',
+        detail: `无法确定默认分支，跳过已合入孤儿分支清点：${defaultBranch.reason}`,
+      });
+      return;
+    }
+    const branches = gitTry(['for-each-ref', '--format=%(refname:short) %(objectname)', 'refs/heads/'], cwd);
+    if (!branches.ok) {
+      notices.push({
+        code: 'MERGED_ORPHAN_BRANCH_SCAN_SKIPPED',
+        severity: 'info',
+        detail: '无法列出本地分支，跳过已合入孤儿分支清点。',
+      });
+      return;
+    }
+    const recorded = new Set(
+      listRecordCacheEntries(loaded.context.common_dir)
+        .map((entry) => entry.record?.branch)
+        .filter(Boolean),
+    );
+    const checkedOut = new Set(listing.rows.map((row) => row.branch).filter(Boolean));
+    for (const line of branches.out.split('\n').filter(Boolean)) {
+      const [branch, head] = line.split(' ');
+      if (branch === defaultBranch.ref || branch === defaultBranch.local_name) continue;
+      if (recorded.has(branch) || checkedOut.has(branch)) continue;
+      if (!isAncestor(cwd, head, defaultBranch.sha)) continue;
+      notices.push({
+        code: 'MERGED_ORPHAN_LOCAL_BRANCH',
+        severity: 'info',
+        branch,
+        head_sha: head,
+        default_branch: defaultBranch.ref,
+        default_branch_source: defaultBranch.source,
+        cleanup_command: `git branch -d ${branch}`,
+        detail: `已是 ${defaultBranch.ref} 祖先，且不属于任何 record、没有被任何 worktree 检出。`,
+      });
+    }
+  }
+
+  /** notice 不是 finding：不计入 `findings=N`、不改变退出码，只在输出末尾单独列出。
+   * @param {Record<string,any>[]} notices */
+  function printDoctorNotices(notices) {
+    if (notices.length === 0) return;
+    log(`doctor notices=${notices.length}`);
+    for (const notice of notices) {
+      console.log(`  [${notice.severity}] ${notice.code} ${notice.cleanup_command ?? notice.detail}`);
+    }
+  }
+
   /** WORKTREE_MISSING/BASE_OVERRIDE/EPHEMERAL_WORKTREE 三类 warning 只在目录已经不存在的
    * record 上折叠；archived 已经被上游整段跳过、不会再产生这三类 finding，这里只需要覆盖
    * "还没 archive、但目录已经不见了"的存量噪声。 */
@@ -522,11 +626,14 @@ export function createCommands(deps) {
     collectDoctorSupersessionFindings(listing, findings);
     collectDoctorSessionFindings(listing, findings);
     collectDoctorRuntimeFindings(loaded, findings);
-    if (args.flags.get('json')) { console.log(JSON.stringify({ findings }, null, 2)); return; }
+    const notices = [];
+    collectDoctorOrphanBranchNotices(loaded, listing, notices);
+    if (args.flags.get('json')) { console.log(JSON.stringify({ findings, notices }, null, 2)); return; }
     // JSON 输出永远是完整 findings，机器消费不受展示折叠影响；下面的折叠只发生在给人看的文本模式。
     log(`doctor findings=${findings.length}`);
     if (args.flags.get('verbose')) {
       for (const finding of findings) console.log(`  [${finding.severity}] ${finding.code} ${finding.path ?? finding.worktree_id ?? ''}`);
+      printDoctorNotices(notices);
       return;
     }
     const missingIds = missingWorktreeIds(listing);
@@ -540,6 +647,7 @@ export function createCommands(deps) {
       console.log(`  [${finding.severity}] ${finding.code} ${finding.path ?? finding.worktree_id ?? ''}`);
     }
     if (foldedIds.size > 0) console.log(`  [summary] missing_worktrees=${foldedIds.size} (run doctor --verbose to expand)`);
+    printDoctorNotices(notices);
   }
 
 
