@@ -493,6 +493,12 @@ export function createCommands(deps) {
     return ref;
   }
 
+  /** refname 允许 `;`、`$`、`&`、单引号等 shell 元字符；清理命令是给人复制执行的，超出安全字符集就加引号。
+   * @param {string} branch */
+  function shellQuoteBranch(branch) {
+    return /^[A-Za-z0-9._\/-]+$/.test(branch) ? branch : `'${branch.replaceAll("'", "'\\''")}'`;
+  }
+
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded */
   function resolveDefaultBranch(loaded) {
     const cwd = loaded.context.current_worktree;
@@ -562,7 +568,7 @@ export function createCommands(deps) {
         head_sha: head,
         default_branch: defaultBranch.ref,
         default_branch_source: defaultBranch.source,
-        cleanup_command: `git branch -d ${branch}`,
+        cleanup_command: `git branch -d ${shellQuoteBranch(branch)}`,
         detail: `已是 ${defaultBranch.ref} 祖先，且不属于任何 record、没有被任何 worktree 检出。`,
       });
     }
