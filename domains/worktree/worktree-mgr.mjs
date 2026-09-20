@@ -175,6 +175,8 @@ audit <selector> [--json] [--id <uuid>]
 doctor [--json] [--verbose]
   非 json 文本模式默认把目录已消失 record 的 WORKTREE_MISSING/BASE_OVERRIDE/EPHEMERAL_WORKTREE
   三类 warning 折叠成一行 [summary]；--verbose 逐条展开；--json 输出的 findings 始终完整不折叠
+  已合入默认分支、不属于任何 record、也没有被任何 worktree 检出的本地分支作为 [info] notice
+  逐条列出并给出 git branch -d 清理命令；notice 不计入 findings，也不改变退出码
 rebuild [<selector>] [--id <uuid>] [--recover-lock]
 watch <selector> [--target <remote/ref>] [--interval-ms <ms>] [--change-ref <text>] [--notify auto|off] [--id <uuid>]
 submit <selector> [--title <text>] [--description <text>] [--target <branch>] [--remote <name>] [--interval-ms <ms>] [--notify auto|off] [--id <uuid>]

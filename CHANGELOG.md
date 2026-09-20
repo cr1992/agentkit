@@ -26,6 +26,14 @@
   同一个 pid，否则退回 worker 自行轮询退出——崩溃 worker 留下的陈旧 pid 可能已被系统复用成别的
   进程组 leader。输出新增 `watcher=<终态>` 后缀，`unverified`（登记的 pid 仍存活但未通过判定）/ `signal-denied` / `timeout` / `unsupported-platform`
   （非 POSIX 平台没有进程组信号）各自打印独立告警。
+- `agentkit worktree doctor` 新增信息性 notice `MERGED_ORPHAN_LOCAL_BRANCH`：已是默认分支祖先、
+  不属于任何 record、也没有被任何 worktree 检出的本地分支逐条列出，并给出 `git branch -d <branch>`。
+  宿主自带隔离建的分支和不删 head 分支的合并接口都会留下这种 ref，而 record 里没有它们，`reclaim`
+  的分支清理没有机会起作用。notice 与 finding 分开：不计入 `findings=N`、不标 error、不改变退出码、
+  不自动删除，`--json` 输出新增并列的 `notices` 数组。默认分支先看 `refs/remotes/origin/HEAD`，再退到
+  spawn 用的 base 解析；只能解析到描述当前分支自己的来源时整类跳过，报 `MERGED_ORPHAN_BRANCH_SCAN_SKIPPED`
+  和原因，不猜 `main`。远端分支仍不在扫描范围内：判定要联网，删远端 ref 是对外动作，由托管平台的
+  「合并后自动删除」收。
 
 ## 1.2.0 - 2026-09-20
 
