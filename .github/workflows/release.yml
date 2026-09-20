@@ -114,7 +114,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write        # provenance 证明需要
+      id-token: write        # trusted publisher 的 OIDC 换取发布凭据，provenance 证明也靠它
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -122,9 +122,9 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
+      # 认证走 npm trusted publisher（npmjs.com 上把本仓库的 release.yml 登记为发布者），
+      # 不用长期 token：账号开了两步验证时，普通 token 会在这里停在 EOTP，而且 token 会过期。
       - run: npm publish --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   attest:
     name: 从 registry 反装验证 Node.js ${{ matrix.node }}
