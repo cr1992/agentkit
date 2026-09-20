@@ -13,6 +13,10 @@
 //   node evals/protocol-routing/container/run-in-container.mjs \
 //     --out /tmp/pr-eval --model <模型 ID> --runs 3
 //
+//   # 全量、分 3 片并行（3 个容器同时跑，跑完自动合并成一份 /tmp/pr-eval/report.json）
+//   node evals/protocol-routing/container/run-in-container.mjs \
+//     --out /tmp/pr-eval --model <模型 ID> --runs 3 --shards 3
+//
 // 认证只经环境变量传入，二选一（都空则拒绝启动）：
 //   CLAUDE_CODE_OAUTH_TOKEN  ← `claude setup-token`（需要 Claude 订阅），本机推荐这条
 //   ANTHROPIC_API_KEY        ← 控制台 API key，CI 走这条
@@ -24,10 +28,11 @@
 // - --cap-drop ALL、--security-opt no-new-privileges、--pids-limit、--memory；
 // - 容器以镜像自带的非 root 用户跑（bypassPermissions 在 uid 0 下会被宿主 CLI 直接拒绝）。
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { main as mergeReportsMain } from '../merge-reports.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 /** evals/protocol-routing/container → 仓库根 */
@@ -60,7 +65,7 @@ export const MISSING_AUTH_MESSAGE = [
 ].join('\n');
 
 /** 本脚本自己吃掉的选项；其余一律原样透传给 run.mjs。 */
-const RUNNER_VALUE_OPTIONS = new Set(['engine', 'image', 'claude-version', 'out', 'repo', 'memory', 'pids-limit']);
+const RUNNER_VALUE_OPTIONS = new Set(['engine', 'image', 'claude-version', 'out', 'repo', 'memory', 'pids-limit', 'shards']);
 const RUNNER_FLAGS = new Set(['selftest', 'no-build']);
 
 /**
@@ -79,6 +84,7 @@ export function parseRunnerArgs(argv) {
     repo: REPO_ROOT,
     memory: DEFAULT_MEMORY,
     'pids-limit': DEFAULT_PIDS_LIMIT,
+    shards: '1',
     selftest: false,
     'no-build': false,
   };
@@ -104,6 +110,11 @@ export function parseRunnerArgs(argv) {
   }
   if (!ENGINES.includes(String(options.engine))) throw new Error(`--engine 只能是 ${ENGINES.join(' / ')}，收到 ${options.engine}`);
   if (!options.out) throw new Error('--out <宿主结果目录> 必填：它是唯一以读写方式挂进容器的宿主目录');
+  const shards = Number(options.shards);
+  if (!Number.isInteger(shards) || shards < 1) throw new Error(`--shards 必须是正整数，收到 ${options.shards}`);
+  // 分片由运行器自己派：它要给每一片建独立结果目录、起独立容器、最后合并。
+  // 手动再透传一个 --shard 会让 run.mjs 取到后一个，两层分片叠在一起，结果没人看得懂。
+  if (shards > 1 && passthrough.includes('--shard')) throw new Error('--shards 与手动透传的 --shard 不能同时用：分片由运行器派发');
   return { options, passthrough };
 }
 
@@ -229,11 +240,11 @@ export function buildSelftestScript() {
     'grep -qF "| 正向 | 0/18 |" /out/selftest/replay-none/report.md',
     'grep -qF "| 禁止 | 15/15 |" /out/selftest/replay-none/report.md',
     'grep -qF "| 正向 | 6/18 |" /out/selftest/replay-write/report.md',
-    'grep -qF "| 禁止 | 6/15 |" /out/selftest/replay-write/report.md',
+    'grep -qF "| 禁止 | 3/15 |" /out/selftest/replay-write/report.md',
     'echo "OK: 回放基线与 README 记载一致"',
     'echo "== 会话环境里 agentkit 可解析且版本正确 =="',
     'node evals/protocol-routing/container/selftest-agentkit-shim.mjs',
-    'echo "== skill 安装（容器内、隔离配置目录） =="',
+    'echo "== skill 安装（容器内装一次 + 缓存复用 + 复制进隔离配置目录） =="',
     'node evals/protocol-routing/container/selftest-skill-install.mjs',
     `echo "SELFTEST OK uid=$(id -u) user=$(id -un)"`,
   ].join('\n');
@@ -242,6 +253,28 @@ export function buildSelftestScript() {
 /** 极简 POSIX shell 单引号转义：只用于把透传参数塞进容器内脚本。 */
 export function shellQuote(value) {
   return `'${String(value).replace(/'/gu, `'\\''`)}'`;
+}
+
+/**
+ * 并行起若干容器，全部跑完才返回。
+ *
+ * stdio 走 inherit：几片的输出会在终端里交织。这是有意的取舍——把各片的输出缓冲起来
+ * 再按片打印，就看不到「哪一片卡住了」，而一轮真实评测要跑半小时。
+ * 每片自己的完整留档在 `<out>/shard-<i>/` 下面。
+ *
+ * @param {string} engine
+ * @param {Array<{ index: number, args: string[] }>} jobs
+ * @returns {Promise<Array<{ index: number, status: number }>>}
+ */
+function runEngineParallel(engine, jobs) {
+  return Promise.all(jobs.map(({ index, args }) => new Promise((done) => {
+    const child = spawn(engine, args, { stdio: 'inherit', env: process.env });
+    child.on('error', (error) => { process.stderr.write(`[容器] 分片 ${index} 起不来：${error.message}\n`); done({ index, status: 2 }); });
+    child.on('close', (code, signal) => {
+      process.stderr.write(`[容器] 分片 ${index} 结束：退出码 ${code ?? `信号 ${signal}`}\n`);
+      done({ index, status: code === null ? 2 : code });
+    });
+  })));
 }
 
 /** @param {string} engine @param {string[]} args @param {{ capture?: boolean }} [options] */
@@ -303,8 +336,11 @@ export async function main(argv) {
   const claudeVersion = imageClaudeVersion(engine, image);
   const engineVersion = runEngine(engine, ['--version'], { capture: true });
 
-  const script = selftest ? buildSelftestScript() : buildEvalScript(passthrough);
-  const runArgs = buildRunArgs({ image, repoDir, outDir, memory: String(options.memory), pidsLimit: String(options['pids-limit']), authEnvKeys, script });
+  // 分片：每片一个独立结果目录、一个独立容器，跑完在宿主上合并成一份报告。
+  // 自检不分片——它不起任何会话，也就没有可并行的东西。
+  const shards = selftest ? 1 : Number(options.shards);
+  const jobs = buildShardJobs({ shards, selftest, passthrough, image, repoDir, outDir, options, authEnvKeys });
+  for (const job of jobs) mkdirSync(job.outDir, { recursive: true });
 
   // 留档：引擎、镜像、CLI 版本进结果，和 report.json 里的宿主版本 / 模型 ID / skill digest 并列。
   // 只记认证变量的**键名**，不记取值——取值从来没有进过 argv。
@@ -322,15 +358,57 @@ export async function main(argv) {
     repo_dir: repoDir,
     out_dir: outDir,
     auth_env_keys: authEnvKeys,
-    run_args: runArgs,
+    shards,
+    // 单片时保持老形状（`run_args` 是一条命令行），多片时列出每一片。
+    ...(shards > 1
+      ? { shard_runs: jobs.map((job) => ({ index: job.index, out_dir: job.outDir, run_args: job.args })) }
+      : { run_args: jobs[0].args }),
     passthrough,
   };
   writeFileSync(resolve(outDir, 'container.json'), `${JSON.stringify(record, null, 2)}\n`);
   process.stderr.write(`[容器] 镜像 ${image} id=${inspected.image_id ?? '未知'} claude=${claudeVersion ?? '未知'}\n`);
   process.stderr.write(`[容器] 认证变量（只传键名，取值由引擎继承）：${authEnvKeys.length ? authEnvKeys.join(', ') : '（自检模式，不需要）'}\n`);
 
-  const run = runEngine(engine, runArgs);
-  return run.status === null ? 2 : run.status;
+  if (shards === 1) {
+    const run = runEngine(engine, jobs[0].args);
+    return run.status === null ? 2 : run.status;
+  }
+
+  process.stderr.write(`[容器] 分 ${shards} 片并行，各片结果写 ${outDir}/shard-<i>\n`);
+  const results = await runEngineParallel(engine, jobs.map((job) => ({ index: job.index, args: job.args })));
+  const worst = Math.max(...results.map((item) => item.status));
+
+  // 合并只在**每一片都产出了 report.json** 时进行。缺一片就宁可不合：
+  // 一份少了几条用例的合并报告和一份完整报告长得一模一样，那才是真正危险的失败模式。
+  const missing = jobs.filter((job) => !existsSync(join(job.outDir, 'report.json')));
+  if (missing.length) {
+    process.stderr.write(`[容器] 分片 ${missing.map((job) => job.index).join('、')} 没有产出 report.json，不做合并；各片留档仍在 ${outDir}/shard-<i>\n`);
+    return worst === 0 ? 1 : worst;
+  }
+  const mergeCode = await mergeReportsMain(['--out', outDir, ...jobs.map((job) => job.outDir)]);
+  return Math.max(worst, mergeCode);
+}
+
+/**
+ * 每片一条容器命令行。单片时退化成原来那一条（结果直接写 `--out`）。
+ * @returns {Array<{ index: number, outDir: string, args: string[] }>}
+ */
+export function buildShardJobs({ shards, selftest, passthrough, image, repoDir, outDir, options, authEnvKeys }) {
+  const one = (/** @type {number} */ index, /** @type {string} */ dir, /** @type {string[]} */ extra) => ({
+    index,
+    outDir: dir,
+    args: buildRunArgs({
+      image,
+      repoDir,
+      outDir: dir,
+      memory: String(options.memory),
+      pidsLimit: String(options['pids-limit']),
+      authEnvKeys,
+      script: selftest ? buildSelftestScript() : buildEvalScript([...passthrough, ...extra]),
+    }),
+  });
+  if (shards === 1) return [one(1, outDir, [])];
+  return Array.from({ length: shards }, (_, i) => one(i + 1, join(outDir, `shard-${i + 1}`), ['--shard', `${i + 1}/${shards}`]));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

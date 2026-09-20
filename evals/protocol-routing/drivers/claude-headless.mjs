@@ -25,10 +25,13 @@ import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { AGENTKIT_BIN, agentkitJson } from '../lib/agentkit.mjs';
 import { createAgentkitShim, prependToPath } from '../lib/agentkit-shim.mjs';
+import { classify } from '../lib/classifier.mjs';
 import { createFixtureRepo, repoSummary } from '../lib/fixture-repo.mjs';
+import { summarizeLedgerStatus } from '../lib/ledger-probe.mjs';
 import { buildPrecondition, renderPrompt } from '../lib/preconditions.mjs';
-import { installSkills } from '../lib/skill-install.mjs';
+import { installSkills, prepareSkillCache } from '../lib/skill-install.mjs';
 import { serializeObservation } from '../lib/observation.mjs';
 import { buildSessionEnv } from '../lib/session-env.mjs';
 
@@ -97,6 +100,41 @@ function parseStream(text) {
 }
 
 /**
+ * 增量扫描 stream-json：边收边把 `tool_use` 块攒出来，用于「正向断言成立就终止会话」。
+ *
+ * 为什么不复用 `parseStream()`：那个吃整份文本，会话每来一个 chunk 就整份重解一次，
+ * 长会话上是平方级。这里只处理**新到的完整行**，半行留在缓冲里等下一个 chunk。
+ *
+ * @returns {{ uses: Array<{ id: string | null, tool_name: string, tool_input: any }>, push: (chunk: string) => number }}
+ */
+export function createToolUseScanner() {
+  let pending = '';
+  /** @type {Array<{ id: string | null, tool_name: string, tool_input: any }>} */
+  const uses = [];
+  return {
+    uses,
+    push(chunk) {
+      pending += chunk;
+      let added = 0;
+      let index = pending.indexOf('\n');
+      while (index >= 0) {
+        const line = pending.slice(0, index).trim();
+        pending = pending.slice(index + 1);
+        index = pending.indexOf('\n');
+        if (!line.startsWith('{')) continue;
+        let record;
+        try { record = JSON.parse(line); } catch { continue; }
+        if (record.type !== 'assistant' || !Array.isArray(record.message?.content)) continue;
+        for (const block of record.message.content) {
+          if (block?.type === 'tool_use') { uses.push({ id: block.id ?? null, tool_name: block.name, tool_input: block.input }); added += 1; }
+        }
+      }
+      return added;
+    },
+  };
+}
+
+/**
  * 把 tool_use 序列与探针快照配对。
  * 有 tool_use_id 就按 id 配；没有就按顺序配——后者在并行工具调用时可能错位，属已知盲区。
  * @param {Array<{ id: string | null, tool_name: string, tool_input: any }>} uses
@@ -112,9 +150,37 @@ function pairEvents(uses, probes) {
   uses.forEach((use, index) => {
     const probe = (use.id && byId.get(use.id)) || positional[cursor++];
     if (!probe) { out.unpaired += 1; return; }
-    out.events.push({ seq: index + 1, tool_name: use.tool_name, tool_input: use.tool_input, repo: probe.repo });
+    out.events.push({ seq: index + 1, tool_name: use.tool_name, tool_input: use.tool_input, repo: probe.repo, ledger: probe.ledger ?? null });
   });
   return out;
+}
+
+/**
+ * 这条用例能不能在断言成立之后提前终止会话。
+ *
+ * 只有**正向、且只看第一个观测量**的用例可以：那类用例的判定在第一个可观测动作出现的
+ * 那一刻就已经定死，后面再跑什么都改不了结论，继续跑纯属烧时间和额度
+ * （用例 4 在第 8 个事件就出分，之后还要跑 4–8 分钟，issue #15 的后续项 4）。
+ *
+ * 禁止类**必须看完整条会话**——违规可能发生在任何一个事件上，提前收手等于把失守洗掉。
+ * 标了 `assert_scope: 'whole_session'` 的正向用例（第 5 条）同理不终止：
+ * 它的断言就是「整条会话里出现过」，现在没出现不代表后面不会出现。
+ *
+ * @param {{ category: string, assert_scope?: string }} evalCase
+ */
+export function canTerminateEarly(evalCase) {
+  return evalCase.category === 'positive' && evalCase.assert_scope !== 'whole_session';
+}
+
+/**
+ * 会话开始前的台账快照。没有台账的现场返回 null。
+ * 和探针用的是同一个口径函数，所以「第一个事件之前」与「第 n 个事件之前」形状一致。
+ * @param {string | undefined} ledgerDir
+ */
+function initialLedgerSnapshot(ledgerDir) {
+  if (!ledgerDir) return null;
+  try { return summarizeLedgerStatus(agentkitJson(['orchestrate', 'ledger', 'status', '--ledger', ledgerDir])); }
+  catch { return null; }
 }
 
 /**
@@ -145,11 +211,23 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
   // 在建驱动器的时候就拒绝，而不是等第一个会话——那时已经建过 fixture 仓、装过 skill 了。
   if (!allowBypassPermissions) throw new Error(BYPASS_REFUSAL);
   const version = hostVersion(bin);
+  /** @type {import('../lib/skill-install.mjs').SkillCache | null} */
+  let skillCache = null;
   return {
     name: 'claude-headless',
     meta: { driver: 'claude-headless', host: 'claude-code', host_version: version, model },
     needsFixture: true,
+    /**
+     * 开跑前的一次性准备。**每轮只装一次 skill**，各会话从缓存复制（见 lib/skill-install.mjs）。
+     * 装不上就在这里抛：`run.mjs` 还没进用例循环，整轮当场停，不会表现成「跑到一半丢样本」。
+     */
+    async prepare() {
+      skillCache = prepareSkillCache({ cacheDir: join(outDir, 'skill-cache') });
+      return { skill_cache: { dir: skillCache.dir, reused: skillCache.reused, installer_exit_code: skillCache.installer?.exit_code ?? null } };
+    },
     async runSession({ evalCase, runIndex, attempt = 1 }) {
+      // 正常路径上 run.mjs 已经调过 prepare()；这里兜底，让驱动器单独被调用时也成立。
+      if (!skillCache) skillCache = prepareSkillCache({ cacheDir: join(outDir, 'skill-cache') });
       // 重试落在自己的目录里，不覆盖上一次的留档——无效运行的现场是排障材料，不能被冲掉。
       // 第 1 次尝试仍然叫 `run-<n>`，README 里那几条冒烟检查命令因此不用改。
       const session = join(outDir, 'sessions', `case-${evalCase.id}`, attempt > 1 ? `run-${runIndex}-attempt-${attempt}` : `run-${runIndex}`);
@@ -159,7 +237,7 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
 
       const home = join(session, 'home');
       const configDir = join(home, '.claude');
-      const installation = installSkills({ configDir, home });
+      const installation = installSkills({ configDir, home, cache: skillCache });
       // PATH 上的 `agentkit`：四个 SKILL.md 通篇指示调用它，真实安装态下由 `npm i -g` 提供，
       // 评测现场没有。垫片转发到**被测 checkout** 的 bin/agentkit.mjs，见 lib/agentkit-shim.mjs。
       const shim = createAgentkitShim({ dir: join(session, 'bin') });
@@ -176,6 +254,7 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
       const prompt = renderPrompt(evalCase.prompt, precondition.vars);
       writeFileSync(join(session, 'prompt.txt'), `${prompt}\n`);
       const initialRepo = repoSummary(repo);
+      const initialLedger = initialLedgerSnapshot(precondition.vars.LEDGER_DIR);
 
       // --add-dir 只开到前置状态真正用到的 state root：会话不该顺手读到自己的 settings.json
       // 与 skill 安装目录，那会把探针本身变成上下文的一部分。
@@ -201,10 +280,15 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
         XDG_CONFIG_HOME: join(home, '.config'),
         PROTOCOL_ROUTING_REPO: repo,
         PROTOCOL_ROUTING_PROBE: probeFile,
+        // 探针要对台账取快照的现场（第 7、10、11 条）才有这两项；没有台账时探针写 null。
+        ...(precondition.vars.LEDGER_DIR ? { PROTOCOL_ROUTING_LEDGER: precondition.vars.LEDGER_DIR, PROTOCOL_ROUTING_AGENTKIT: AGENTKIT_BIN } : {}),
       });
       // 留档只记键名，不记取值——ANTHROPIC_API_KEY 之类的值不进会话目录。
       writeFileSync(join(session, 'command.json'), `${JSON.stringify({ bin, args, cwd: repo, env_keys: Object.keys(env).sort() }, null, 2)}\n`);
 
+      // 提前终止：正向且只看第一个观测量的用例，判定一旦成立就没有再跑下去的理由。
+      // 判据和最终判定**用的是同一个 assert**，只是喂给它一份截止到此刻的分类结果。
+      const earlyEligible = canTerminateEarly(evalCase);
       const run = await new Promise((resolvePromise) => {
         const child = spawn(bin, args, {
           cwd: repo,
@@ -213,11 +297,36 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
         });
         let stdout = '';
         let stderr = '';
+        /** @type {{ at_seq: number, reason: string } | null} */
+        let early = null;
+        const scanner = createToolUseScanner();
         const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
-        child.stdout.on('data', (chunk) => { stdout += chunk; });
+        /** @type {NodeJS.Timeout | null} */
+        let hardKill = null;
+        const finish = (/** @type {number | null} */ code, /** @type {string} */ extraStderr = '') => {
+          clearTimeout(timer);
+          if (hardKill) clearTimeout(hardKill);
+          resolvePromise({ code, stdout, stderr: `${stderr}${extraStderr}`, early });
+        };
+        child.stdout.on('data', (chunk) => {
+          stdout += chunk;
+          if (!earlyEligible || early || scanner.push(String(chunk)) === 0) return;
+          // 探针文件按事件追加；还没落盘的 tool_use 在这里配不上，下一个 chunk 再看。
+          let probes = [];
+          try { probes = readFileSync(probeFile, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line)); }
+          catch { return; }
+          const paired = pairEvents(scanner.uses, probes);
+          if (!paired.events.length) return;
+          const verdict = evalCase.assert(classify({ initial_repo: initialRepo, initial_ledger: initialLedger, events: paired.events }), {});
+          if (!verdict.satisfied) return;
+          early = { at_seq: paired.events.at(-1).seq, reason: verdict.reason };
+          // 先 SIGTERM 给宿主一个收尾的机会（它要写自己的会话记录），再补一刀。
+          child.kill('SIGTERM');
+          hardKill = setTimeout(() => child.kill('SIGKILL'), 5000);
+        });
         child.stderr.on('data', (chunk) => { stderr += chunk; });
-        child.on('close', (code) => { clearTimeout(timer); resolvePromise({ code, stdout, stderr }); });
-        child.on('error', (error) => { clearTimeout(timer); resolvePromise({ code: null, stdout, stderr: `${stderr}\n${error.message}` }); });
+        child.on('close', (code) => { finish(code); });
+        child.on('error', (error) => { finish(null, `\n${error.message}`); });
       });
       writeFileSync(join(session, 'stream.jsonl'), run.stdout);
       if (run.stderr) writeFileSync(join(session, 'stderr.log'), run.stderr);
@@ -240,7 +349,9 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
           installed_skills: installation.skills,
           // 安装器自己的回报（退出码 + JSON）：只留档。判「装没装上」看的是文件系统，
           // 见 lib/skill-install.mjs 顶部那段「不看退出码」的理由。
+          // 本轮只装一次，这里记的是那一次的回报；`skill_source` 记这个会话是从哪拿到的。
           skill_installer: installation.installer,
+          skill_source: installation.source,
           setup: evalCase.setup,
           setup_notes: precondition.notes,
           setup_vars: precondition.vars,
@@ -250,12 +361,18 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
           agentkit_shim: { dir: shim.dir, path: shim.path, target: shim.target },
           pairing: paired.pairing,
           unpaired_tool_uses: paired.unpaired,
+          // 这条用例允许不允许提前终止（禁止类与 whole_session 的正向类都不允许）。
+          early_termination_eligible: earlyEligible,
         },
         initial_repo: initialRepo,
+        // 会话开始前的台账快照：第 7、10、11 条判「发起那一下之前台账什么状态」的起点。
+        initial_ledger: initialLedger,
         events: paired.events,
         payloads: collectPayloads(paired.events),
         // host_result 是「这次算不算数据点」的唯一可靠信号，见 lib/run-validity.mjs。
-        end: { exit_code: run.code, error: run.stderr ? run.stderr.slice(0, 2000) : null, host_result: hostResult },
+        // early_terminated 非空时这次会话是被 harness 主动掐掉的，不是故障——
+        // 那种情况下拿不到 result 事件，退出码也不是 0，判据必须先看它。
+        end: { exit_code: run.code, error: run.stderr ? run.stderr.slice(0, 2000) : null, host_result: hostResult, early_terminated: run.early ?? null },
       };
       writeFileSync(join(session, 'observation.jsonl'), serializeObservation(observation));
       return { ...observation, source: join(session, 'observation.jsonl') };

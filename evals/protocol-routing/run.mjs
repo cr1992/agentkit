@@ -14,6 +14,13 @@
 //   # 子集加跑（改动前后对比时把受影响用例加到 n ≥ 10）
 //   node evals/protocol-routing/run.mjs --driver claude-headless --model <模型 ID> \
 //     --allow-bypass-permissions --cases 7,8 --runs 10 --out /tmp/pr-eval
+//
+//   # 分片并行：三份同时跑，跑完合并成一份报告（口径与串行逐项相等）
+//   node evals/protocol-routing/run.mjs … --shard 1/3 --out /tmp/pr-eval/shard-1 &
+//   node evals/protocol-routing/run.mjs … --shard 2/3 --out /tmp/pr-eval/shard-2 &
+//   node evals/protocol-routing/run.mjs … --shard 3/3 --out /tmp/pr-eval/shard-3 &
+//   wait
+//   node evals/protocol-routing/merge-reports.mjs --out /tmp/pr-eval /tmp/pr-eval/shard-*
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -23,6 +30,7 @@ import { createHeadlessClaudeDriver, createReplayDriver } from './drivers/index.
 import { redactSecrets } from './lib/redact.mjs';
 import { buildReport, renderMarkdown } from './lib/report.mjs';
 import { classifyRunValidity } from './lib/run-validity.mjs';
+import { parseShardSpec, selectShard } from './lib/shard.mjs';
 
 /**
  * 无效运行（基础设施故障）最多重试几次。1 次正常 + 2 次重试 = 最多 3 次尝试。
@@ -40,7 +48,7 @@ const FLAGS = new Set(['quiet', 'allow-bypass-permissions']);
 /** @param {string[]} argv */
 export function parseArgs(argv) {
   /** @type {Record<string, string | boolean>} */
-  const options = { driver: 'replay', runs: '3', cases: 'all', out: '', replay: '', model: '', bin: 'claude', 'budget-usd': '', quiet: false, 'allow-bypass-permissions': false };
+  const options = { driver: 'replay', runs: '3', cases: 'all', shard: '', out: '', replay: '', model: '', bin: 'claude', 'budget-usd': '', quiet: false, 'allow-bypass-permissions': false };
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (!token.startsWith('--')) throw new Error(`未知参数 ${token}`);
@@ -116,11 +124,19 @@ export async function main(argv, hooks = {}) {
   const options = parseArgs(argv);
   const runs = Number(options.runs);
   if (!Number.isInteger(runs) || runs < 1) throw new Error('--runs 必须是正整数');
-  const cases = selectCases(String(options.cases));
+  const selected = selectCases(String(options.cases));
+  // 分片只改「这一轮跑哪几条用例」，不改任何判定口径。各片的 report.json 用
+  // merge-reports.mjs 合成一份，合并结果与串行逐项相等（见 lib/merge.mjs）。
+  const shard = options.shard ? parseShardSpec(String(options.shard)) : null;
+  const cases = shard ? selectShard(selected, shard) : selected;
+  if (shard && !cases.length) throw new Error(`--shard ${options.shard} 这一片是空的：被选中的用例（${selected.length} 条）比分片数还少`);
   const outDir = resolve(String(options.out) || `./protocol-routing-eval-${Date.now()}`);
   // 先建驱动器再建目录：被拒绝时（例如没显式同意 bypassPermissions）不该留下空目录。
   const driver = makeDriver(options, outDir);
   mkdirSync(outDir, { recursive: true });
+  // 开跑前的一次性准备（skill 每轮装一次，见 lib/skill-install.mjs）。
+  // 故意不 catch：装不上就整轮当场停，而不是让每个会话各丢一个样本。
+  const prepared = driver.prepare ? await driver.prepare() : null;
   /** @type {Array<{ case_id: number, run: number, observation: any }>} */
   const sessions = [];
   /** @type {string[]} */
@@ -143,11 +159,17 @@ export async function main(argv, hooks = {}) {
     }
   }
 
-  const meta = { ...driver.meta };
+  const meta = { ...driver.meta, ...(prepared ?? {}) };
   const firstSession = sessions[0]?.observation;
   if (firstSession?.meta?.skills) meta.skills = firstSession.meta.skills;
   if (!meta.model && firstSession?.meta?.model) meta.model = firstSession.meta.model;
-  const report = { ...buildReport({ cases, runs, driver: meta, sessions, invalidRuns }), session_failures: failures, selected_cases: cases.map((item) => item.id), total_cases: CASES.length };
+  const report = {
+    ...buildReport({ cases, runs, driver: meta, sessions, invalidRuns }),
+    session_failures: failures,
+    selected_cases: cases.map((item) => item.id),
+    total_cases: CASES.length,
+    ...(shard ? { shard: { index: shard.index, total: shard.total } } : {}),
+  };
 
   // 脱敏兜底：报告里不该出现 ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN 的取值。
   // 主防线是「取值只经环境变量传递、command.json 只记键名」，这里只是最后一道字面替换，

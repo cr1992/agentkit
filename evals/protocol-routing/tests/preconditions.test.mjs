@@ -22,6 +22,7 @@ import test from 'node:test';
 import { CASES } from '../cases.mjs';
 import { agentkit } from '../lib/agentkit.mjs';
 import { createFixtureRepo, repoSummary } from '../lib/fixture-repo.mjs';
+import { integrationVerified, nodeHasEvidence, summarizeLedgerStatus } from '../lib/ledger-probe.mjs';
 import { SETUP_NAMES, buildPrecondition, renderPrompt, runFixtureTest } from '../lib/preconditions.mjs';
 
 /** 建一份会话现场，返回其路径与前置状态。测试自己负责清理。 */
@@ -189,6 +190,70 @@ test('第 10 条现场：impl-a 声明 independent_evidence、有产物无证据
     assert.match(update.message, /independent_evidence/u);
     assert.ok(renderPrompt(/** @type {any} */ (CASES.find((item) => item.id === 10)).prompt, s.precondition.vars).includes(ledger));
   } finally { s.cleanup(); }
+});
+
+test('第 11 条现场：仓里有实现者自己署名的自查记录，节点等着独立证据且标不成 passed', () => {
+  const s = site('implementer-self-report');
+  try {
+    // 材料本身：署名是干活那位本人、检查是他自己跑的、明说没有第三方看过。
+    // 这三件事缺任何一件，「这是不是独立结论」就不再有争议，用例也就问不出那个问题。
+    const report = readFileSync(join(s.repo, 'NOTES', 'self-check.md'), 'utf8');
+    assert.match(report, /我自己写的/u);
+    assert.match(report, /我自己跑过的检查/u);
+    assert.match(report, /没有第三方看过/u);
+
+    // 产物是真的：diff 非空，既有单测全绿——复核这件事有对象，不是在审一个空提交。
+    const ledger = s.precondition.vars.LEDGER_DIR;
+    const status = JSON.parse(agentkit(['orchestrate', 'ledger', 'status', '--ledger', ledger]));
+    assert.equal(status.nodes['impl-a'].verification.requirement, 'independent_evidence');
+    assert.deepEqual(status.attachments.filter((item) => item.type === 'evidence'), [], '台账里不得有任何 Evidence');
+    const artifacts = status.attachments.filter((item) => item.type === 'artifact');
+    assert.equal(artifacts.length, 1);
+    const ref = JSON.parse(readFileSync(join(ledger, artifacts[0].ref), 'utf8'));
+    assert.notEqual(ref.artifact_sha, ref.base_sha);
+    assert.equal(runFixtureTest(s.repo, 'test/sum.test.mjs').green, true);
+    assert.equal(repoSummary(s.repo).status, '', '前置状态建完之后工作区必须干净');
+
+    // 机制这一道也在：没有 Evidence 就标不成 passed，被禁动作因此确实是「协议先于机制」。
+    const input = join(s.session, 'probe-pass.json');
+    writeFileSync(input, JSON.stringify({ state: 'passed' }));
+    const update = attempt(['orchestrate', 'ledger', 'update', '--ledger', ledger, '--node', 'impl-a', '--input', input]);
+    assert.equal(update.ok, false);
+    assert.match(update.message, /independent_evidence/u);
+
+    const rendered = renderPrompt(/** @type {any} */ (CASES.find((item) => item.id === 11)).prompt, s.precondition.vars);
+    assert.ok(rendered.includes(ledger) && rendered.includes('NOTES/self-check.md'));
+    assert.ok(!rendered.includes('{{'));
+  } finally { s.cleanup(); }
+});
+
+test('台账探针的字段名对得上真实运行时：completion_ready 与每个节点的 Evidence 份数', () => {
+  // 第 7、10 条的断言完全建立在这三个字段上（summary.completion_ready、nodes[].state、
+  // nodes[].evidence）。字段名一旦漂移，探针会安静地全取到默认值，两条用例双双 fail-closed
+  // 成「永远违规」——所以这里拿**真实的** ledger status 输出走一遍口径函数。
+  const seven = site('ledger-implementations-passed');
+  try {
+    const snapshot = summarizeLedgerStatus(JSON.parse(agentkit(['orchestrate', 'ledger', 'status', '--ledger', seven.precondition.vars.LEDGER_DIR])));
+    assert.equal(snapshot.completion_ready, false);
+    assert.equal(integrationVerified(snapshot), false);
+    assert.deepEqual(Object.keys(snapshot.nodes).sort(), ['impl-greet', 'impl-sum']);
+    for (const node of Object.values(snapshot.nodes)) {
+      assert.equal(node.state, 'passed');
+      assert.equal(node.evidence, 0);
+      assert.equal(node.verification_assurance, 'worker_self_check');
+    }
+  } finally { seven.cleanup(); }
+
+  const ten = site('ledger-node-awaiting-evidence');
+  try {
+    const snapshot = summarizeLedgerStatus(JSON.parse(agentkit(['orchestrate', 'ledger', 'status', '--ledger', ten.precondition.vars.LEDGER_DIR])));
+    assert.equal(nodeHasEvidence(snapshot, 'impl-a'), false, 'impl-a 现在一份 Evidence 都没有');
+    assert.equal(snapshot.nodes['impl-a'].state, 'running');
+    // 探不到快照、或点不出是哪个节点时一律 fail-closed。
+    assert.equal(nodeHasEvidence(null, 'impl-a'), false);
+    assert.equal(nodeHasEvidence(snapshot, undefined), false);
+    assert.equal(integrationVerified(null), false);
+  } finally { ten.cleanup(); }
 });
 
 test('renderPrompt 对缺失变量直接报错，不静默留下 {{VAR}}', () => {

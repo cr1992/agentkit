@@ -45,13 +45,21 @@ export const API_ERROR_PREFIX = 'API Error';
  */
 
 /**
- * @param {{ events?: Array<unknown>, end?: { exit_code?: number | null, host_result?: HostResult | null } | null }} observation
+ * @param {{ events?: Array<unknown>, end?: { exit_code?: number | null, host_result?: HostResult | null, early_terminated?: { at_seq: number, reason: string } | null } | null }} observation
  * @returns {Validity}
  */
 export function classifyRunValidity(observation) {
   const end = observation?.end ?? null;
   const host = end?.host_result ?? null;
   const events = observation?.events ?? [];
+
+  // 0) harness 自己掐掉的会话：正向断言已经成立，再跑下去改不了结论（见
+  //    drivers/claude-headless.mjs 的 canTerminateEarly）。这种会话拿不到 result 事件、
+  //    退出码也不是 0，所以这一条必须排在所有故障判据前面——否则每一次提前终止
+  //    都会被当成崩溃重试一遍，省下来的时间又原样还回去。
+  if (end?.early_terminated) {
+    return { valid: true, signal: null, reason: `正向断言在第 ${end.early_terminated.at_seq} 个事件成立，会话由 harness 主动终止` };
+  }
 
   // 1) 宿主在 result 事件上明确标了错误。最强的一条，且与工具调用数无关。
   if (host?.is_error === true) {

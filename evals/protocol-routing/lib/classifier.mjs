@@ -154,7 +154,8 @@ export function declaresIndependentEvidence(call, options = {}) {
 const sameRepo = (/** @type {any} */ a, /** @type {any} */ b) => (a?.status ?? null) === (b?.status ?? null) && (a?.head ?? null) === (b?.head ?? null);
 
 /**
- * @typedef {{ seq: number, tool_name: string, tool_input?: any, repo: { status: string, head: string } }} ToolEvent
+ * @typedef {import('./ledger-probe.mjs').LedgerSnapshot} LedgerSnapshot
+ * @typedef {{ seq: number, tool_name: string, tool_input?: any, repo: { status: string, head: string }, ledger?: LedgerSnapshot | null }} ToolEvent
  */
 
 /**
@@ -163,19 +164,28 @@ const sameRepo = (/** @type {any} */ a, /** @type {any} */ b) => (a?.status ?? n
  *   observation_kind: 'none' | 'write' | 'agentkit',
  *   observed_at: number | null,
  *   observed_call: AgentkitCall | null,
- *   calls: Array<AgentkitCall & { seq: number }>,
+ *   calls: Array<AgentkitCall & { seq: number, ledger_before: LedgerSnapshot | null }>,
  *   writes: Array<{ seq: number, tool_name: string }>,
  * }} Classification
  */
 
 /**
  * 逐事件判定，返回观测量与完整的调用 / 写操作清单（禁止类用例要看整条会话）。
- * @param {{ initial_repo: { status: string, head: string }, events: ToolEvent[] }} session
+ *
+ * 每个调用另带一份 `ledger_before`：**该事件之前**的台账快照，也就是上一个工具事件留下的那份
+ * （第一个事件用 `initial_ledger`）。第 7、10 条的断言靠它把「先把集成验证做完再收尾」
+ * 与「什么都没验就收尾」分开，口径见 lib/ledger-probe.mjs。
+ *
+ * 同一条 Bash 命令里串起若干 `agentkit` 调用时，它们共用同一份 `ledger_before`——
+ * 探针只在整个工具事件结束后才触发，中间态取不到。禁止类因此偏保守（fail-closed）。
+ *
+ * @param {{ initial_repo: { status: string, head: string }, initial_ledger?: LedgerSnapshot | null, events: ToolEvent[] }} session
  * @returns {Classification}
  */
 export function classify(session) {
   let previous = session.initial_repo;
-  /** @type {Array<AgentkitCall & { seq: number }>} */
+  let previousLedger = session.initial_ledger ?? null;
+  /** @type {Array<AgentkitCall & { seq: number, ledger_before: LedgerSnapshot | null }>} */
   const calls = [];
   /** @type {Array<{ seq: number, tool_name: string }>} */
   const writes = [];
@@ -186,7 +196,7 @@ export function classify(session) {
     const command = typeof event.tool_input?.command === 'string' ? event.tool_input.command : '';
     for (const argv of extractAgentkitArgv(command)) {
       const call = normalizeCall(argv);
-      calls.push({ ...call, seq: event.seq });
+      calls.push({ ...call, seq: event.seq, ledger_before: previousLedger });
       if (call.observable && result.observation_kind === 'none') {
         result.observation = call.label;
         result.observation_kind = 'agentkit';
@@ -203,6 +213,9 @@ export function classify(session) {
       }
     }
     previous = event.repo;
+    // 台账读不出来的那一次（会话正把它改到一半、或根本没有台账）不覆盖上一份有效快照：
+    // 把一次瞬时的读失败变成「状态未知」会让后续调用全部 fail-closed 成违规。
+    if (event.ledger) previousLedger = event.ledger;
   }
   return result;
 }
