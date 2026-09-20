@@ -1560,6 +1560,8 @@ test('MR head 进入目标 ref 后 detached watcher 自动流转状态并回收'
   git(fixture.repo, ['merge', '--no-ff', '--no-edit', branchFor(fixture, task)]);
   git(fixture.repo, ['push', 'origin', 'HEAD:main']);
   await waitFor(() => !existsSync(worktree), 'watcher 未在 MR head 合入后自动回收 worktree');
+  // 目录删除先于 reclaimed 事件落盘；只等目录消失会读到中间态 reclaim_ready。
+  await waitFor(() => recordFor(fixture, task, true).worktree_state === 'reclaimed', 'record 未在目录回收后进入 reclaimed');
 
   const reclaimed = recordFor(fixture, task, true);
   assert.equal(reclaimed.task_status, 'done');
