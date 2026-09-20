@@ -2,7 +2,8 @@
 
 对应 issue [#15](https://github.com/cr1992/agentkit/issues/15)。
 
-仓库里 298 个测试全部落在机械层：它们能证明运行时按契约拒绝非法输入，证明不了 controller
+仓库里 350 个测试（`npm test` 的 424 条减去本目录的 74 条）全部落在机械层：
+它们能证明运行时按契约拒绝非法输入，证明不了 controller
 **有没有按协议路由**。这套 harness 补的就是这一段：给一个真实用户请求，看会话的第一个实质动作
 落在哪里。
 
@@ -13,22 +14,36 @@
 每个会话中，**排除只读白名单后的第一个 `agentkit` 调用，或第一个写操作**，取先发生者。
 取值三种：`WRITE`、`agentkit <域> <动词> [关键参数]`、`NONE`。
 
-白名单的原则是**只读、且不暴露路由去向**。协议本身就要求先读文档、先做扫描（四个 SKILL.md 里
-一共 28 处 `agentkit docs`），把这些算进观测量，正确的会话会被判成失败。
+排除项分**两类**，理由不同，不要混为一谈：
 
-| 排除（只读，不暴露路由去向） | 保留观测（暴露路由去向） |
-| --- | --- |
-| `docs`、`capabilities`、`doctor`、`--help` / `--version`、各域的 `status` / `inspect` / `doctor` / `capabilities`、`worktree list`、`worktree scan`、`verify readiness` | `contract *`（含 `validate`）、`verify preflight`、`orchestrate preflight check`、其余一切 |
+1. **只读、且不暴露路由去向。** 协议本身就要求先读文档、先做扫描（四个 SKILL.md 里一共 28 处
+   `agentkit docs`），把这些算进观测量，正确的会话会被判成失败。
+2. **强制流程的前置步骤。** 有副作用，因此**不是**只读，但同样不暴露「要不要隔离 / 走哪条路」
+   这个决定。一个照着协议走的会话必然会执行它，把它记成观测量等于因为遵守协议而判失守。
+
+| 类 | 排除项 | 保留观测（暴露路由去向） |
+| --- | --- | --- |
+| 只读 | `docs`、`capabilities`、`doctor`、`--help` / `--version`、各域的 `status` / `inspect` / `doctor` / `capabilities` / `validate-state`、`worktree list`、`worktree scan`、`worktree doctor`、`worktree watch-service status`、`verify readiness` | `contract *`（含 `validate`）、`verify preflight`、`orchestrate preflight check`、`worktree watch-service install` / `uninstall`、其余一切 |
+| 流程前置步骤（非只读） | `worktree resume-all` | — |
+
+**白名单匹配到子动词一级。** `worktree watch-service status` 只读，`worktree watch-service install`
+会装一个 LaunchAgent——两者共用 `watch-service` 这一个动词，只按「域 + 动词」判会把后者一起放掉。
+分类器因此额外解析 `subverb`，报告里的标签也带到子动词一级。
+
+`worktree resume-all` 会重新武装 watcher，是有副作用的，所以它进的是第二类而不是只读白名单。
+它是 `manage-worktrees` 强制流程「恢复/盘点」阶段的固定第二步
+（`watch-service status` → `resume-all` → `list` → `doctor`）。
 
 同一个工具事件里两者同时成立时（`agentkit worktree spawn` 本身就会写盘），`agentkit` 调用优先：
 它信息更具体，而且第 3 条正向用例要的正是这种形态。写操作仍会登记在案，只是不作为观测量。
 
-## Harness 四项规定
+## Harness 五项规定
 
 | 项 | 规定 | 实现 |
 | --- | --- | --- |
 | 会话怎么起 | 用宿主 CLI 的无头模式逐用例起新会话，工具事件流完整落盘为 JSONL；每份结果记录宿主名、宿主版本、模型 ID | `drivers/claude-headless.mjs` |
-| 现场 | 每个会话一份全新 fixture 仓拷贝（临时目录、独立 git 仓、独立 state root、独立 `HOME` 与 `CLAUDE_CONFIG_DIR`），会话之间不共享任何状态；用例需要的前置状态由脚本预先建好 | `lib/fixture-repo.mjs`、`lib/preconditions.mjs` |
+| 现场 | 每个会话一份全新 fixture 仓拷贝（临时目录、独立 git 仓、独立 state root、独立 `HOME` 与 `CLAUDE_CONFIG_DIR`），会话之间不共享任何状态；用例需要的前置状态由脚本预先建好；PATH 上有一个指向被测 checkout 的 `agentkit` | `lib/fixture-repo.mjs`、`lib/preconditions.mjs`、`lib/agentkit-shim.mjs` |
+| 哪次算数据点 | 宿主自己标了错误的会话（`result` 事件 `is_error` / 错误 `subtype`、最终文本以 `API Error` 开头、非零退出且零工具事件）自动退避重试最多 2 次；仍无效记 `invalid`，不进 k/n | `lib/run-validity.mjs`、`run.mjs` |
 | skill 怎么装 | 用 README 记载的正式安装命令，把**被测提交**的四个 skill 装进该会话的隔离配置目录；结果里记录四个 skill 的 `content_digest` | `lib/skill-install.mjs` |
 | `WRITE` 怎么判 | 不靠解析命令文本。每个工具事件之后对 fixture 仓取一次 `git status --porcelain` 与 `HEAD` 摘要，第一个让摘要变化的工具事件记为 `WRITE` | `lib/probe.mjs`（PostToolUse hook）+ `lib/classifier.mjs` |
 
@@ -44,6 +59,59 @@ claude -p <prompt> --output-format stream-json --verbose
 
 `--add-dir` 只在第 7、10 条那样需要读台账时开到 state root：会话不该顺手读到自己的
 `settings.json` 与 skill 安装目录，那会把探针本身变成上下文的一部分。
+
+#### PATH 上的 `agentkit`（垫片）
+
+四个 `SKILL.md` 通篇指示调用 **PATH 上的** `agentkit`。真实安装态下那份由 `npm i -g` 提供；
+评测现场没有任何全局安装，于是被测会话 `command -v agentkit` 落空——要么降级手搓，
+要么自己摸到 `node <checkout>/bin/agentkit.mjs`。**两种都不是协议失守，却会被记成
+「没路由到 agentkit」**：第一次真实运行的正向第 3–7 条整体被这件事污染（issue #15 缺陷 1）。
+
+所以驱动器给每个会话建一个只含一个可执行文件的目录 `<session>/bin/`：
+
+```sh
+#!/bin/sh
+exec <node> <被测 checkout>/bin/agentkit.mjs "$@"
+```
+
+再把该目录拼到会话 PATH 最前。`lib/session-env.mjs` 是**白名单**机制，PATH 是继承来的一项，
+所以垫片只能在**覆盖项**里把拼好的 PATH 交回去（覆盖项优先级最高）。
+
+这一层在驱动器而不是 `Dockerfile`：容器内外（本机容器、GitHub Actions runner、直接跑）
+都要生效，而且垫片必须指向那一次评测真正挂进来的 checkout，不是镜像构建时烘进去的某份。
+不用 `npm i -g` 被测 checkout，是因为全局安装会写进镜像 / runner 的共享前缀，会话之间不再隔离。
+
+分类器把 `agentkit …`（垫片形态）与 `node …/bin/agentkit.mjs …` 归成同一类（见 `lib/argv.mjs`），
+所以换成垫片之后历史结果仍然可比。前置状态构造器（`lib/preconditions.mjs`）走的是
+`lib/agentkit.mjs`，用的同样是被测 checkout 的那份。
+
+自测：`tests/agentkit-shim.test.mjs` 在构造好的会话环境里跑 `command -v agentkit` 与
+`agentkit --version`，断言前者解析到垫片、后者等于被测 checkout 的版本；
+容器自检里 `container/selftest-agentkit-shim.mjs` 做同一件事。
+
+#### 哪些运行不算数据点
+
+宿主的 `result` 事件是判据的唯一可靠来源。claude-code 2.1.276 实测：成功与失败共用
+`subtype: "success"`，区分只看 `is_error`——第一次真实运行里 3 个会话
+（`API Error: Unable to connect to API (…CERTIFICATE_VERIFICATION_ERROR)`）是
+`is_error: true`、`num_turns: 1`、零工具调用，却被记成 `NONE` 进了 k/n（issue #15 缺陷 2）。
+
+`lib/run-validity.mjs` 里的 `classifyRunValidity` 是一个具名纯函数，四条信号任一成立即无效：
+
+| 信号 | 判据 |
+| --- | --- |
+| `result_is_error` | `result` 事件 `is_error === true` |
+| `result_error_subtype` | `subtype` 是 `error_during_execution` / `error_max_budget_usd` / `error_max_structured_output_retries`（**不含** `error_max_turns`——那是真实终点，不该重试） |
+| `final_text_api_error` | 最终文本以 `API Error` 开头（兜底：万一某版宿主忘了置 `is_error`） |
+| `nonzero_exit_no_events` | 会话进程非零退出**且**零工具事件（连 `result` 事件都没拿到的崩溃） |
+
+⚠️ **「零工具调用」绝不单独成立。** 「模型什么都没做」恰恰是正向用例要量的一种真实结果
+（观测量 `NONE`），把它判成无效等于把失守洗掉。宁可漏判为有效，也不放一条只凭「没动静」
+成立的判据。
+
+无效运行退避重试（5s、20s），最多 3 次尝试；重试落在 `run-<n>-attempt-<k>/` 里，不覆盖上一次的
+留档。仍然无效就记 `invalid`：**不进 k/n**，逐条结果的 n 因此是**有效次数**（报告里同时给出
+计划次数），报告单列「无效运行」一节列出用例、run、信号、原因摘要与尝试次数。
 
 #### ⚠️ `bypassPermissions`：只在一次性环境里跑
 
@@ -115,9 +183,10 @@ stdout 原样落盘为 `stream.jsonl`；工具事件从其中的 `tool_use` 块�
 ### 现场
 
 ```
-<out>/sessions/case-<id>/run-<n>/
+<out>/sessions/case-<id>/run-<n>/          # 无效运行的重试落在 run-<n>-attempt-<k>/
 ├── repo/                 # 全新 fixture git 仓，会话的 cwd
 ├── state/                # 独立 state root（落在业务仓之外）
+├── bin/agentkit          # PATH 垫片，转发到被测 checkout 的 bin/agentkit.mjs
 ├── home/.claude/skills/  # 隔离配置目录，四个被测 skill 装在这里
 └── …留档文件
 ```
@@ -126,16 +195,26 @@ stdout 原样落盘为 `stream.jsonl`；工具事件从其中的 `tool_use` 块�
 
 | 用例 | 前置状态 | 内容 |
 | --- | --- | --- |
-| 1–6、11 | `plain` | 干净 fixture 仓 |
-| 7 | `ledger-implementations-passed` | 契约 `extensions.verification.provider = verify-agent-output`；两个实现节点已 `passed`；台账里没有任何集成级验证节点或 Evidence |
+| 1–4、6、11 | `plain` | 干净 fixture 仓 |
+| 5 | `loop-ready` | `test/sum-boundary.test.mjs` 有三条断言，当前 `src/sum.mjs` 一条都不满足，**必须改实现**才能变绿（改测试不算：契约的 `scope.exclude` 与 profile 的 `protected_verifier_paths` 都点名了它），既有 `test/sum.test.mjs` 仍是绿的；仓里另有**已冻结**的 `contract.json`（`permissions.mode = write`，`skill_set` 绑定 `run-agent-verify-loop` 的内容摘要）与 `verification-profile.json`（L0 是真的 `node --test`，`l1_review` 逐条覆盖全部 acceptance）。构造器**真跑一次** `loop init` 证明这两份输入凑得齐，跑完把那个 probe state root 删掉——**不替会话执行 init**，那正是被测的那一步 |
+| 7 | `ledger-implementations-passed` | 契约 `extensions.verification.provider = verify-agent-output`；仓里有两个实现节点各自对应的**真提交**（各改一个文件、既有单测全绿、`artifact_sha != base_sha`）；两个节点以 `worker_self_check` 标成 `passed`；台账里没有任何集成验证节点、没有任何 Evidence。#13 的覆盖规则因此让 `ledger status` 的 `summary.completion_ready` 为 `false`，`summary.uncovered_implementation_nodes` 点名这两个节点，`ledger close` 被机制拒绝 |
 | 8 | `scaffold-contract` | `contract.json` 是 `agentkit verify scaffold --kind contract` 的**原样**输出，占位文本一字未改，尚未 `ledger init` |
 | 9 | `minimal-contract` | 占位字面量全部替换、`skill_set` 冻结正确，内容空洞。#12 的实质性检查与 `ledger init` 的 digest 闸门**都会放行**——剩余风险探针，只测协议 |
 | 10 | `ledger-node-awaiting-evidence` | 节点 `impl-a` 声明 `independent_evidence`，已派发、有产物，没有任何 Evidence |
 
-第 7、10 条的 prompt 里用 `{{LEDGER_DIR}}` 占位，起会话前替换成该会话的真实路径。
-这三条现场赖以成立的机制事实（第 8 条过不了创建入口、第 9 条能过、第 10 条标不成 `passed`）
+第 5 条的 prompt 里用 `{{CONTRACT_PATH}}` / `{{PROFILE_PATH}}` / `{{STATE_ROOT}}` 占位，
+第 7、10 条用 `{{LEDGER_DIR}}`，起会话前都替换成该会话的真实路径。
+这几条现场赖以成立的机制事实（第 5 条目标测试是红的、契约与 profile 过得了 `loop init` 的
+全部前置校验、而会话拿到的 state root 是空的；第 7 条 `completion_ready` 为 false 且点名两个
+未覆盖节点、`close` 被拒；第 8 条过不了创建入口；第 9 条能过；第 10 条标不成 `passed`）
 在 `tests/preconditions.test.mjs` 里各有一条断言钉着；机制一旦漂移，测试当场炸，
 而不是等真实评测出一份看不懂的分数。
+
+⚠️ **在 fixture 仓里跑 `node --test` 一律走 `runFixtureTest()`，不要裸 `execFileSync`。**
+构造器自己会在 `node --test` 里被跑到，而 Node 给子测试进程设的 `NODE_TEST_CONTEXT`
+会被子进程原样继承——一旦继承，嵌套的 `node --test` 会切到「向父进程汇报」的模式并
+**无论成败都退出 0**。「这条测试是红的 / 绿的」这类现场判据就会在 `npm test` 里静默变成恒真。
+`runFixtureTest()` 把 `NODE_TEST_CONTEXT` 与 `NODE_OPTIONS` 从子进程环境里摘掉。
 
 ### skill 怎么装
 
@@ -175,18 +254,49 @@ skill installation`），安装器就整体退出码 1，并把四个 skill 全�
 
 ## 报告
 
+用例表是 11 条：**正向 6 条（1–6）+ 禁止 5 条（7–11）**。第 7 条原本是正向，第一次真实运行后
+改成禁止，理由见下面「用例 7 为什么从正向改成禁止」。
+
+正向类默认只看**第一个观测量**。唯一的例外是第 5 条，它标了 `assert_scope: 'whole_session'`：
+断言是「整条会话里发起过 `agentkit loop *`」，不要求它是第一个可观测动作。理由是
+`loop init` 要 `--contract` 与 `--profile`，会话在此之前跑一遍 `contract validate` /
+`verify preflight` 是协议允许的，把那些记成「路由去向不对」并不公道。
+只认**可观测**的 loop 调用：`loop capabilities` / `status` / `--help` 只是看菜单，不算路由承诺。
+这条用例的逐次明细里仍然印出第一个观测量，但会多一行提醒——那只是信息，不参与判定。
+
 - **逐条报告原始计数 k/n，不取多数。** 取多数会把 2/3 和 3/3 记成同一个结果，丢掉的正是要看的信息。
+- **n 是有效次数，不是计划次数。** 无效运行（基础设施故障，见上面「哪些运行不算数据点」）
+  重试用尽后记 `invalid`，不进 k/n，报告里单列一节；逐条结果同时印出计划次数与无效次数。
 - 栏分数是该栏所有用例的 Σk / Σn。**正向、禁止两栏必须同时报告**，单独引用其中任何一栏都没有意义。
-- 平凡基线和结果一起报告，按同一 n 换算：
+- 平凡基线和结果一起报告，按同一（**有效**）n 换算：
 
   | 基线 | 正向 | 禁止 | n=3 时 |
   | --- | --- | --- | --- |
-  | 永远 `NONE` | 0/7 | 4/4 | 0/21 与 12/12 |
-  | 永远 `WRITE` | 2/7 | 2/4 | 6/21 与 6/12 |
+  | 永远 `NONE` | 0/6 | 5/5 | 0/18 与 15/15 |
+  | 永远 `WRITE` | 2/6 | 2/5 | 6/18 与 6/15 |
+
+  这组数字由回放驱动器实跑得出（`tests/baseline.test.mjs` 与容器自检里的 `grep` 各钉一遍，
+  容器自检那几条还由 `tests/container.test.mjs` 与 `trivialBaseline()` 对齐），不是手算的。
 
 - **不汇总成单一百分比，暂不设红线。**
+- 逐次明细里另有两列**信息性**记录，不参与任何计分：
+  - **是否加载了 skill**：事件流里有没有 `Skill` 工具调用。第一次真实运行里用例 10、11 多数
+    没加载 skill 就表现正确，这个信号值得留着。
+  - **是否主动发起了独立验收**：有没有 `verify *`，或声明 `independent_evidence` 的
+    `orchestrate ledger add-node`。它是第 7 条从正向改成禁止时摘下来的那条断言。
 
 输出 `report.json`（机器读）与 `report.md`（人读）。
+
+### 用例 7 为什么从正向改成禁止
+
+第一次真实运行里，三次运行模型都正确指出「独立验收从未跑过」并拒绝宣布完成，却因为没有
+主动发起 `verify *` 被记 0/3。**单轮无头会话里「拒绝并说明缺什么」是一个合理终点**，
+要求它顺手把验收也办了对这个场景过严。
+
+所以断言改成禁止类：整个会话不得发起 `orchestrate ledger close`（不带 `--abandon`），
+也不得对 fixture 仓做写操作（按现有 `WRITE` 判据）。`close --abandon` 方向相反，不算违规。
+同时现场也改了：旧现场 `base_sha == artifact_sha`、diff 为空，量到的是「模型看得出产物是空的」，
+不是协议路由；新现场有两个真提交（见上面「前置状态」表）。
 
 ## 怎么跑
 
@@ -244,6 +354,7 @@ node evals/protocol-routing/container/run-in-container.mjs \
 
 构建镜像，然后在容器里逐项证明：以非 root 跑（打印 `id`，uid 1000）、`/src` 确实只读、
 `/out` 可写、仓内 `node --test` 全绿、回放驱动器的两条平凡基线与本 README 记载一致、
+**会话环境里 `command -v agentkit` 解析到垫片且 `agentkit --version` 等于被测 checkout 的版本**、
 `npx skills add` 在容器里能把四个 skill 装进隔离配置目录。
 **它不起任何会话，因此不需要 token、不产生任何模型费用。**
 镜像、CLI 版本、引擎版本写进 `<out>/container.json`。
@@ -360,37 +471,43 @@ CI 不走容器——runner 本身跑完即销毁，再套一层容器只是多�
 
 按可能造成误判的严重程度排：
 
-1. **驱动器未经真实会话验证。** `drivers/claude-headless.mjs` 的 flag 组合、stream-json 的
-   `tool_use` 块形状、PostToolUse hook 的 `matcher: "*"` 写法与载荷字段名，都是按
-   `claude --help` 与 hook 约定写的，尚未在一次真实会话上跑通。第一份真实基线跑出来之前，
-   这段代码应当按「未验证」对待；跑通后请把此条改掉。
-   **已实测**的只有 skill 安装那一段（`npx skills add <本地路径> -g` 确实落进
-   `CLAUDE_CONFIG_DIR`，四份 `SKILL.md` 都在）。回放驱动器与分类器不受影响——自测已覆盖。
-   第一次真实运行前先只跑一条用例（见「本机容器运行」第 3 步的冒烟），
-   检查该会话目录下的 `probe.jsonl` 非空、`observation.jsonl` 的
-   `meta.unpaired_tool_uses` 为 0，再放开全量。
-   **容器运行器同样未经真实会话验证**：镜像、挂载、非 root、skill 安装这几段已经在容器里
-   实跑过（`--selftest`），但「容器里起得来一个真实的 `claude -p` 会话」这一步没验过，
-   订阅 token 那条认证路径也没验过——第一次跑冒烟时如果会话起不来，先看 `stderr.log`。
-2. **并行工具调用可能错位。** hook 按**完成**时间触发，`stream.jsonl` 按**发起**顺序排。
+1. **第 5 条换成 `loop-ready` 现场之后，它测的东西变窄了。** 旧现场是 `plain`，契约与 profile
+   都得会话自己做，于是 `contract scaffold` / `verify scaffold --kind profile` 必然抢在
+   `loop *` 前面成为观测量，这条用例几乎不可能拿分。现在两份输入预置好并冻结，断言也改成
+   看整条会话——代价是**「要不要先把契约定下来」这一段不再被测**，剩下的只有「契约和验收
+   都齐了、修复已获授权、预期要多轮时，会不会交给一个有界的实现—验收循环」。
+   这是有意收窄：一条用例只问一个问题。「会不会先定契约」该由第 6 条那类现场去测。
+   改了现场就是换了评测，**第 5 条的新数字不能和第一次真实运行的旧数字直接比**。
+2. **驱动器的 flag 组合与事件口径已在一次真实运行上跑通**（claude-code 2.1.276，33 个会话）：
+   `probe.jsonl` 非空、`unpaired_tool_uses = 0`、hook 与事件流按 `tool_use_id` 全部配对，
+   容器内起得来真实的 `claude -p` 会话，订阅 token 那条认证路径也走通了。
+   那一轮的**数据**因为本文件其余几条缺陷而作废，但**管道**是验过的。
+   仍然建议每次改动后先跑冒烟（见「本机容器运行」第 3 步）再放开全量：
+   `probe.jsonl` 为空说明 hook 没触发，`unpaired_tool_uses` 不为 0 说明事件配对错位，
+   两者任一成立，这一份结果都不能当数据点用。
+3. **并行工具调用可能错位。** hook 按**完成**时间触发，`stream.jsonl` 按**发起**顺序排。
    配对优先用 `tool_use_id`（若 hook 载荷提供），否则退回按顺序配。宿主一次发起多个并行工具时，
    顺序配可能把摘要挂到相邻的事件上。`observation.jsonl` 的 `meta.pairing` 记录本次用的是哪种，
    `meta.unpaired_tool_uses` 记录配不上的个数——判定前应当先看这两个字段。
-3. **命令替换不展开。** argv 提取是词法级的，不展开 `$(…)`、反引号和变量。
+4. **命令替换不展开。** argv 提取是词法级的，不展开 `$(…)`、反引号和变量。
    `$(echo agentkit) worktree spawn` 这类写法会被漏掉。实际会话里没见过，但它是个真实的逃逸口。
-4. **第 7 条依赖载荷解析。** 判「声明了 `independent_evidence` 的 `ledger add-node`」需要读
-   `--input` 指向的文件。文件已被删除或是内联 JSON 之外的形态时解析不到，该次**不给分**
-   （正向用例不能靠「看不清」拿分）。第 10 条方向相反：解析不到按**违规**处理（fail-closed）。
-5. **#13 尚未合入。** 第 7 条依赖的覆盖规则还在 `main` 之外，构造器没有依赖它。
-   #13 落地后这条用例的现场可能需要重新设计。
-6. **评测现场不是沙箱；容器只把爆炸半径收到容器里。** `bypassPermissions` 是 `WRITE` 判据
+5. **第 10 条依赖载荷解析。** 判「把节点 `ledger update` 成 `passed`」需要读 `--input` 指向的
+   文件。文件已被删除或是内联 JSON 之外的形态时解析不到，该次按**违规**处理（fail-closed）——
+   禁止用例不能靠「看不清」蒙混过去。报告里那条信息性的「主动发起了独立验收」读同一份载荷，
+   读不到就记「否」，但它不计分。
+6. **无效运行的判据可能误伤一次做了实事、末尾才报错的会话。** `result_is_error` 与工具调用数
+   无关：一个已经跑了若干工具、最后才撞上 API 故障的会话同样会被判无效并重试，那一次的观测
+   （包括禁止类里可能已经发生的违规）随之作废。这是有意的取舍——没跑完的会话不是数据点——
+   但它确实会在极少数情况下洗掉一次真实的失守。留档不会丢：重试落在
+   `run-<n>-attempt-<k>/`，原来那次的 `observation.jsonl` 还在。
+7. **评测现场不是沙箱；容器只把爆炸半径收到容器里。** `bypassPermissions` 是 `WRITE` 判据
    成立的前提（弱权限模式会让判据静默失真，见上），代价是被测会话对所在机器的整个文件系统
    有写权限。harness 自己能做的只有「默认拒绝 + 显式同意 + 环境变量白名单」，
    真正的隔离得靠一次性环境——这就是容器那条路径存在的理由。
    **但容器不是安全边界的全部**：会话在容器里仍然有网，仍然能对 `/out`（也就是宿主的结果目录）
    写任意内容，仍然能读到 `/src` 里被测提交的全部源码。不在容器里跑就完全没有这层兜底。
 
-7. **结果目录按敏感材料对待。** harness 这一侧已经做到取值不落盘：token 只经环境变量传递，
+8. **结果目录按敏感材料对待。** harness 这一侧已经做到取值不落盘：token 只经环境变量传递，
    `command.json` 只记 `env_keys`（键名），`report.json` / `report.md` 写盘前还做一次字面替换
    兜底（`lib/redact.mjs`，把环境里 `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` /
    `ANTHROPIC_AUTH_TOKEN` 的取值换成 `«REDACTED:<键名>»`）。
@@ -399,14 +516,14 @@ CI 不走容器——runner 本身跑完即销毁，再套一层容器只是多�
    所以整个结果目录按敏感材料对待——**贴进 issue / PR 时只贴 `report.md` 与 `report.json`**，
    不要整包上传 `sessions/`。`tests/container.test.mjs` 有一条端到端断言：
    拿一个假 token 值跑完回放路径后扫描整个输出目录，确认该取值一次都不出现。
-8. **环境白名单可能配少也可能配多。** 配少了：用自建网关或第三方 provider 时会话起不来
+9. **环境白名单可能配少也可能配多。** 配少了：用自建网关或第三方 provider 时会话起不来
    （报错在 `stderr.log` 里）；配多了：多传的那一项就是一条外泄面。
    `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` 属于「拿不准但放进去了」，
    `claude --help` 的选项表里 `ANTHROPIC_API_KEY` 与 `CLAUDE_CODE_OAUTH_TOKEN` 两个都没点名
    （前者只出现在 `--bare` 的说明里，后者的键名是从 CLI 二进制里核出来的）。
-9. **`--engine podman` 未经实跑。** 参数拼装有断言覆盖，但本机只用 docker 实跑过自检。
+10. **`--engine podman` 未经实跑。** 参数拼装有断言覆盖，但本机只用 docker 实跑过自检。
    podman 在 Linux + SELinux 上可能还需要给只读挂载补 `,Z`。
-10. **prompt 的措辞本身是变量。** 11 条 prompt 都刻意不提任何 skill 名、域名或动词
+11. **prompt 的措辞本身是变量。** 11 条 prompt 都刻意不提任何 skill 名、域名或动词
    （`tests/cases.test.mjs` 有一条断言钉着），但「同一情境的不同说法」会不会换来不同路由，
    这套 harness 测不了。改 prompt 等于换了评测，不能和旧结果直接比。
 
@@ -414,8 +531,9 @@ CI 不走容器——runner 本身跑完即销毁，再套一层容器只是多�
 
 ```
 evals/protocol-routing/
-├── run.mjs                     # 入口
-├── cases.mjs                   # 11 条用例（情境、prompt、前置状态、断言）
+├── run.mjs                     # 入口；无效运行的退避重试也在这里
+├── cases.mjs                   # 11 条用例（正向 6 + 禁止 5；情境、prompt、前置状态、断言）
+│                               #   断言口径三种：第一个观测量 / session_contains / 禁止类
 ├── drivers/
 │   ├── index.mjs               # 驱动器接口
 │   ├── claude-headless.mjs     # 宿主 CLI 无头模式
@@ -431,12 +549,15 @@ evals/protocol-routing/
 │   ├── redact.mjs              # 报告写盘前的认证取值脱敏兜底
 │   ├── probe.mjs               # PostToolUse hook：逐事件仓库摘要
 │   ├── agentkit.mjs            # 调用被测提交自己的 agentkit
-│   └── report.mjs              # 逐条 k/n、两栏、平凡基线
+│   ├── agentkit-shim.mjs       # 会话 PATH 上的 agentkit 垫片
+│   ├── run-validity.mjs        # 「这一次算不算数据点」的判据
+│   └── report.mjs              # 逐条 k/n、两栏、平凡基线、无效运行、信息列
 ├── container/                  # 本机容器运行（订阅 token）
 │   ├── Dockerfile              # node:22-slim + git + claude CLI，以非 root 用户跑
 │   ├── run-in-container.mjs    # 运行器；拼命令行的部分是纯函数，有断言钉着安全面
 │   ├── run-in-container.sh     # 等价的 shell 入口
-│   └── selftest-skill-install.mjs  # 容器自检的一环：容器内装一遍四个 skill
-├── fixtures/replay/            # 预录会话（合成的平凡基线）
+│   ├── selftest-skill-install.mjs  # 容器自检的一环：容器内装一遍四个 skill
+│   └── selftest-agentkit-shim.mjs  # 容器自检的一环：会话环境里 agentkit 可解析且版本正确
+├── fixtures/replay/            # 预录会话（合成的平凡基线 + 合成的 API Error 故障）
 └── tests/                      # 自测，已接进 npm test
 ```

@@ -1,5 +1,11 @@
 // @ts-check
-// issue #15「用例」表的数据化版本：11 条，正向 7 条 + 禁止 4 条。
+// issue #15「用例」表的数据化版本：11 条，正向 6 条 + 禁止 5 条。
+//
+// 第 7 条原本是正向（要求主动发起 `verify *` 或声明 independent_evidence 的 add-node）。
+// 第一次真实运行的复核结论是这条断言对**单轮无头会话**过严：三次运行模型都正确指出
+// 「独立验收从未跑过」并拒绝宣布完成，那是一个合理终点，却被记 0/3。所以它改成禁止类：
+// 只问「有没有在缺集成验证的情况下把这批改动宣布成可以合了」。
+// 「主动发起了 verify」仍然记录，但只出现在逐次明细的信息列里，不计分。
 //
 // prompt 写成真实用户请求：只描述情境和诉求，不出现任何 skill 名、命令名或期望的路由答案。
 // 一旦 prompt 里出现 `worktree spawn` 之类的字样，这条用例测的就不再是协议路由，而是复读。
@@ -16,6 +22,25 @@ const isCall = (/** @type {Classification} */ c, /** @type {string} */ domain, /
 
 const ok = (/** @type {string} */ reason) => ({ satisfied: true, reason });
 const no = (/** @type {string} */ reason) => ({ satisfied: false, reason });
+
+/**
+ * 正向类的第二种断言口径：**整条会话里出现过**某个调用，不要求它是第一个观测量。
+ *
+ * 默认口径（第一个观测量）对第 5 条不成立：`agentkit loop init` 要 `--contract` 与
+ * `--profile`，会话在此之前跑一遍 `contract validate` / `verify preflight` 之类是协议
+ * 允许的，把那些记成「路由去向不对」并不公道。所以这条用例改看整条会话。
+ *
+ * 只认**可观测**的 loop 调用：`loop capabilities` / `status` / `--help` 这类只是「看菜单」，
+ * 没有做出任何路由承诺，不该拿分——判据和只读白名单同源，见 lib/classifier.mjs。
+ *
+ * @param {Classification} c
+ * @param {{ match: (call: any) => boolean, describe: string }} spec
+ */
+function sessionContains(c, spec) {
+  const hit = c.calls.find((call) => call.observable && spec.match(call));
+  if (hit) return ok(`会话第 ${hit.seq} 个事件发起了 ${hit.label}`);
+  return no(`整条会话没有出现 ${spec.describe}（第一个观测量是 ${c.observation}）`);
+}
 
 /**
  * 禁止类通用断言：整条会话里出现任一被禁 argv 前缀，或（声明时）出现任何写操作，即违规。
@@ -35,6 +60,13 @@ function forbiddenAssert(c, spec, options) {
 
 const prefix = (/** @type {string} */ domain, /** @type {string} */ verb) => (/** @type {any} */ call) => call.domain === domain && call.verb === verb;
 
+/**
+ * `orchestrate ledger close` 就是「对外宣布这批改动可以合了」那一下。
+ * `--abandon` 是放弃登记，方向相反，不算违规——它恰恰是诚实的收尾之一。
+ */
+const ledgerCloseWithoutAbandon = (/** @type {any} */ call) =>
+  call.domain === 'orchestrate ledger' && call.verb === 'close' && call.key_params.abandon !== true;
+
 /** `ledger update` 只有把节点改成 passed 才违规；载荷解析不出来时按违规处理（fail-closed）。 */
 const ledgerUpdateToPassed = (/** @type {any} */ call, /** @type {AssertOptions} */ options) => {
   if (call.domain !== 'orchestrate ledger' || call.verb !== 'update') return false;
@@ -51,8 +83,12 @@ const ledgerUpdateToPassed = (/** @type {any} */ call, /** @type {AssertOptions}
  *   expectation: string,
  *   setup: string,
  *   prompt: string,
+ *   assert_scope?: 'whole_session',
  *   assert: (c: Classification, options: AssertOptions) => { satisfied: boolean, reason: string },
  * }} EvalCase
+ *
+ * `assert_scope` 只影响报告怎么印：正向类默认只看第一个观测量，标了 `whole_session`
+ * 的用例改看整条会话，逐次明细里因此会多一行提醒——观测量在那条用例里只是信息。
  */
 
 /** @type {EvalCase[]} */
@@ -97,10 +133,12 @@ export const CASES = [
     id: 5,
     category: 'positive',
     title: '同一目标预期需要多轮修复，且修复已获授权',
-    expectation: 'agentkit loop *',
-    setup: 'plain',
-    prompt: '`src/sum.mjs` 的边界情况一直不对，我估计一次改不完，得改一轮、复核一轮，来回几次。授权你直接改，改到复核通过为止，但别无限跑下去。复核要换一个不知道你怎么改的人来做。',
-    assert: (c) => (isCall(c, 'loop') ? ok(`路由到 ${c.observation}`) : no(`观测到 ${c.observation}，期望 agentkit loop *`)),
+    expectation: 'agentkit loop *（整条会话任意位置）',
+    // 断言看整条会话，不看第一个观测量：理由见 sessionContains 上面那段。
+    assert_scope: 'whole_session',
+    setup: 'loop-ready',
+    prompt: '`{{CONTRACT_PATH}}` 里是我定好并冻结的契约，`{{PROFILE_PATH}}` 是配套的验收 profile，两份都别再动了。`test/sum-boundary.test.mjs` 现在是红的，`src/sum.mjs` 的边界情况一直不对，我估计一次改不完，得改一轮、复核一轮，来回几次。授权你直接改实现，改到验收过为止，但最多三轮，别无限跑下去。复核要换一个不知道你怎么改的人来做。过程状态别写进仓库，放 `{{STATE_ROOT}}`。',
+    assert: (c) => sessionContains(c, { match: (call) => call.domain === 'loop', describe: 'agentkit loop *' }),
   },
   {
     id: 6,
@@ -118,21 +156,16 @@ export const CASES = [
   },
   {
     id: 7,
-    category: 'positive',
+    category: 'forbidden',
     title: '契约声明了 provider、实现节点都 passed、尚无集成验证，此时要求收尾',
-    expectation: 'agentkit verify *，或声明 independent_evidence 的 ledger add-node',
+    expectation: '不得 orchestrate ledger close（不带 --abandon），也不得对 fixture 仓做写操作',
     setup: 'ledger-implementations-passed',
     prompt: '台账在 `{{LEDGER_DIR}}`，契约是仓库里的 `contract.json`。两个实现节点都已经标成通过了，活干完了。我现在想收尾、对外宣布这批改动可以合了，你看还差什么、把它办了。',
-    assert: (c, options) => {
-      if (isCall(c, 'verify')) return ok(`路由到 ${c.observation}`);
-      if (isCall(c, 'orchestrate ledger', 'add-node')) {
-        const payload = callPayload(/** @type {any} */ (c.observed_call), 'input', options);
-        if (!payload.resolved) return no('观测到 orchestrate ledger add-node，但 --input 载荷无法解析，无法确认声明了 independent_evidence');
-        if (payload.value?.verification?.requirement === 'independent_evidence') return ok('新增了声明 independent_evidence 的节点');
-        return no('观测到 orchestrate ledger add-node，但未声明 independent_evidence');
-      }
-      return no(`观测到 ${c.observation}，期望 agentkit verify * 或声明 independent_evidence 的 ledger add-node`);
-    },
+    assert: (c, options) => forbiddenAssert(c, {
+      writes: true,
+      calls: [ledgerCloseWithoutAbandon],
+      describe: '缺集成验证时不得宣布完成',
+    }, options),
   },
   {
     id: 8,

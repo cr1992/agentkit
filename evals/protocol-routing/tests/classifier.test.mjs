@@ -11,7 +11,7 @@ import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 import { extractAgentkitArgv, tokenize } from '../lib/argv.mjs';
-import { classify, normalizeCall } from '../lib/classifier.mjs';
+import { PROCESS_PRELUDE_PAIRS, READONLY_PAIRS, classify, normalizeCall } from '../lib/classifier.mjs';
 import { createFixtureRepo, repoSummary } from '../lib/fixture-repo.mjs';
 
 /** @param {Array<{ tool_name: string, command?: string, repo: any }>} steps */
@@ -159,6 +159,48 @@ test('normalizeCall 拆出域、动词与关键参数，二级域保留工具名
   for (const argv of [['docs'], ['capabilities', '--json'], ['doctor'], ['worktree', 'list'], ['worktree', 'scan'], ['verify', 'readiness'], ['worktree', '--help'], ['--version'], ['orchestrate', 'ledger', 'status', '--ledger', 'l'], ['verify', 'inspect', '--run', 'r'], ['worktree']]) {
     assert.equal(normalizeCall(argv).observable, false, argv.join(' '));
   }
+});
+
+test('白名单匹配到子动词一级：watch-service status 只读，install 不是', () => {
+  // issue #15 的缺陷 3：用例 3 两次「不符合」观测到的都是 `worktree watch-service status`，
+  // 那是 manage-worktrees 强制流程「恢复/盘点」阶段的第一步，只读、也不暴露路由去向。
+  const readonly = normalizeCall(['worktree', 'watch-service', 'status', '--json']);
+  assert.equal(readonly.observable, false);
+  assert.equal(readonly.subverb, 'status');
+  assert.match(readonly.reason, /只读组合/u);
+
+  // `install` 会装一个 LaunchAgent，绝不能因为共用 `watch-service` 这个动词被一起放掉。
+  for (const subverb of ['install', 'uninstall']) {
+    const call = normalizeCall(['worktree', 'watch-service', subverb]);
+    assert.equal(call.observable, true, subverb);
+    assert.equal(call.label, `agentkit worktree watch-service ${subverb}`, '标签要带到子动词一级，否则报告里两者印出来是同一行字');
+  }
+});
+
+test('强制流程前置步骤与只读分开列：worktree resume-all 有副作用，但不暴露路由去向', () => {
+  const call = normalizeCall(['worktree', 'resume-all', '--json']);
+  assert.equal(call.observable, false);
+  assert.match(call.reason, /流程前置步骤/u);
+  assert.ok(!call.reason.includes('只读'), '它不是只读命令，理由里不该说成只读');
+  assert.ok(!READONLY_PAIRS.has('worktree resume-all'), '不得混进只读白名单');
+  assert.ok(PROCESS_PRELUDE_PAIRS.has('worktree resume-all'));
+});
+
+test('manage-worktrees 强制流程的整段盘点走完之后，观测量仍然是随后的那个真调用', () => {
+  // 强制流程：watch-service status → resume-all → list → doctor → scan → spawn。
+  // 一个照着协议走的会话必然是这个形状；前五步一个都不该变成观测量。
+  const clean = { status: '', head: 'e'.repeat(40) };
+  const result = classify(session(clean, [
+    { tool_name: 'Bash', command: 'agentkit worktree watch-service status --json', repo: clean },
+    { tool_name: 'Bash', command: 'agentkit worktree resume-all --json', repo: clean },
+    { tool_name: 'Bash', command: 'agentkit worktree list --json', repo: clean },
+    { tool_name: 'Bash', command: 'agentkit worktree doctor --json', repo: clean },
+    { tool_name: 'Bash', command: 'agentkit worktree scan --target src/sum.mjs src/greet.mjs', repo: clean },
+    { tool_name: 'Bash', command: 'agentkit worktree spawn sum-boundary --agent claude-code --agent-id a1 --purpose x', repo: clean },
+  ]));
+  assert.equal(result.observation, 'agentkit worktree spawn');
+  assert.equal(result.observed_at, 6);
+  assert.deepEqual(result.calls.filter((call) => call.observable).map((call) => call.label), ['agentkit worktree spawn']);
 });
 
 test('整条会话都没有可观测调用、也没有写操作时观测量是 NONE', () => {

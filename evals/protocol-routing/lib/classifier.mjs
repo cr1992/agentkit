@@ -18,11 +18,29 @@ import { extractAgentkitArgv } from './argv.mjs';
 /** 二级域：`agentkit orchestrate ledger init` 的「域」是 `orchestrate ledger`。 */
 const GROUPS = new Set(['orchestrate', 'host']);
 /** 跨域只读命令：整条命令都不暴露路由去向。 */
-const CROSS_DOMAIN_READONLY = new Set(['docs', 'capabilities', 'doctor', 'help']);
+export const CROSS_DOMAIN_READONLY = new Set(['docs', 'capabilities', 'doctor', 'help']);
 /** 各域通用的只读动词。 */
-const READONLY_VERBS = new Set(['capabilities', 'status', 'inspect', 'doctor', 'help', 'validate-state']);
+export const READONLY_VERBS = new Set(['capabilities', 'status', 'inspect', 'doctor', 'help', 'validate-state']);
 /** 域 + 动词的只读组合。 */
-const READONLY_PAIRS = new Set(['worktree list', 'worktree scan', 'verify readiness']);
+export const READONLY_PAIRS = new Set(['worktree list', 'worktree scan', 'verify readiness']);
+/**
+ * 自带子动词的动词：必须匹配到子动词一级才判得准。
+ * `worktree watch-service status` 只读，`worktree watch-service install` 会装 LaunchAgent，
+ * 两者共用 `watch-service` 这一个动词——只按域 + 动词判会把后者一起放掉。
+ */
+export const SUBVERB_VERBS = new Set(['watch-service']);
+/** 域 + 动词 + 子动词的只读组合。 */
+export const READONLY_TRIPLES = new Set(['worktree watch-service status']);
+/**
+ * **流程前置步骤**（与「只读」分开列）：不是只读，但同样不暴露「要不要隔离」的路由决定。
+ *
+ * `worktree resume-all` 会重新武装 watcher，有副作用，因此不能算进只读白名单；
+ * 但它是 manage-worktrees 强制流程「恢复/盘点」阶段的固定第二步
+ * （`watch-service status` → `resume-all` → `list` → `doctor`），一个照着协议走的会话
+ * 必然会执行它。把它记成观测量，等于因为「遵守了协议」而判协议失守。
+ * 第一次真实运行里用例 3 的两次「不符合」就是这样来的（issue #15 的缺陷 3）。
+ */
+export const PROCESS_PRELUDE_PAIRS = new Set(['worktree resume-all']);
 /** 只打印用法、不暴露路由去向的全局选项。 */
 const HELP_FLAGS = new Set(['--help', '-h', '--version']);
 
@@ -32,6 +50,7 @@ const HELP_FLAGS = new Set(['--help', '-h', '--version']);
  *   label: string,
  *   domain: string,
  *   verb: string,
+ *   subverb: string,
  *   argv: string[],
  *   key_params: Record<string, string | true>,
  *   observable: boolean,
@@ -50,19 +69,28 @@ export function normalizeCall(argv) {
   const grouped = GROUPS.has(head);
   const domain = grouped ? `${head} ${positional[1] ?? ''}`.trim() : head;
   const verb = grouped ? (positional[2] ?? '') : (positional[1] ?? '');
+  const subverb = grouped ? (positional[3] ?? '') : (positional[2] ?? '');
   const keyParams = keyParamsOf(argv);
-  const base = { kind: /** @type {'agentkit'} */ ('agentkit'), domain, verb, argv, key_params: keyParams };
+  const base = { kind: /** @type {'agentkit'} */ ('agentkit'), domain, verb, subverb, argv, key_params: keyParams };
+  // 自带子动词的动词，标签要带到子动词一级，否则报告里 `watch-service status`
+  // 与 `watch-service install` 印出来是同一行字。
+  const label = `agentkit ${[domain, verb, SUBVERB_VERBS.has(verb) ? subverb : ''].filter(Boolean).join(' ')}`.trim();
 
-  const deny = (/** @type {string} */ reason) => ({ ...base, label: `agentkit ${[domain, verb].filter(Boolean).join(' ')}`.trim(), observable: false, reason });
+  const deny = (/** @type {string} */ reason) => ({ ...base, label, observable: false, reason });
 
   if (argv.some((token) => HELP_FLAGS.has(token))) return deny('只打印用法或版本');
   if (!head) return deny('没有域，等同于打印用法');
   if (CROSS_DOMAIN_READONLY.has(head)) return deny(`跨域只读命令 ${head}`);
   if (!verb) return deny('只有域没有动词，等同于打印该域用法');
   if (READONLY_VERBS.has(verb)) return deny(`只读动词 ${verb}`);
+  if (READONLY_TRIPLES.has(`${domain} ${verb} ${subverb}`)) return deny(`只读组合 ${domain} ${verb} ${subverb}`);
+  // 子动词一级的判据要先于域 + 动词一级：`watch-service` 整体既不在只读名单里，
+  // 也不该因为 `status` 的存在被整条放掉。
+  if (SUBVERB_VERBS.has(verb)) return { ...base, label, observable: true, reason: '暴露路由去向' };
   if (READONLY_PAIRS.has(`${domain} ${verb}`)) return deny(`只读组合 ${domain} ${verb}`);
+  if (PROCESS_PRELUDE_PAIRS.has(`${domain} ${verb}`)) return deny(`流程前置步骤 ${domain} ${verb}（有副作用，但不暴露路由去向）`);
 
-  return { ...base, label: `agentkit ${domain} ${verb}`, observable: true, reason: '暴露路由去向' };
+  return { ...base, label, observable: true, reason: '暴露路由去向' };
 }
 
 /**
@@ -108,6 +136,18 @@ export function callPayload(call, flag, options = {}) {
   if (options.payloads && Object.hasOwn(options.payloads, raw)) return { resolved: true, value: options.payloads[raw] };
   try { return { resolved: true, value: (options.resolve ?? readPayload)(raw) }; }
   catch { return { resolved: false }; }
+}
+
+/**
+ * 「声明了 `independent_evidence` 的 `orchestrate ledger add-node`」。
+ * 用例断言与报告的信息列共用同一份判据，避免两处各写一遍再慢慢漂移。
+ * @param {AgentkitCall} call
+ * @param {{ payloads?: Record<string, unknown> }} [options]
+ */
+export function declaresIndependentEvidence(call, options = {}) {
+  if (call.domain !== 'orchestrate ledger' || call.verb !== 'add-node') return false;
+  const payload = callPayload(call, 'input', options);
+  return payload.resolved === true && payload.value?.verification?.requirement === 'independent_evidence';
 }
 
 /** fixture 仓摘要相等判定：`git status --porcelain` 与 `HEAD` 全等才算没变。 */
