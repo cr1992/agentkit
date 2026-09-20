@@ -216,6 +216,10 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           set -e
+          # annotated tag 要 tagger 身份，runner 上默认没有，缺了会在这里以 exit 128 失败，
+          # 而此时包已经发布、无法重跑整条流水线。
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "v$VERSION" -m "agentkit v$VERSION"
           git push origin "v$VERSION"
           gh release create "v$VERSION" \
