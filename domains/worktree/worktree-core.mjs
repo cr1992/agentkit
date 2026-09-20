@@ -127,12 +127,15 @@ function watcherGroupIsAlive(pid) {
  * 时，worker 最快也要等下一轮轮询才退出，期间仍在 common-dir 与 .git 里写心跳、target cache 和
  * FETCH_HEAD；调用方紧接着删除或移动 worktree 就会撞上这些写入。因此终态判据是「整组已退出」：
  * 按组发 SIGTERM 让 worker 连同在途 git 一起收尾，再轮询到组内无进程为止。
- * @param {number} pid @param {{timeoutMs?:number}} [options]
- * @returns {{stopped:boolean,reason:'not-running'|'terminated'|'signal-denied'|'timeout'}}
+ * @param {number} pid @param {{timeoutMs?:number,platform?:string}} [options]
+ * @returns {{stopped:boolean,reason:'not-running'|'terminated'|'signal-denied'|'timeout'|'unsupported-platform'}}
  */
 export function stopWatcherProcessGroup(pid, options = {}) {
   // pid<=1 时 kill(-pid) 会广播给整个会话甚至 init，必须先挡掉。
-  if (!Number.isInteger(pid) || pid <= 1 || !watcherGroupIsAlive(pid)) return { stopped: true, reason: 'not-running' };
+  if (!Number.isInteger(pid) || pid <= 1) return { stopped: true, reason: 'not-running' };
+  // 负号 pid 是 POSIX 进程组语义；Windows 上 Node 不支持，只能退回 worker 自己轮询退出。
+  if ((options.platform ?? process.platform) === 'win32') return { stopped: false, reason: 'unsupported-platform' };
+  if (!watcherGroupIsAlive(pid)) return { stopped: true, reason: 'not-running' };
   try {
     process.kill(-pid, 'SIGTERM');
   } catch (error) {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -1558,6 +1558,45 @@ test('unwatch 返回时 watcher 进程组必须已退出，之后没有后台写
 
   const heartbeat = join(fixture.repo, '.git', 'worktree-trace', 'v1', 'watchers', `${recordFor(fixture, task).worktree_id}.json`);
   assert.equal(existsSync(heartbeat), false);
+});
+
+test('心跳过期时 unwatch 不按组发信号，避免打到复用了旧 pid 的无关进程', async (t) => {
+  const fixture = makeRemoteRepo();
+  const task = 'auto-unwatch-stale-pid';
+  // decoy 冒充「崩溃 worker 留下的陈旧 pid 后来被系统复用」：它自己是 detached 进程组 leader，
+  // 守卫一旦失效就会被 kill(-pid) 连带打掉。
+  const decoy = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { detached: true, stdio: 'ignore' });
+  decoy.unref();
+  t.after(() => {
+    try { process.kill(-decoy.pid, 'SIGKILL'); } catch {}
+    try { manager(fixture.repo, ['unwatch', task]); } catch {}
+    fixture.cleanup();
+  });
+  prepareWatchedTask(fixture, task);
+  const armed = recordFor(fixture, task);
+  // worker 崩溃：来不及走退出路径，心跳文件连同那个 pid 一起留在原地。
+  process.kill(armed.auto_reclaim.pid, 'SIGTERM');
+  await waitFor(() => !processIsAlive(armed.auto_reclaim.pid), 'watcher 未在 SIGTERM 后退出');
+
+  const traceRoot = join(fixture.repo, '.git', 'worktree-trace', 'v1');
+  const recordPath = join(traceRoot, 'records', `${armed.worktree_id}.json`);
+  const heartbeatPath = join(traceRoot, 'watchers', `${armed.worktree_id}.json`);
+  const record = JSON.parse(readFileSync(recordPath, 'utf8'));
+  record.auto_reclaim.pid = decoy.pid;
+  writeFileSync(recordPath, `${JSON.stringify(record, null, 2)}\n`);
+  const heartbeat = JSON.parse(readFileSync(heartbeatPath, 'utf8'));
+  heartbeat.pid = decoy.pid;
+  heartbeat.heartbeat_at = new Date(Date.now() - 600_000).toISOString();
+  writeFileSync(heartbeatPath, `${JSON.stringify(heartbeat, null, 2)}\n`);
+
+  // token 与两处 pid 全部对得上，只有心跳过期：拦住这一次信号的只能是新鲜度判据。
+  // not-running 是「压根没进发信号那条路径」的终态；守卫一旦失效，这里会变成 terminated/timeout。
+  assert.match(manager(fixture.repo, ['unwatch', task]), /watcher=not-running/);
+  // exitCode/signalCode 由本进程直接观测，不受「已退出但尚未被回收」影响。
+  assert.equal(decoy.exitCode, null, 'decoy 进程被 unwatch 终止了');
+  assert.equal(decoy.signalCode, null, 'decoy 进程收到了 unwatch 发出的信号');
+  assert.equal(processGroupIsAlive(decoy.pid), true);
+  assert.equal(recordFor(fixture, task).auto_reclaim.state, 'disarmed');
 });
 
 test('MR 已合入但 stash/dirty 时 watcher 保留并在阻塞清除后自动重试', async (t) => {

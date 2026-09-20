@@ -8,8 +8,10 @@
   detached worker 最快也要等下一轮轮询才发现自己被解除，期间仍在写心跳、target cache 和 `FETCH_HEAD`；
   紧接着删除或移动该 worktree 会与这些写入相撞（在 CI 上表现为 teardown `rmSync` 报 `ENOTEMPTY`）。
   现在解除事件落盘后按进程组终止该次租约的 watcher，worker 与它在途的 `git fetch` 子进程一起收尾，
-  等整组退出才返回；只有心跳与 record 登记同一个 pid 时才发信号。输出新增 `watcher=<终态>` 后缀，
-  发信号被拒或超时未退出时额外打印告警。
+  等整组退出才返回。发信号的前提是心跳判定健康（token 一致、pid 存活、心跳未过期）且与 record 登记
+  同一个 pid，否则退回 worker 自行轮询退出——崩溃 worker 留下的陈旧 pid 可能已被系统复用成别的
+  进程组 leader。输出新增 `watcher=<终态>` 后缀，`signal-denied` / `timeout` / `unsupported-platform`
+  （非 POSIX 平台没有进程组信号）各自打印独立告警。
 
 ## 1.2.0 - 2026-09-20
 

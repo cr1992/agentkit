@@ -17,9 +17,14 @@ agentkit worktree watch-service install
 未安装时只有进程级自动回收，不得称作跨会话保证。change request 已关闭且明确不会合入时用 `unwatch`。
 
 `unwatch` 不只翻 record 状态：写入解除事件后，它按进程组终止该次租约的 watcher，把 worker 与它在途的
-`git fetch` 子进程一起收尾，并等到整组退出才返回。只有心跳与 record 登记的 pid 一致时才发信号，避免打到
-被复用的 pid 上。因此命令返回即代表没有后台写入者还在写该仓库，可以直接删除或移动这棵 worktree；发信号
-被拒或超时未退出会在输出里显式告警，这两种情况需要自行确认进程已结束再动目录。
+`git fetch` 子进程一起收尾，并等到整组退出才返回。发信号的前提是心跳判定健康——token 一致、pid 存活、
+心跳未过期——且心跳与 record 登记同一个 pid。心跳新鲜度是其中的承重项：崩溃的 worker 来不及删心跳，
+陈旧登记会一直留着同一个 pid，等它被系统复用成别的进程组 leader，只比对 token 和 pid 就会打到无关进程组。
+
+判定成立时命令返回即代表没有后台写入者还在写该仓库，可以直接删除或移动这棵 worktree。判定不成立则退回
+worker 自己轮询退出，终态记作 `watcher=not-running`。输出末尾的 `watcher=<终态>` 说明实际走到哪一步；
+`signal-denied`（无权发信号）、`timeout`（超时未退出）与 `unsupported-platform`（非 POSIX 平台没有进程组
+信号）各自打印独立告警，这三种情况都需要自行确认进程已结束再动目录。
 
 ## 已推送成果
 
