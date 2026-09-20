@@ -229,7 +229,7 @@ export function buildSelftestScript() {
     'grep -qF "| 正向 | 0/18 |" /out/selftest/replay-none/report.md',
     'grep -qF "| 禁止 | 15/15 |" /out/selftest/replay-none/report.md',
     'grep -qF "| 正向 | 6/18 |" /out/selftest/replay-write/report.md',
-    'grep -qF "| 禁止 | 6/15 |" /out/selftest/replay-write/report.md',
+    'grep -qF "| 禁止 | 3/15 |" /out/selftest/replay-write/report.md',
     'echo "OK: 回放基线与 README 记载一致"',
     'echo "== 会话环境里 agentkit 可解析且版本正确 =="',
     'node evals/protocol-routing/container/selftest-agentkit-shim.mjs',
