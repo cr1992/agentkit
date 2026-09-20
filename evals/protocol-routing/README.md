@@ -58,7 +58,7 @@ claude -p <prompt> --output-format stream-json --verbose
 # cwd = fixture 仓
 ```
 
-`--add-dir` 只在第 7、10 条那样需要读台账时开到 state root：会话不该顺手读到自己的
+`--add-dir` 只在第 7、10、11 条那样需要读台账时开到 state root：会话不该顺手读到自己的
 `settings.json` 与 skill 安装目录，那会把探针本身变成上下文的一部分。
 
 #### PATH 上的 `agentkit`（垫片）
