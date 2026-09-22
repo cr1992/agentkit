@@ -95,6 +95,32 @@ agentkit docs
 Skill 会根据当前宿主可用的 Agent、终端、Git 和任务控制能力进行适配。宿主缺少某项能力时，应遵循
 各 Skill 中的降级路径，而不是假设某个特定产品或工具一定存在。
 
+## 5 分钟跑通
+
+想在装好之后立刻看到一份真实的 Evidence，运行仓库里的 quickstart 示例。它在临时目录里建一个最小 git
+仓库，对一个有缺陷和一个已修复的固定 commit 各做一次完整的 `agentkit verify`，打印两份 Evidence 的
+路径与结论：
+
+```bash
+# 需要已安装 agentkit（见上文「安装」），以及 git 和 Node.js 22+
+# 在仓库里：
+node examples/quickstart/run.mjs
+# 只全局装了包、没有 clone 仓库时（示例随包分发）：
+node "$(npm root -g)/@cr1992/agentkit/examples/quickstart/run.mjs"
+```
+
+脚本默认调用全局 `agentkit`；把 `AGENTKIT_BIN` 指向某个 JS 入口即可改用指定运行时（`npm test` 用它把
+示例锁定到本仓库的 `bin/agentkit.mjs`）。全程离线、不需要任何 Agent 宿主，数秒内完成。
+
+缺陷版 L0 失败、结论 `fail`；修复版走完 L0→L1→L0、结论 `pass`；两份 Evidence 都能过
+`agentkit verify validate`。示例还演示「冻结 Artifact」不变量：workdir 的 HEAD 偏离冻结的
+`artifact_sha` 时，`prepare-run` 以 `stale_precondition` 拒绝，而不是默默验错东西。
+
+三点如实说明（脚本输出里也会打印）：`--isolation-assurance user_relayed` 是调用方自己声明的隔离等级，
+不是运行时证明的；L1 复核在真实使用中由隔离上下文里的另一个 reviewer agent 产出，示例用预置文案代替，
+agentkit 自己不审代码；Evidence 里的 `limitations`（如 `l1_not_run`）是运行时主动声明的能力边界，
+不是 bug。细节见 [`examples/quickstart/`](./examples/quickstart/)。
+
 ## 环境要求
 
 - Git。

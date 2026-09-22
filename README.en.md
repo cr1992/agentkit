@@ -99,6 +99,37 @@ Each skill adapts to the agents, terminal, Git, and task-control primitives avai
 capability is unavailable, follow the documented fallback path instead of assuming a specific agent product or tool
 exists.
 
+## Five-minute run
+
+To see a real Evidence package right after installing, run the quickstart example in this
+repository. It builds a minimal git repo in a temporary directory and runs one full
+`agentkit verify` over a defective and a fixed pinned commit, printing both Evidence paths and
+verdicts:
+
+```bash
+# Requires an installed agentkit (see Installation), plus git and Node.js 22+
+# Inside a clone of this repository:
+node examples/quickstart/run.mjs
+# With only the package installed globally (the example ships with it):
+node "$(npm root -g)/@cr1992/agentkit/examples/quickstart/run.mjs"
+```
+
+The script calls the global `agentkit` by default; point `AGENTKIT_BIN` at a JS entry to use a
+specific runtime instead (`npm test` uses this to pin this repo's `bin/agentkit.mjs`). It runs
+fully offline, needs no agent host, and finishes in seconds.
+
+The defective commit fails L0 with a `fail` verdict; the fixed commit runs L0→L1→L0 and passes;
+both Evidence packages pass `agentkit verify validate`. The example also demonstrates the
+"frozen Artifact" invariant: when the workdir HEAD drifts away from the frozen `artifact_sha`,
+`prepare-run` refuses with `stale_precondition` instead of silently verifying the wrong thing.
+
+Three honesty notes (also printed by the script): `--isolation-assurance user_relayed` is the
+isolation level the caller asserts, not one the runtime proves; in real use the L1 review is
+produced by a separate reviewer agent in an isolated context — the example substitutes preset
+text and agentkit does not review code itself; the `limitations` in Evidence (such as
+`l1_not_run`) are capability boundaries the runtime declares, not bugs. See
+[`examples/quickstart/`](./examples/quickstart/) for details.
+
 ## Requirements
 
 - Git.
