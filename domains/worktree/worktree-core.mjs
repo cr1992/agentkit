@@ -2,20 +2,24 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { runFileCapture, runFileTry } from './worktree-process.mjs';
-import {
-  PROFILE_FILENAME,
-  loadRepositoryProfile,
-} from './worktree-profile.mjs';
-import {
-  appendTraceEvent,
-  listRecordCacheEntries,
-  traceLayout,
-} from './worktree-trace.mjs';
+import { PROFILE_FILENAME, loadRepositoryProfile } from './worktree-profile.mjs';
+import { appendTraceEvent, listRecordCacheEntries, traceLayout } from './worktree-trace.mjs';
 import { distributionDigest, skillDistributionRoots } from '../../core/content-digest.mjs';
 
 export { runFileCapture, runFileTry } from './worktree-process.mjs';
@@ -26,7 +30,14 @@ const PACKAGE_ROOT = resolve(SKILL_ROOT, '..');
 const DOMAIN_ROOT = dirname(fileURLToPath(import.meta.url));
 // 与另外三个域同一套摘要口径：Skill 目录 + 共享 core + canonical schemas。
 export function worktreeSkillDigest(root = SKILL_ROOT) {
-  return distributionDigest(skillDistributionRoots({ packageRoot: PACKAGE_ROOT, skillRoot: root, domainRoot: DOMAIN_ROOT, docsRoot: join(PACKAGE_ROOT, 'docs', 'worktree') }));
+  return distributionDigest(
+    skillDistributionRoots({
+      packageRoot: PACKAGE_ROOT,
+      skillRoot: root,
+      domainRoot: DOMAIN_ROOT,
+      docsRoot: join(PACKAGE_ROOT, 'docs', 'worktree'),
+    }),
+  );
 }
 
 export const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
@@ -88,10 +99,7 @@ export function commandFailureReason(result, fallback) {
 /** @param {unknown} error */
 export function isRootWriteDenied(error) {
   return Boolean(
-    error &&
-    typeof error === 'object' &&
-    'code' in error &&
-    ['EACCES', 'EPERM', 'EROFS'].includes(String(error.code)),
+    error && typeof error === 'object' && 'code' in error && ['EACCES', 'EPERM', 'EROFS'].includes(String(error.code)),
   );
 }
 
@@ -177,7 +185,9 @@ export function writeWatcherHeartbeat(commonDir, state) {
   mkdirSync(directory, { recursive: true });
   const path = watcherPath(commonDir, String(state.worktree_id));
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify({ ...state, heartbeat_at: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(temporary, `${JSON.stringify({ ...state, heartbeat_at: new Date().toISOString() }, null, 2)}\n`, {
+    mode: 0o600,
+  });
   renameSync(temporary, path);
 }
 
@@ -200,13 +210,15 @@ export function parseWatchInterval(raw) {
 /** @param {Record<string,any>} record @param {{ok:boolean,state:any,error:string|null}} heartbeat */
 export function watcherHealth(record, heartbeat) {
   const armed = record.auto_reclaim;
-  if (!armed || armed.state === 'disarmed' || armed.state === 'reclaimed') return { healthy: false, reason: 'not armed' };
+  if (!armed || armed.state === 'disarmed' || armed.state === 'reclaimed')
+    return { healthy: false, reason: 'not armed' };
   if (!heartbeat.ok) return { healthy: false, reason: heartbeat.error ?? 'missing heartbeat' };
   if (heartbeat.state?.token !== armed.token) return { healthy: false, reason: 'token mismatch' };
   if (!processIsAlive(Number(heartbeat.state?.pid))) return { healthy: false, reason: 'pid not alive' };
   const heartbeatAt = Date.parse(String(heartbeat.state?.heartbeat_at ?? ''));
   const staleAfter = Math.max(Number(armed.interval_ms ?? WATCH_DEFAULT_INTERVAL_MS) * 4, WATCH_HEARTBEAT_MIN_STALE_MS);
-  if (!Number.isFinite(heartbeatAt) || Date.now() - heartbeatAt > staleAfter) return { healthy: false, reason: 'heartbeat stale' };
+  if (!Number.isFinite(heartbeatAt) || Date.now() - heartbeatAt > staleAfter)
+    return { healthy: false, reason: 'heartbeat stale' };
   return { healthy: true, reason: null };
 }
 
@@ -214,7 +226,10 @@ export function watcherHealth(record, heartbeat) {
 export function refreshTargetRef(targetRef, cwd) {
   const remotes = gitTry(['remote'], cwd);
   const remote = remotes.ok
-    ? remotes.out.split('\n').filter(Boolean).find((name) => targetRef.startsWith(`${name}/`))
+    ? remotes.out
+        .split('\n')
+        .filter(Boolean)
+        .find((name) => targetRef.startsWith(`${name}/`))
     : null;
   let fetch = { ok: true, out: '' };
   if (remote) {
@@ -264,7 +279,14 @@ export function freshTargetCache(state, maxAgeMs) {
  */
 export function refreshTargetRefCached(commonDir, targetRef, cwd, maxAgeMs = WATCH_TARGET_CACHE_MAX_AGE_MS) {
   const cached = freshTargetCache(readTargetCache(commonDir, targetRef), maxAgeMs);
-  if (cached) return { ok: cached.ok, target_sha: cached.target_sha, fetch_ok: cached.fetch_ok, cache_hit: true, fetch_count: cached.fetch_count };
+  if (cached)
+    return {
+      ok: cached.ok,
+      target_sha: cached.target_sha,
+      fetch_ok: cached.fetch_ok,
+      cache_hit: true,
+      fetch_count: cached.fetch_count,
+    };
 
   const directory = targetCacheDirectory(commonDir);
   mkdirSync(directory, { recursive: true });
@@ -290,14 +312,28 @@ export function refreshTargetRefCached(commonDir, targetRef, cwd, maxAgeMs = WAT
     while (Date.now() < deadline) {
       sleep(25);
       const shared = freshTargetCache(readTargetCache(commonDir, targetRef), maxAgeMs);
-      if (shared) return { ok: shared.ok, target_sha: shared.target_sha, fetch_ok: shared.fetch_ok, cache_hit: true, fetch_count: shared.fetch_count };
+      if (shared)
+        return {
+          ok: shared.ok,
+          target_sha: shared.target_sha,
+          fetch_ok: shared.fetch_ok,
+          cache_hit: true,
+          fetch_count: shared.fetch_count,
+        };
     }
     return { ...refreshTargetRef(targetRef, cwd), cache_hit: false, cache_bypassed: true, fetch_count: null };
   }
 
   try {
     const afterLease = freshTargetCache(readTargetCache(commonDir, targetRef), maxAgeMs);
-    if (afterLease) return { ok: afterLease.ok, target_sha: afterLease.target_sha, fetch_ok: afterLease.fetch_ok, cache_hit: true, fetch_count: afterLease.fetch_count };
+    if (afterLease)
+      return {
+        ok: afterLease.ok,
+        target_sha: afterLease.target_sha,
+        fetch_ok: afterLease.fetch_ok,
+        cache_hit: true,
+        fetch_count: afterLease.fetch_count,
+      };
     const previous = readTargetCache(commonDir, targetRef);
     const refreshed = refreshTargetRef(targetRef, cwd);
     const state = {
@@ -343,7 +379,16 @@ export function deliverReclaimNotification(record, options = {}) {
   if (platform === 'darwin') {
     adapter = 'macos-osascript';
     command = 'osascript';
-    args = ['-e', 'on run argv', '-e', 'display notification (item 1 of argv) with title (item 2 of argv)', '-e', 'end run', message, 'Worktree 已回收'];
+    args = [
+      '-e',
+      'on run argv',
+      '-e',
+      'display notification (item 1 of argv) with title (item 2 of argv)',
+      '-e',
+      'end run',
+      message,
+      'Worktree 已回收',
+    ];
   } else if (platform === 'linux') {
     adapter = 'linux-notify-send';
     command = 'notify-send';
@@ -352,7 +397,12 @@ export function deliverReclaimNotification(record, options = {}) {
     return { attempted: false, delivered: false, adapter: 'unavailable', reason: `unsupported platform: ${platform}` };
   }
   const result = runner(command, args, { timeoutMs: 3_000, stdio: 'ignore' });
-  return { attempted: true, delivered: result.ok, adapter, reason: result.ok ? null : 'notification command unavailable/failed' };
+  return {
+    attempted: true,
+    delivered: result.ok,
+    adapter,
+    reason: result.ok ? null : 'notification command unavailable/failed',
+  };
 }
 
 export function log(message) {
@@ -387,7 +437,23 @@ export function readJsonFileOrDie(path, label) {
 export function parseArgs(argv) {
   const flags = new Map();
   const positionals = [];
-  const booleanFlags = new Set(['json', 'all', 'present', 'archived', 'verbose', 'quiet', 'recover-lock', 'no-watch', 'abort-on-conflict', 'no-rerere', 'recompose', 'scan-conflicts', 'abort', 'continue', 'pause-before-push']);
+  const booleanFlags = new Set([
+    'json',
+    'all',
+    'present',
+    'archived',
+    'verbose',
+    'quiet',
+    'recover-lock',
+    'no-watch',
+    'abort-on-conflict',
+    'no-rerere',
+    'recompose',
+    'scan-conflicts',
+    'abort',
+    'continue',
+    'pause-before-push',
+  ]);
   for (let index = 0; index < argv.length; index++) {
     const value = argv[index];
     if (!value.startsWith('--')) {
@@ -432,7 +498,11 @@ export function oneLine(value, label, max) {
 export function httpUrl(value, label) {
   const normalized = oneLine(value, label, 1000);
   let parsed;
-  try { parsed = new URL(normalized); } catch { die(`${label} 必须是合法 http(s) URL。`, 2); }
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    die(`${label} 必须是合法 http(s) URL。`, 2);
+  }
   if (!['http:', 'https:'].includes(parsed.protocol)) die(`${label} 只接受 http(s) URL。`, 2);
   return normalized;
 }
@@ -489,7 +559,9 @@ export function resolveIdentity(flags, options = {}) {
 }
 
 export function printIdentity(identity, task, profile) {
-  log(`Agent: ${identity.actor.host} / ${identity.actor.id}（host=${identity.sources.host}, id=${identity.sources.id}）`);
+  log(
+    `Agent: ${identity.actor.host} / ${identity.actor.id}（host=${identity.sources.host}, id=${identity.sources.id}）`,
+  );
   log(`Task: ${task}`);
   if (identity.purpose) log(`Purpose: ${identity.purpose}（${identity.sources.purpose}）`);
   if (identity.owner) log(`Owner: ${identity.owner}`);
@@ -597,11 +669,13 @@ export function isActiveRecord(record) {
  * @param {string} task
  */
 export function coexistingSessionRecords(records, actor, task) {
-  return records.filter((record) =>
-    !isSettledWorktreeState(record.worktree_state) &&
-    record.task !== task &&
-    record.agent?.host === actor.host &&
-    record.agent?.id === actor.id);
+  return records.filter(
+    (record) =>
+      !isSettledWorktreeState(record.worktree_state) &&
+      record.task !== task &&
+      record.agent?.host === actor.host &&
+      record.agent?.id === actor.id,
+  );
 }
 
 /**
@@ -635,9 +709,9 @@ export function resolveDeliveryRelation(flags, records, coexisting) {
   if (!parallelReasonRaw && !supersedesSelector) {
     die(
       `DELIVERY_WORKTREE_EXISTS: 同一 Agent 会话已有未回收 worktree，默认复用而不是换 task 名新建：\n` +
-      `  - ${summary}\n` +
-      '继续同一事项：直接进入原路径工作；确属独立并行：加 --parallel-reason <原因>；' +
-      '确属替代：先冻结旧树并标记 abandoned，再加 --supersedes <selector> --replacement-reason <原因>。',
+        `  - ${summary}\n` +
+        '继续同一事项：直接进入原路径工作；确属独立并行：加 --parallel-reason <原因>；' +
+        '确属替代：先冻结旧树并标记 abandoned，再加 --supersedes <selector> --replacement-reason <原因>。',
       2,
     );
   }
@@ -657,7 +731,10 @@ export function resolveDeliveryRelation(flags, records, coexisting) {
     die('--supersedes 必须指向同一 Agent 会话的一棵未回收 worktree。', 2);
   }
   if (superseded.task_status !== 'abandoned') {
-    die(`替代前必须先冻结旧树并 touch ${superseded.task} --status abandoned --note <迁移边界>；当前为 ${superseded.task_status}。`, 2);
+    die(
+      `替代前必须先冻结旧树并 touch ${superseded.task} --status abandoned --note <迁移边界>；当前为 ${superseded.task_status}。`,
+      2,
+    );
   }
   const snapshot = liveGitSnapshot(superseded);
   if (!snapshot.present) die(`被替代 worktree missing: ${superseded.path}；请先 doctor/reclaim。`, 2);
@@ -695,7 +772,10 @@ export function validateSupersessionPair(superseded, replacement) {
   }
   if (superseded.worktree_state === 'reclaimed') die('被替代树已经 reclaimed，无需再登记替代关系。', 2);
   if (TERMINAL_TASK_STATES.has(replacement.task_status) || replacement.worktree_state === 'reclaimed') {
-    die(`替代树必须仍是可交付状态；当前 ${replacement.task}=${replacement.task_status}/${replacement.worktree_state}。`, 2);
+    die(
+      `替代树必须仍是可交付状态；当前 ${replacement.task}=${replacement.task_status}/${replacement.worktree_state}。`,
+      2,
+    );
   }
   if (String(replacement.created_at ?? '') < String(superseded.created_at ?? '')) {
     die('替代树的 created_at 早于被替代树，拒绝反向登记。', 2);
@@ -736,17 +816,21 @@ export function selectRecord(records, selector, explicitId) {
 
   const matches = new Map();
   if (/^[0-9a-f]{8,}$/i.test(selector) || /^[0-9a-f-]{36}$/i.test(selector)) {
-    for (const record of records) if (record.worktree_id.toLowerCase().startsWith(selector.toLowerCase())) matches.set(record.worktree_id, record);
+    for (const record of records)
+      if (record.worktree_id.toLowerCase().startsWith(selector.toLowerCase())) matches.set(record.worktree_id, record);
   }
   const pathCandidate = canonicalSelectorPath(selector);
-  const semanticMatches = (pool) => pool.filter((record) =>
-    record.task === selector || record.branch === selector || canonicalSelectorPath(record.path) === pathCandidate,
-  );
+  const semanticMatches = (pool) =>
+    pool.filter(
+      (record) =>
+        record.task === selector || record.branch === selector || canonicalSelectorPath(record.path) === pathCandidate,
+    );
   const activeSemantic = semanticMatches(records.filter(isActiveRecord));
   const selectedSemantic = activeSemantic.length > 0 ? activeSemantic : semanticMatches(records);
   for (const record of selectedSemantic) matches.set(record.worktree_id, record);
   if (idMatches.length === 1) {
-    for (const record of matches.values()) if (record.worktree_id !== idMatches[0].worktree_id) die('selector 与 --id 指向不同 record，拒绝歧义。', 2);
+    for (const record of matches.values())
+      if (record.worktree_id !== idMatches[0].worktree_id) die('selector 与 --id 指向不同 record，拒绝歧义。', 2);
     return idMatches[0];
   }
   if (matches.size !== 1) die(`selector 匹配 ${matches.size} 条 record；请传 --id。`, 2);
@@ -826,17 +910,16 @@ export function ensureWorktreeCodegraph(worktreePath, primaryWorktree, mode) {
     return;
   }
   const initializedDir = resolve(worktreePath, '.codegraph');
-  const commandArgs = existsSync(initializedDir)
-    ? ['index', worktreePath]
-    : ['init', '-i', worktreePath];
+  const commandArgs = existsSync(initializedDir) ? ['index', worktreePath] : ['init', '-i', worktreePath];
   log(`CodeGraph: 为隔离树建立独立索引（mode=${mode}）...`);
   const indexed = runFileTry('codegraph', commandArgs, {
     cwd: worktreePath,
     timeoutMs: CODEGRAPH_TIMEOUT_MS,
     stdio: codegraphStdio(),
-    env: process.stdout.isTTY && process.stderr.isTTY
-      ? process.env
-      : { ...process.env, CI: process.env.CI ?? '1', NO_COLOR: process.env.NO_COLOR ?? '1', TERM: 'dumb' },
+    env:
+      process.stdout.isTTY && process.stderr.isTTY
+        ? process.env
+        : { ...process.env, CI: process.env.CI ?? '1', NO_COLOR: process.env.NO_COLOR ?? '1', TERM: 'dumb' },
   });
   if (!indexed.ok) {
     if (mode === 'on') die('CodeGraph 独立索引初始化失败（--codegraph on 为强制模式）。');
@@ -846,20 +929,19 @@ export function ensureWorktreeCodegraph(worktreePath, primaryWorktree, mode) {
   log(`CodeGraph: 独立索引就绪 ${database}`);
 }
 
-
 export function assertHistoryOperationIdle(record, command) {
   if (record.history_operation) {
     die(
       `${command} 被未完成的 ${record.history_operation.kind ?? 'history'} 操作阻塞` +
-      `（token=${record.history_operation.token ?? 'unknown'}, state=${record.history_operation.state ?? 'unknown'}）。` +
-      '先重跑 rebase 完成恢复，或使用 rebase --abort。',
+        `（token=${record.history_operation.token ?? 'unknown'}, state=${record.history_operation.state ?? 'unknown'}）。` +
+        '先重跑 rebase 完成恢复，或使用 rebase --abort。',
       2,
     );
   }
   if (record.review_refresh) {
     die(
       `${command} 被未完成的 review refresh 阻塞（state=${record.review_refresh.state ?? 'unknown'}）。` +
-      `运行 refresh-review ${record.task} --continue 恢复，或用 --abort 放弃冲突/暂停在 push 前的刷新。`,
+        `运行 refresh-review ${record.task} --continue 恢复，或用 --abort 放弃冲突/暂停在 push 前的刷新。`,
       2,
     );
   }
@@ -870,7 +952,8 @@ export function canonicalJson(value) {
   if (Array.isArray(value)) return value.map(canonicalJson);
   if (value && typeof value === 'object') {
     return Object.fromEntries(
-      Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+      Object.entries(value)
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
         .map(([key, child]) => [key, canonicalJson(child)]),
     );
   }
@@ -932,10 +1015,7 @@ export function isAncestor(cwd, ancestor, descendant) {
 export function primaryProfileDriftFinding(loaded) {
   const defaultBase = loaded.profile.default_base;
   if (loaded.profile_source !== 'primary' || !defaultBase || !existsSync(loaded.profile_path)) return null;
-  const baseline = gitTry(
-    ['show', `${defaultBase}:${PROFILE_FILENAME}`],
-    loaded.context.current_worktree,
-  );
+  const baseline = gitTry(['show', `${defaultBase}:${PROFILE_FILENAME}`], loaded.context.current_worktree);
   if (!baseline.ok) return null;
   const current = readFileSync(loaded.profile_path, 'utf8');
   if (normalizedProfileContent(current) === normalizedProfileContent(baseline.out)) return null;

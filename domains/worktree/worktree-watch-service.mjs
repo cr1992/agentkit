@@ -6,15 +6,15 @@ const MAX_INTERVAL_SECONDS = 60 * 60;
 
 /** @param {string} value */
 function xmlEscape(value) {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;');
+  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 }
 
 /** @param {string} repositoryId */
 export function launchAgentLabel(repositoryId) {
-  const suffix = String(repositoryId).toLowerCase().replaceAll(/[^a-z0-9]/gu, '').slice(0, 32);
+  const suffix = String(repositoryId)
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]/gu, '')
+    .slice(0, 32);
   if (!suffix) throw new Error('repository id 不能生成 launchd label。');
   return `io.github.cr1992.agentkit.worktree.${suffix}`;
 }
@@ -97,9 +97,7 @@ export function createCommands(deps) {
 
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {boolean} createIdentity */
   function descriptor(loaded, createIdentity) {
-    const identity = createIdentity
-      ? ensureRepositoryIdentity(loaded.context)
-      : readRepositoryIdentity(loaded.context);
+    const identity = createIdentity ? ensureRepositoryIdentity(loaded.context) : readRepositoryIdentity(loaded.context);
     if (!identity) return null;
     const label = launchAgentLabel(identity.repository_id);
     const plistPath = join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
@@ -119,13 +117,27 @@ export function createCommands(deps) {
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded */
   function watchServiceStatus(loaded) {
     if (processPlatform !== 'darwin') {
-      return { supported: false, installed: false, loaded: false, platform: processPlatform, reason: 'macOS LaunchAgent adapter only' };
+      return {
+        supported: false,
+        installed: false,
+        loaded: false,
+        platform: processPlatform,
+        reason: 'macOS LaunchAgent adapter only',
+      };
     }
     const value = descriptor(loaded, false);
     if (!value) {
-      return { supported: true, installed: false, loaded: false, platform: processPlatform, reason: 'repository identity missing' };
+      return {
+        supported: true,
+        installed: false,
+        loaded: false,
+        platform: processPlatform,
+        reason: 'repository identity missing',
+      };
     }
-    const probe = runFileCapture('/bin/launchctl', ['print', value.service_target], { cwd: loaded.context.primary_worktree });
+    const probe = runFileCapture('/bin/launchctl', ['print', value.service_target], {
+      cwd: loaded.context.primary_worktree,
+    });
     return {
       supported: true,
       installed: existsSync(value.plist_path),
@@ -137,13 +149,14 @@ export function createCommands(deps) {
       node_path: processExecPath,
       manager_script: managerScript,
       program_available: existsSync(processExecPath) && existsSync(managerScript),
-      reason: probe.ok ? null : (probe.out || 'launchd job not loaded'),
+      reason: probe.ok ? null : probe.out || 'launchd job not loaded',
     };
   }
 
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {number} intervalSeconds */
   function install(loaded, intervalSeconds) {
-    if (processPlatform !== 'darwin') die(`watch-service install 当前只支持 macOS；${processPlatform} 可继续手工运行 resume-all。`, 2);
+    if (processPlatform !== 'darwin')
+      die(`watch-service install 当前只支持 macOS；${processPlatform} 可继续手工运行 resume-all。`, 2);
     const value = descriptor(loaded, true);
     const plist = renderLaunchAgentPlist({
       label: value.label,
@@ -160,23 +173,34 @@ export function createCommands(deps) {
     const temporary = `${value.plist_path}.${processGetuid()}.${randomUUID()}.tmp`;
     writeFileSync(temporary, plist, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
 
-    const wasLoaded = runFileCapture('/bin/launchctl', ['print', value.service_target], { cwd: value.working_directory }).ok;
+    const wasLoaded = runFileCapture('/bin/launchctl', ['print', value.service_target], {
+      cwd: value.working_directory,
+    }).ok;
     if (wasLoaded) {
-      const stopped = runFileCapture('/bin/launchctl', ['bootout', value.service_target], { cwd: value.working_directory });
+      const stopped = runFileCapture('/bin/launchctl', ['bootout', value.service_target], {
+        cwd: value.working_directory,
+      });
       if (!stopped.ok) {
         rmSync(temporary, { force: true });
         die(`无法重载现有 LaunchAgent：${stopped.out || 'launchctl bootout failed'}`);
       }
     }
     renameSync(temporary, value.plist_path);
-    const started = runFileCapture('/bin/launchctl', ['bootstrap', value.domain, value.plist_path], { cwd: value.working_directory });
+    const started = runFileCapture('/bin/launchctl', ['bootstrap', value.domain, value.plist_path], {
+      cwd: value.working_directory,
+    });
     if (!started.ok) {
       if (previous === null) rmSync(value.plist_path, { force: true });
       else writeFileSync(value.plist_path, previous, { encoding: 'utf8', mode: 0o600 });
-      if (wasLoaded && previous !== null) runFileCapture('/bin/launchctl', ['bootstrap', value.domain, value.plist_path], { cwd: value.working_directory });
+      if (wasLoaded && previous !== null)
+        runFileCapture('/bin/launchctl', ['bootstrap', value.domain, value.plist_path], {
+          cwd: value.working_directory,
+        });
       die(`LaunchAgent 安装失败：${started.out || 'launchctl bootstrap failed'}`);
     }
-    const kicked = runFileCapture('/bin/launchctl', ['kickstart', '-k', value.service_target], { cwd: value.working_directory });
+    const kicked = runFileCapture('/bin/launchctl', ['kickstart', '-k', value.service_target], {
+      cwd: value.working_directory,
+    });
     if (!kicked.ok) die(`LaunchAgent 已加载但首次执行失败：${kicked.out || 'launchctl kickstart failed'}`);
     return { ...watchServiceStatus(loaded), interval_seconds: intervalSeconds };
   }
@@ -186,14 +210,25 @@ export function createCommands(deps) {
     if (processPlatform !== 'darwin') die(`watch-service uninstall 当前只支持 macOS；当前平台 ${processPlatform}。`, 2);
     const value = descriptor(loaded, false);
     if (!value) return { supported: true, installed: false, loaded: false, removed: false };
-    const loadedBefore = runFileCapture('/bin/launchctl', ['print', value.service_target], { cwd: value.working_directory }).ok;
+    const loadedBefore = runFileCapture('/bin/launchctl', ['print', value.service_target], {
+      cwd: value.working_directory,
+    }).ok;
     if (loadedBefore) {
-      const stopped = runFileCapture('/bin/launchctl', ['bootout', value.service_target], { cwd: value.working_directory });
+      const stopped = runFileCapture('/bin/launchctl', ['bootout', value.service_target], {
+        cwd: value.working_directory,
+      });
       if (!stopped.ok) die(`LaunchAgent 停止失败：${stopped.out || 'launchctl bootout failed'}`);
     }
     const installedBefore = existsSync(value.plist_path);
     rmSync(value.plist_path, { force: true });
-    return { supported: true, installed: false, loaded: false, removed: installedBefore || loadedBefore, label: value.label, plist_path: value.plist_path };
+    return {
+      supported: true,
+      installed: false,
+      loaded: false,
+      removed: installedBefore || loadedBefore,
+      label: value.label,
+      plist_path: value.plist_path,
+    };
   }
 
   function cmdWatchService(args) {
@@ -206,8 +241,11 @@ export function createCommands(deps) {
     let result;
     if (action === 'install') {
       let intervalSeconds;
-      try { intervalSeconds = parseServiceInterval(flag(args.flags, 'interval-seconds')); }
-      catch (error) { die(error instanceof Error ? error.message : String(error), 2); }
+      try {
+        intervalSeconds = parseServiceInterval(flag(args.flags, 'interval-seconds'));
+      } catch (error) {
+        die(error instanceof Error ? error.message : String(error), 2);
+      }
       result = install(loaded, intervalSeconds);
     } else if (action === 'uninstall') {
       result = uninstall(loaded);
@@ -215,9 +253,13 @@ export function createCommands(deps) {
       result = watchServiceStatus(loaded);
     }
     if (args.flags.get('json')) console.log(JSON.stringify(result, null, 2));
-    else if (action === 'install') log(`跨会话 watch-service 已安装 label=${result.label} interval=${result.interval_seconds}s`);
+    else if (action === 'install')
+      log(`跨会话 watch-service 已安装 label=${result.label} interval=${result.interval_seconds}s`);
     else if (action === 'uninstall') log(`跨会话 watch-service ${result.removed ? '已卸载' : '原本未安装'}`);
-    else log(`watch-service supported=${result.supported} installed=${result.installed} loaded=${result.loaded}${result.reason ? ` reason=${result.reason}` : ''}`);
+    else
+      log(
+        `watch-service supported=${result.supported} installed=${result.installed} loaded=${result.loaded}${result.reason ? ` reason=${result.reason}` : ''}`,
+      );
   }
 
   return { cmdWatchService, watchServiceStatus };

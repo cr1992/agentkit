@@ -27,7 +27,9 @@ export function createCommands(deps) {
   /** @param {string} targetSha @param {string[]} orderedInputShas */
   function batchFingerprint(targetSha, orderedInputShas) {
     const input = { schema_version: 1, target_sha: targetSha, ordered_input_shas: orderedInputShas };
-    return `sha256:${createHash('sha256').update(JSON.stringify(canonicalJson(input))).digest('hex')}`;
+    return `sha256:${createHash('sha256')
+      .update(JSON.stringify(canonicalJson(input)))
+      .digest('hex')}`;
   }
 
   /** @param {Record<string,any>} item @param {string} code @param {string} detail */
@@ -48,11 +50,7 @@ export function createCommands(deps) {
    */
   function computeBatchPlan(loaded, selectors, targetOverride) {
     const records = loadRecords(loaded.context.common_dir);
-    const target = resolveBaseRef(
-      loaded.context.current_worktree,
-      loaded.profile.default_base,
-      targetOverride,
-    );
+    const target = resolveBaseRef(loaded.context.current_worktree, loaded.profile.default_base, targetOverride);
     const targetCommit = gitTry(['rev-parse', '--verify', `${target.ref}^{commit}`], loaded.context.current_worktree);
     if (!targetCommit.ok || !targetCommit.out) die(`无法解析批次 target commit: ${target.ref}`, 2);
 
@@ -122,17 +120,20 @@ export function createCommands(deps) {
     const candidates = requested.filter((item) => item.state === 'candidate');
     for (let index = 0; index < candidates.length; index++) {
       const item = candidates[index];
-      const duplicate = candidates.slice(0, index).find((other) => other.state === 'candidate' && other.head === item.head);
+      const duplicate = candidates
+        .slice(0, index)
+        .find((other) => other.state === 'candidate' && other.head === item.head);
       if (duplicate) {
         item.state = 'covered';
         item.reasons.push({ code: 'DUPLICATE_HEAD', detail: `与 ${duplicate.task} 指向同一 HEAD。` });
         continue;
       }
-      const covering = candidates.find((other) =>
-        other !== item &&
-        other.state === 'candidate' &&
-        other.head !== item.head &&
-        isAncestor(loaded.context.current_worktree, item.head, other.head),
+      const covering = candidates.find(
+        (other) =>
+          other !== item &&
+          other.state === 'candidate' &&
+          other.head !== item.head &&
+          isAncestor(loaded.context.current_worktree, item.head, other.head),
       );
       if (covering) {
         item.state = 'covered';
@@ -144,7 +145,13 @@ export function createCommands(deps) {
     const blockers = requested
       .filter((item) => item.state === 'blocked')
       .flatMap((item) => item.reasons.map((reason) => ({ task: item.task, worktree_id: item.worktree_id, ...reason })));
-    if (included.length === 0) blockers.push({ task: null, worktree_id: null, code: 'NO_UNIQUE_INPUT', detail: '没有需要合成的唯一 feature HEAD。' });
+    if (included.length === 0)
+      blockers.push({
+        task: null,
+        worktree_id: null,
+        code: 'NO_UNIQUE_INPUT',
+        detail: '没有需要合成的唯一 feature HEAD。',
+      });
     const repositoryId = readRepositoryIdentity(loaded.context)?.repository_id ?? null;
     const ready = blockers.length === 0;
     return {
@@ -156,13 +163,17 @@ export function createCommands(deps) {
       requested_selectors: [...selectors],
       target: { ref: target.ref, sha: targetCommit.out, source: target.source },
       ready,
-      fingerprint: ready ? batchFingerprint(targetCommit.out, included.map((item) => item.head)) : null,
+      fingerprint: ready
+        ? batchFingerprint(
+            targetCommit.out,
+            included.map((item) => item.head),
+          )
+        : null,
       included,
       excluded: requested.filter((item) => item.state !== 'candidate' && item.state !== 'blocked'),
       blockers,
     };
   }
-
 
   /** @param {{positionals:string[],flags:Map<string,unknown>}} args */
   function cmdPlanBatch(args) {
@@ -180,10 +191,17 @@ export function createCommands(deps) {
     }
     if (args.flags.get('json')) console.log(JSON.stringify(result, null, 2));
     else {
-      log(`batch target=${result.target.ref}@${result.target.sha.slice(0, 12)} ready=${result.ready} inputs=${included.length}`);
-      for (const item of included) console.log(`  [INCLUDE] ${item.task} ${item.head.slice(0, 12)} upstream=${item.upstream_ref}`);
-      for (const item of result.excluded) console.log(`  [${item.state.toUpperCase()}] ${item.task} ${item.reasons.map((reason) => reason.code).join(',')}`);
-      for (const blocker of blockers) console.log(`  [BLOCK] ${blocker.task ?? '-'} ${blocker.code}: ${blocker.detail}`);
+      log(
+        `batch target=${result.target.ref}@${result.target.sha.slice(0, 12)} ready=${result.ready} inputs=${included.length}`,
+      );
+      for (const item of included)
+        console.log(`  [INCLUDE] ${item.task} ${item.head.slice(0, 12)} upstream=${item.upstream_ref}`);
+      for (const item of result.excluded)
+        console.log(
+          `  [${item.state.toUpperCase()}] ${item.task} ${item.reasons.map((reason) => reason.code).join(',')}`,
+        );
+      for (const blocker of blockers)
+        console.log(`  [BLOCK] ${blocker.task ?? '-'} ${blocker.code}: ${blocker.detail}`);
       if (result.fingerprint) console.log(`  fingerprint=${result.fingerprint}`);
       if (result.conflict_scan) printConflictScan(result.conflict_scan);
     }

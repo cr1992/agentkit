@@ -33,8 +33,12 @@ import { atomicWriteJson, atomicWriteText, writeNewJson } from '../../core/atomi
 import { createDigestKit } from '../../core/digest.mjs';
 import { distributionDigest, skillDistributionRoots } from '../../core/content-digest.mjs';
 import {
-  SCAFFOLD_ARGV, SCAFFOLD_CHECK_ID,
-  contractSubstance, coverageSubstance, profileSubstance, substanceWarnings,
+  SCAFFOLD_ARGV,
+  SCAFFOLD_CHECK_ID,
+  contractSubstance,
+  coverageSubstance,
+  profileSubstance,
+  substanceWarnings,
 } from '../../core/contract-substance.mjs';
 import { buildScaffoldContract } from '../../core/contract-scaffold.mjs';
 
@@ -53,7 +57,14 @@ const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 
 const PACKAGE_ROOT = resolve(SKILL_ROOT, '..');
 const DOMAIN_ROOT = dirname(fileURLToPath(import.meta.url));
 export function skillContentDigest(root = SKILL_ROOT) {
-  return distributionDigest(skillDistributionRoots({ packageRoot: PACKAGE_ROOT, skillRoot: root, domainRoot: DOMAIN_ROOT, docsRoot: join(PACKAGE_ROOT, 'docs', 'verify') }));
+  return distributionDigest(
+    skillDistributionRoots({
+      packageRoot: PACKAGE_ROOT,
+      skillRoot: root,
+      domainRoot: DOMAIN_ROOT,
+      docsRoot: join(PACKAGE_ROOT, 'docs', 'verify'),
+    }),
+  );
 }
 
 const schema = (name) => parseJsonStrict(readFileSync(join(SKILL_ROOT, '..', 'schemas', name), 'utf8'));
@@ -63,7 +74,9 @@ export class ValidationError extends Error {}
 // strict=true 保留本 Skill 既有的代理对与非有限 number 校验；错误类仍是本地的 ValidationError。
 const digestKit = createDigestKit({ ValidationError, strict: true });
 // 严格度保持本 Skill 现状（宽松版），不随 core 合并而收紧。
-const { buildProposal, buildReflection, readAndValidateReflection, verifyEvidenceRefs } = createReflectionKit({ strict: false });
+const { buildProposal, buildReflection, readAndValidateReflection, verifyEvidenceRefs } = createReflectionKit({
+  strict: false,
+});
 export const { canonicalJson, envelopeDigest } = digestKit;
 const { sha256, assertValidUnicode } = digestKit;
 export class OperationalAbort extends Error {
@@ -100,7 +113,11 @@ class StrictJsonParser {
     if (char === '[') return this.array();
     if (char === '"') return this.string();
     if (char === '-' || /[0-9]/u.test(char ?? '')) return this.number();
-    for (const [token, value] of [['true', true], ['false', false], ['null', null]]) {
+    for (const [token, value] of [
+      ['true', true],
+      ['false', false],
+      ['null', null],
+    ]) {
       if (this.text.startsWith(token, this.index)) {
         this.index += token.length;
         return value;
@@ -206,21 +223,39 @@ function readJson(path) {
 /** @param {string} path @param {unknown} value */
 function processIsAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return Boolean(error && typeof error === 'object' && error.code === 'EPERM'); }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return Boolean(error && typeof error === 'object' && error.code === 'EPERM');
+  }
 }
 
 function recoverOrphanReclaim(path) {
   const reclaimPath = `${path}.reclaim`;
   if (!existsSync(reclaimPath)) return;
   let owner;
-  try { owner = parseJsonStrict(readFileSync(reclaimPath, 'utf8')); } catch { throw new ValidationError('run lock reclaim 内容损坏；拒绝自动接管'); }
-  if (!Number.isInteger(Number(owner.pid)) || Number(owner.pid) <= 0 || typeof owner.token !== 'string' || !owner.token) throw new ValidationError('run lock reclaim owner 无效；拒绝自动接管');
+  try {
+    owner = parseJsonStrict(readFileSync(reclaimPath, 'utf8'));
+  } catch {
+    throw new ValidationError('run lock reclaim 内容损坏；拒绝自动接管');
+  }
+  if (!Number.isInteger(Number(owner.pid)) || Number(owner.pid) <= 0 || typeof owner.token !== 'string' || !owner.token)
+    throw new ValidationError('run lock reclaim owner 无效；拒绝自动接管');
   if (processIsAlive(Number(owner.pid))) throw new ValidationError('run lock 正在执行 stale recovery');
   let latest;
-  try { latest = parseJsonStrict(readFileSync(reclaimPath, 'utf8')); } catch (error) { if (error && typeof error === 'object' && error.code === 'ENOENT') return; throw new ValidationError('run lock reclaim 内容损坏；拒绝自动接管'); }
+  try {
+    latest = parseJsonStrict(readFileSync(reclaimPath, 'utf8'));
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ENOENT') return;
+    throw new ValidationError('run lock reclaim 内容损坏；拒绝自动接管');
+  }
   if (Number(latest.pid) !== Number(owner.pid) || latest.token !== owner.token) return;
-  try { unlinkSync(reclaimPath); } catch (error) { if (!error || typeof error !== 'object' || error.code !== 'ENOENT') throw error; }
+  try {
+    unlinkSync(reclaimPath);
+  } catch (error) {
+    if (!error || typeof error !== 'object' || error.code !== 'ENOENT') throw error;
+  }
 }
 
 export function acquireLock(path) {
@@ -229,33 +264,66 @@ export function acquireLock(path) {
     const owner = { pid: process.pid, token: randomUUID(), acquired_at: new Date().toISOString() };
     const candidate = `${path}.${owner.pid}.${owner.token}.candidate`;
     const fd = openSync(candidate, 'wx', 0o600);
-    try { writeFileSync(fd, `${JSON.stringify(owner)}\n`); fsyncSync(fd); } finally { closeSync(fd); }
+    try {
+      writeFileSync(fd, `${JSON.stringify(owner)}\n`);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
     try {
       if (existsSync(`${path}.reclaim`)) throw new ValidationError('run lock 正在执行 stale recovery');
-      linkSync(candidate, path); unlinkSync(candidate); return owner;
-    }
-    catch (error) {
-      try { unlinkSync(candidate); } catch {}
+      linkSync(candidate, path);
+      unlinkSync(candidate);
+      return owner;
+    } catch (error) {
+      try {
+        unlinkSync(candidate);
+      } catch {}
       if (error instanceof ValidationError) throw error;
       if (!error || typeof error !== 'object' || error.code !== 'EEXIST') throw error;
       let current;
-      try { current = parseJsonStrict(readFileSync(path, 'utf8')); } catch { throw new ValidationError('run lock 内容损坏；拒绝自动接管'); }
-      if (!Number.isInteger(Number(current.pid)) || Number(current.pid) <= 0) throw new ValidationError('run lock owner 无效；拒绝自动接管');
+      try {
+        current = parseJsonStrict(readFileSync(path, 'utf8'));
+      } catch {
+        throw new ValidationError('run lock 内容损坏；拒绝自动接管');
+      }
+      if (!Number.isInteger(Number(current.pid)) || Number(current.pid) <= 0)
+        throw new ValidationError('run lock owner 无效；拒绝自动接管');
       if (processIsAlive(Number(current.pid))) throw new ValidationError(`run lock 正被 PID ${current.pid} 持有`);
       const reclaimPath = `${path}.reclaim`;
       const reclaimOwner = { pid: process.pid, token: randomUUID(), acquired_at: new Date().toISOString() };
       const reclaimCandidate = `${reclaimPath}.${reclaimOwner.pid}.${reclaimOwner.token}.candidate`;
       const reclaimFd = openSync(reclaimCandidate, 'wx', 0o600);
-      try { writeFileSync(reclaimFd, `${JSON.stringify(reclaimOwner)}\n`); fsyncSync(reclaimFd); } finally { closeSync(reclaimFd); }
-      try { linkSync(reclaimCandidate, reclaimPath); } catch (reclaimError) { if (!reclaimError || typeof reclaimError !== 'object' || reclaimError.code !== 'EEXIST') throw reclaimError; throw new ValidationError('run lock 正在执行 stale recovery'); }
-      finally { try { unlinkSync(reclaimCandidate); } catch {} }
+      try {
+        writeFileSync(reclaimFd, `${JSON.stringify(reclaimOwner)}\n`);
+        fsyncSync(reclaimFd);
+      } finally {
+        closeSync(reclaimFd);
+      }
+      try {
+        linkSync(reclaimCandidate, reclaimPath);
+      } catch (reclaimError) {
+        if (!reclaimError || typeof reclaimError !== 'object' || reclaimError.code !== 'EEXIST') throw reclaimError;
+        throw new ValidationError('run lock 正在执行 stale recovery');
+      } finally {
+        try {
+          unlinkSync(reclaimCandidate);
+        } catch {}
+      }
       try {
         let latest;
-        try { latest = parseJsonStrict(readFileSync(path, 'utf8')); } catch (latestError) { if (latestError && typeof latestError === 'object' && latestError.code === 'ENOENT') continue; throw new ValidationError('run lock 内容损坏；拒绝自动接管'); }
+        try {
+          latest = parseJsonStrict(readFileSync(path, 'utf8'));
+        } catch (latestError) {
+          if (latestError && typeof latestError === 'object' && latestError.code === 'ENOENT') continue;
+          throw new ValidationError('run lock 内容损坏；拒绝自动接管');
+        }
         if (Number(latest.pid) !== Number(current.pid) || latest.token !== current.token) continue;
         if (processIsAlive(Number(latest.pid))) throw new ValidationError(`run lock 正被 PID ${latest.pid} 持有`);
         unlinkSync(path);
-      } finally { releaseLock(reclaimPath, reclaimOwner); }
+      } finally {
+        releaseLock(reclaimPath, reclaimOwner);
+      }
     }
   }
   throw new ValidationError('无法获取 run lock');
@@ -263,7 +331,12 @@ export function acquireLock(path) {
 
 export function releaseLock(path, owner) {
   let current;
-  try { current = parseJsonStrict(readFileSync(path, 'utf8')); } catch (error) { if (error && typeof error === 'object' && error.code === 'ENOENT') return false; throw new ValidationError('run lock 在持有期间损坏；拒绝删除未知 owner 的 lock'); }
+  try {
+    current = parseJsonStrict(readFileSync(path, 'utf8'));
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ENOENT') return false;
+    throw new ValidationError('run lock 在持有期间损坏；拒绝删除未知 owner 的 lock');
+  }
   if (current.pid !== owner.pid || current.token !== owner.token) return false;
   unlinkSync(path);
   return true;
@@ -284,41 +357,63 @@ function gitStatus(args, cwd) {
 /** @param {Record<string, any>} artifact @param {string} workdir @param {string|null} frozenIdentity */
 export function verifyGitArtifact(artifact, workdir, frozenIdentity = null) {
   const root = realpathSync(String(git(['rev-parse', '--show-toplevel'], workdir)).trim());
-  if (root !== realpathSync(workdir)) throw new OperationalAbort('stale_precondition', 'workdir 必须是 Git worktree 根目录');
+  if (root !== realpathSync(workdir))
+    throw new OperationalAbort('stale_precondition', 'workdir 必须是 Git worktree 根目录');
   const objectFormat = String(git(['rev-parse', '--show-object-format'], root)).trim();
-  if (artifact.object_format !== objectFormat) throw new OperationalAbort('stale_precondition', 'Artifact object_format 与仓库不一致');
+  if (artifact.object_format !== objectFormat)
+    throw new OperationalAbort('stale_precondition', 'Artifact object_format 与仓库不一致');
   const shaLength = objectFormat === 'sha256' ? 64 : objectFormat === 'sha1' ? 40 : 0;
   if (!shaLength) throw new OperationalAbort('stale_precondition', `不支持 Git object format: ${objectFormat}`);
   for (const field of ['base_sha', 'artifact_sha']) {
     const value = String(artifact[field] ?? '');
-    if (!new RegExp(`^[0-9a-f]{${shaLength}}$`, 'u').test(value)) throw new ValidationError(`${field} 不是完整 ${objectFormat} object id`);
-    if (String(git(['cat-file', '-t', value], root)).trim() !== 'commit') throw new ValidationError(`${field} 不是 commit object`);
+    if (!new RegExp(`^[0-9a-f]{${shaLength}}$`, 'u').test(value))
+      throw new ValidationError(`${field} 不是完整 ${objectFormat} object id`);
+    if (String(git(['cat-file', '-t', value], root)).trim() !== 'commit')
+      throw new ValidationError(`${field} 不是 commit object`);
   }
   if (gitStatus(['merge-base', '--is-ancestor', artifact.base_sha, artifact.artifact_sha], root).status !== 0) {
     throw new ValidationError('base_sha 不是 artifact_sha 的 ancestor');
   }
   const head = String(git(['rev-parse', 'HEAD'], root)).trim();
   if (head !== artifact.artifact_sha) throw new OperationalAbort('stale_precondition', 'HEAD 已偏离冻结 artifact_sha');
-  const dirty = /** @type {Buffer} */ (git(['status', '--porcelain=v1', '-z', '--untracked-files=all'], root, 'buffer'));
+  const dirty = /** @type {Buffer} */ (
+    git(['status', '--porcelain=v1', '-z', '--untracked-files=all'], root, 'buffer')
+  );
   if (dirty.length > 0) throw new OperationalAbort('stale_precondition', '验证 workdir 不是 clean 状态');
   // shallow clone 会把 graft 点当成 root commit，算出的 identity 与完整 clone 不同；明确拒绝，
   // 不让调用方去猜一条「repository identity 已变化」是什么意思。
   if (String(git(['rev-parse', '--is-shallow-repository'], root)).trim() === 'true') {
-    throw new OperationalAbort('stale_precondition', '验证 workdir 是 shallow clone，repository identity 需要完整历史；先 git fetch --unshallow');
+    throw new OperationalAbort(
+      'stale_precondition',
+      '验证 workdir 是 shallow clone，repository identity 需要完整历史；先 git fetch --unshallow',
+    );
   }
-  const roots = String(git(['rev-list', '--max-parents=0', artifact.artifact_sha], root)).trim().split('\n').filter(Boolean).sort();
+  const roots = String(git(['rev-list', '--max-parents=0', artifact.artifact_sha], root))
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .sort();
   const runtimeIdentity = `git:${objectFormat}:${sha256(Buffer.from(canonicalJson(roots), 'utf8'))}`;
-  if (frozenIdentity && runtimeIdentity !== frozenIdentity) throw new OperationalAbort('stale_precondition', 'repository identity 已变化');
+  if (frozenIdentity && runtimeIdentity !== frozenIdentity)
+    throw new OperationalAbort('stale_precondition', 'repository identity 已变化');
   return { workdir: root, runtime_repository_identity: runtimeIdentity };
 }
 
 /** @param {string} path */
 function validateProfilePath(path) {
-  if (!path || isAbsolute(path) || path.includes('\\') || path.includes('..') || path.includes(':(') || /[*?[\]]/u.test(path)) {
+  if (
+    !path ||
+    isAbsolute(path) ||
+    path.includes('\\') ||
+    path.includes('..') ||
+    path.includes(':(') ||
+    /[*?[\]]/u.test(path)
+  ) {
     throw new ValidationError(`非法 verifier path: ${path}`);
   }
   const core = path.endsWith('/') ? path.slice(0, -1) : path;
-  if (!core || core.split('/').some((part) => !part || part === '.' || part === '..')) throw new ValidationError(`非法 verifier path: ${path}`);
+  if (!core || core.split('/').some((part) => !part || part === '.' || part === '..'))
+    throw new ValidationError(`非法 verifier path: ${path}`);
 }
 
 /** @param {string} path @param {string} rule */
@@ -331,43 +426,82 @@ function verifyProtectedPaths(artifact, profile, workdir) {
   const protectedPaths = profile.protected_verifier_paths;
   const allowed = profile.allowed_validation_changes;
   for (const path of [...protectedPaths, ...allowed]) validateProfilePath(path);
-  const bytes = /** @type {Buffer} */ (git(['diff', '--name-status', '-z', '--no-renames', artifact.base_sha, artifact.artifact_sha], workdir, 'buffer'));
+  const bytes = /** @type {Buffer} */ (
+    git(['diff', '--name-status', '-z', '--no-renames', artifact.base_sha, artifact.artifact_sha], workdir, 'buffer')
+  );
   const tokens = bytes.toString('utf8').split('\0').filter(Boolean);
   const paths = [];
   for (let index = 0; index < tokens.length; index += 2) {
     if (tokens[index + 1]) paths.push(tokens[index + 1]);
   }
-  const violations = paths.filter((path) => protectedPaths.some((rule) => pathMatches(path, rule)) && !allowed.some((rule) => pathMatches(path, rule)));
-  if (violations.length > 0) throw new OperationalAbort('protected_path_violation', `未授权修改 verifier path: ${violations.join(', ')}`);
+  const violations = paths.filter(
+    (path) =>
+      protectedPaths.some((rule) => pathMatches(path, rule)) && !allowed.some((rule) => pathMatches(path, rule)),
+  );
+  if (violations.length > 0)
+    throw new OperationalAbort('protected_path_violation', `未授权修改 verifier path: ${violations.join(', ')}`);
   return { changed_paths: paths, protected_path_violations: [] };
 }
 
 /** @param {string} label @param {string[]} issues */
 function throwIssues(label, issues) {
-  if (issues.length > 0) throw new ValidationError(`${label} 校验失败（${issues.length} 项）:\n- ${issues.join('\n- ')}`);
+  if (issues.length > 0)
+    throw new ValidationError(`${label} 校验失败（${issues.length} 项）:\n- ${issues.join('\n- ')}`);
 }
 
 /** @param {Record<string, any>} object @param {string} field @param {string} label */
 function digestIssues(object, field, label) {
   if (!DIGEST_PATTERN.test(object?.[field] ?? '')) return [`${label}.${field} 格式不匹配`];
-  try { return envelopeDigest(object, field) === object[field] ? [] : [`${label}.${field} 与内容不匹配`]; }
-  catch (error) { return [`${label}.${field} 无法计算: ${error instanceof Error ? error.message : String(error)}`]; }
+  try {
+    return envelopeDigest(object, field) === object[field] ? [] : [`${label}.${field} 与内容不匹配`];
+  } catch (error) {
+    return [`${label}.${field} 无法计算: ${error instanceof Error ? error.message : String(error)}`];
+  }
 }
 
 /** @param {Record<string, any>} contract */
 function collectContractIssues(contract) {
   const issues = collectJsonSchemaErrors(contract, schema('task-contract-v1.schema.json'), 'Task Contract');
   if (!contract || typeof contract !== 'object' || Array.isArray(contract)) return issues;
-  if (!contract.scope || !Array.isArray(contract.scope.include) || !Array.isArray(contract.scope.exclude) || [...(contract.scope?.include ?? []), ...(contract.scope?.exclude ?? [])].some((item) => typeof item !== 'string' || !item)) issues.push('Task Contract.scope 必须包含非空字符串数组 include/exclude');
-  if (!contract.permissions || !['read_only', 'write'].includes(contract.permissions.mode) || !Array.isArray(contract.permissions.writable_paths) || contract.permissions.writable_paths.some((item) => typeof item !== 'string' || !item)) issues.push('Task Contract.permissions 无效');
-  if (contract.permissions?.mode === 'read_only' && contract.permissions.writable_paths?.length) issues.push('read_only 合同不能声明 writable_paths');
-  if (!contract.environment || typeof contract.environment.repository !== 'string' || !contract.environment.repository || !['shared_tree', 'worktree', 'caller_supplied'].includes(contract.environment.isolation)) issues.push('Task Contract.environment 无效');
-  if (!Array.isArray(contract.stop_conditions) || !contract.extensions || typeof contract.extensions !== 'object' || Array.isArray(contract.extensions)) issues.push('Task Contract.stop_conditions/extensions 无效');
+  if (
+    !contract.scope ||
+    !Array.isArray(contract.scope.include) ||
+    !Array.isArray(contract.scope.exclude) ||
+    [...(contract.scope?.include ?? []), ...(contract.scope?.exclude ?? [])].some(
+      (item) => typeof item !== 'string' || !item,
+    )
+  )
+    issues.push('Task Contract.scope 必须包含非空字符串数组 include/exclude');
+  if (
+    !contract.permissions ||
+    !['read_only', 'write'].includes(contract.permissions.mode) ||
+    !Array.isArray(contract.permissions.writable_paths) ||
+    contract.permissions.writable_paths.some((item) => typeof item !== 'string' || !item)
+  )
+    issues.push('Task Contract.permissions 无效');
+  if (contract.permissions?.mode === 'read_only' && contract.permissions.writable_paths?.length)
+    issues.push('read_only 合同不能声明 writable_paths');
+  if (
+    !contract.environment ||
+    typeof contract.environment.repository !== 'string' ||
+    !contract.environment.repository ||
+    !['shared_tree', 'worktree', 'caller_supplied'].includes(contract.environment.isolation)
+  )
+    issues.push('Task Contract.environment 无效');
+  if (
+    !Array.isArray(contract.stop_conditions) ||
+    !contract.extensions ||
+    typeof contract.extensions !== 'object' ||
+    Array.isArray(contract.extensions)
+  )
+    issues.push('Task Contract.stop_conditions/extensions 无效');
   const ids = new Set();
-  if (Array.isArray(contract.acceptance)) for (const item of contract.acceptance) {
-    if (item?.contract_item_id && ids.has(item.contract_item_id)) issues.push(`重复 contract_item_id: ${item.contract_item_id}`);
-    if (item?.contract_item_id) ids.add(item.contract_item_id);
-  }
+  if (Array.isArray(contract.acceptance))
+    for (const item of contract.acceptance) {
+      if (item?.contract_item_id && ids.has(item.contract_item_id))
+        issues.push(`重复 contract_item_id: ${item.contract_item_id}`);
+      if (item?.contract_item_id) ids.add(item.contract_item_id);
+    }
   issues.push(...digestIssues(contract, 'contract_digest', 'Task Contract'));
   return [...new Set(issues)];
 }
@@ -381,26 +515,62 @@ function validateContract(contract) {
 
 /** @param {Record<string, any>} profile @param {Set<string>} acceptanceIds */
 function collectProfileIssues(profile, acceptanceIds) {
-  const issues = collectJsonSchemaErrors(profile, schema('verification-profile-v1.schema.json'), 'Verification Profile');
+  const issues = collectJsonSchemaErrors(
+    profile,
+    schema('verification-profile-v1.schema.json'),
+    'Verification Profile',
+  );
   if (!profile || typeof profile !== 'object' || Array.isArray(profile)) return issues;
   const checkIds = new Set();
-  if (Array.isArray(profile.l0_checks)) for (const check of profile.l0_checks) {
-    if (check?.check_id && checkIds.has(check.check_id)) issues.push(`重复 L0 check_id: ${check.check_id}`);
-    if (check?.check_id) checkIds.add(check.check_id);
-    if (check?.cwd_rel && (isAbsolute(check.cwd_rel) || check.cwd_rel.includes('\\') || check.cwd_rel.split('/').some((part) => part === '..'))) issues.push(`${check.check_id ?? 'L0 check'} cwd_rel 非法`);
+  if (Array.isArray(profile.l0_checks))
+    for (const check of profile.l0_checks) {
+      if (check?.check_id && checkIds.has(check.check_id)) issues.push(`重复 L0 check_id: ${check.check_id}`);
+      if (check?.check_id) checkIds.add(check.check_id);
+      if (
+        check?.cwd_rel &&
+        (isAbsolute(check.cwd_rel) ||
+          check.cwd_rel.includes('\\') ||
+          check.cwd_rel.split('/').some((part) => part === '..'))
+      )
+        issues.push(`${check.check_id ?? 'L0 check'} cwd_rel 非法`);
+    }
+  if (
+    Array.isArray(profile.l0_checks) &&
+    profile.l0_checks.length > 0 &&
+    (!profile.l0_checks.some((check) => ['smoke', 'both'].includes(check?.stage)) ||
+      !profile.l0_checks.some((check) => ['final', 'both'].includes(check?.stage)))
+  )
+    issues.push('Verification Profile 必须覆盖 smoke 与 final L0');
+  if (Array.isArray(profile.l1_review))
+    for (const review of profile.l1_review) {
+      if (review?.contract_item_id && !acceptanceIds.has(review.contract_item_id))
+        issues.push(`L1 引用未知 contract_item_id: ${review.contract_item_id}`);
+    }
+  for (const path of [
+    ...(Array.isArray(profile.protected_verifier_paths) ? profile.protected_verifier_paths : []),
+    ...(Array.isArray(profile.allowed_validation_changes) ? profile.allowed_validation_changes : []),
+  ]) {
+    try {
+      validateProfilePath(path);
+    } catch (error) {
+      issues.push(error instanceof Error ? error.message : String(error));
+    }
   }
-  if (Array.isArray(profile.l0_checks) && profile.l0_checks.length > 0 && (!profile.l0_checks.some((check) => ['smoke', 'both'].includes(check?.stage)) || !profile.l0_checks.some((check) => ['final', 'both'].includes(check?.stage)))) issues.push('Verification Profile 必须覆盖 smoke 与 final L0');
-  if (Array.isArray(profile.l1_review)) for (const review of profile.l1_review) {
-    if (review?.contract_item_id && !acceptanceIds.has(review.contract_item_id)) issues.push(`L1 引用未知 contract_item_id: ${review.contract_item_id}`);
-  }
-  for (const path of [...(Array.isArray(profile.protected_verifier_paths) ? profile.protected_verifier_paths : []), ...(Array.isArray(profile.allowed_validation_changes) ? profile.allowed_validation_changes : [])]) {
-    try { validateProfilePath(path); } catch (error) { issues.push(error instanceof Error ? error.message : String(error)); }
-  }
-  if (Array.isArray(profile.runtime?.env_allowlist) && profile.runtime.env_allowlist.some((name) => typeof name !== 'string' || !name)) issues.push('runtime.env_allowlist 只能包含非空变量名');
-  if (Array.isArray(profile.l0_checks) && profile.runtime?.executable_paths && typeof profile.runtime.executable_paths === 'object') for (const check of profile.l0_checks) {
-    const executable = profile.runtime.executable_paths[check?.argv?.[0]];
-    if (!executable || !isAbsolute(executable) || !existsSync(executable) || !statSync(executable).isFile()) issues.push(`未冻结绝对 executable: ${check?.argv?.[0] ?? '<missing>'}`);
-  }
+  if (
+    Array.isArray(profile.runtime?.env_allowlist) &&
+    profile.runtime.env_allowlist.some((name) => typeof name !== 'string' || !name)
+  )
+    issues.push('runtime.env_allowlist 只能包含非空变量名');
+  if (
+    Array.isArray(profile.l0_checks) &&
+    profile.runtime?.executable_paths &&
+    typeof profile.runtime.executable_paths === 'object'
+  )
+    for (const check of profile.l0_checks) {
+      const executable = profile.runtime.executable_paths[check?.argv?.[0]];
+      if (!executable || !isAbsolute(executable) || !existsSync(executable) || !statSync(executable).isFile())
+        issues.push(`未冻结绝对 executable: ${check?.argv?.[0] ?? '<missing>'}`);
+    }
   issues.push(...digestIssues(profile, 'verification_profile_digest', 'Verification Profile'));
   return [...new Set(issues)];
 }
@@ -415,7 +585,8 @@ function collectArtifactIssues(artifact) {
   const issues = collectJsonSchemaErrors(artifact, schema('artifact-ref-v1.schema.json'), 'Artifact Ref');
   if (artifact?.provider === 'manage-worktrees') {
     if (!artifact.worktree_id) issues.push('manage-worktrees Artifact Ref 缺少 worktree_id');
-    if (!Number.isInteger(artifact.ownership_epoch) || artifact.ownership_epoch < 1) issues.push('manage-worktrees Artifact Ref ownership_epoch 无效');
+    if (!Number.isInteger(artifact.ownership_epoch) || artifact.ownership_epoch < 1)
+      issues.push('manage-worktrees Artifact Ref ownership_epoch 无效');
   }
   return [...new Set(issues)];
 }
@@ -429,7 +600,8 @@ function validateArtifact(artifact) {
 function validateSkillBinding(contract, contentDigest) {
   const entry = contract.skill_set.find((item) => item?.name === 'verify-agent-output');
   if (!entry) throw new ValidationError('Task Contract skill_set 未冻结 verify-agent-output');
-  if (entry.content_digest !== contentDigest) throw new ValidationError('Task Contract 中 verify-agent-output content_digest 与当前安装不一致');
+  if (entry.content_digest !== contentDigest)
+    throw new ValidationError('Task Contract 中 verify-agent-output content_digest 与当前安装不一致');
 }
 
 /** @param {string} candidate @param {string} parent */
@@ -452,20 +624,24 @@ function pathInside(candidate, parent) {
 
 // 固定模式集，只增不减，宁可多抹。它是第二道防线：秘密一开始就不该经 env_allowlist 进入验证进程。
 // 各家前缀的分隔符不同（GitHub 用下划线，GitLab / Slack / sk- 系用连字符），不能共用一个分隔符。
-const SECRET_SHAPED_TOKEN = new RegExp([
-  String.raw`\bgh[pousr]_[A-Za-z0-9]{20,}`,
-  String.raw`\bgithub_pat_[A-Za-z0-9_]{20,}`,
-  String.raw`\bglpat-[A-Za-z0-9_-]{12,}`,
-  String.raw`\bsk-[A-Za-z0-9_-]{12,}`,
-  String.raw`\bxox[abposr]-[A-Za-z0-9-]{10,}`,
-  String.raw`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`,
-].join('|'), 'gu');
+const SECRET_SHAPED_TOKEN = new RegExp(
+  [
+    String.raw`\bgh[pousr]_[A-Za-z0-9]{20,}`,
+    String.raw`\bgithub_pat_[A-Za-z0-9_]{20,}`,
+    String.raw`\bglpat-[A-Za-z0-9_-]{12,}`,
+    String.raw`\bsk-[A-Za-z0-9_-]{12,}`,
+    String.raw`\bxox[abposr]-[A-Za-z0-9-]{10,}`,
+    String.raw`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`,
+  ].join('|'),
+  'gu',
+);
 
 /** @param {string} text @param {Record<string,string>} environment @param {number} maxBytes */
 export function sanitizeLog(text, environment, maxBytes) {
   let sanitized = text;
   for (const [name, value] of Object.entries(environment)) {
-    if (value && /(token|secret|password|credential|api[_-]?key)/iu.test(name)) sanitized = sanitized.split(value).join('[REDACTED]');
+    if (value && /(token|secret|password|credential|api[_-]?key)/iu.test(name))
+      sanitized = sanitized.split(value).join('[REDACTED]');
   }
   sanitized = sanitized
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, 'Bearer [REDACTED]')
@@ -496,8 +672,16 @@ function executableIdentity(path) {
 function verifyExecutable(snapshot, name, path) {
   const frozen = snapshot.executable_identities?.[name];
   let live;
-  try { live = executableIdentity(path); } catch (error) { throw new OperationalAbort('check_runtime_failure', `冻结 executable 不可用: ${name}: ${error instanceof Error ? error.message : String(error)}`); }
-  if (!frozen || canonicalJson(live) !== canonicalJson(frozen)) throw new OperationalAbort('check_runtime_failure', `冻结 executable 已变化: ${name}`);
+  try {
+    live = executableIdentity(path);
+  } catch (error) {
+    throw new OperationalAbort(
+      'check_runtime_failure',
+      `冻结 executable 不可用: ${name}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!frozen || canonicalJson(live) !== canonicalJson(frozen))
+    throw new OperationalAbort('check_runtime_failure', `冻结 executable 已变化: ${name}`);
 }
 
 function freezeArgvFiles(profile, workdir) {
@@ -525,8 +709,16 @@ function verifyArgvFiles(snapshot, check) {
     const cwd = resolve(snapshot.workdir, check.cwd_rel);
     const candidate = isAbsolute(argument) ? argument : resolve(cwd, argument);
     let live;
-    try { live = { argument_path: resolve(candidate), ...executableIdentity(candidate) }; } catch (error) { throw new OperationalAbort('check_runtime_failure', `冻结 argv 文件不可用: ${key}: ${error instanceof Error ? error.message : String(error)}`); }
-    if (canonicalJson(live) !== canonicalJson(identity)) throw new OperationalAbort('check_runtime_failure', `冻结 argv 文件已变化: ${key}`);
+    try {
+      live = { argument_path: resolve(candidate), ...executableIdentity(candidate) };
+    } catch (error) {
+      throw new OperationalAbort(
+        'check_runtime_failure',
+        `冻结 argv 文件不可用: ${key}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (canonicalJson(live) !== canonicalJson(identity))
+      throw new OperationalAbort('check_runtime_failure', `冻结 argv 文件已变化: ${key}`);
   }
 }
 
@@ -536,7 +728,8 @@ function executeChecks(snapshot, stage, runDir) {
   const profile = readJson(join(runDir, 'profile.json'));
   const checks = profile.l0_checks.filter((check) => check.stage === stage || check.stage === 'both');
   const environment = {};
-  for (const name of profile.runtime.env_allowlist) if (process.env[name] !== undefined) environment[name] = String(process.env[name]);
+  for (const name of profile.runtime.env_allowlist)
+    if (process.env[name] !== undefined) environment[name] = String(process.env[name]);
   const results = [];
   for (const check of checks) {
     verifyGitArtifact(snapshot.artifact_ref, snapshot.workdir, snapshot.runtime_repository_identity);
@@ -556,10 +749,19 @@ function executeChecks(snapshot, stage, runDir) {
     });
     const timedOut = result.error?.code === 'ETIMEDOUT';
     const exitCode = Number.isInteger(result.status) ? result.status : null;
-    const log = sanitizeLog([result.stdout, result.stderr, result.error?.message].filter(Boolean).join('\n'), environment, profile.runtime.max_log_bytes);
+    const log = sanitizeLog(
+      [result.stdout, result.stderr, result.error?.message].filter(Boolean).join('\n'),
+      environment,
+      profile.runtime.max_log_bytes,
+    );
     const persisted = persistLog(runDir, log);
-    if (result.error && !timedOut) throw new OperationalAbort('check_runtime_failure', `${check.check_id} 无法执行，诊断 ${persisted.log_ref}: ${result.error.message}`);
-    if (exitCode === null && !timedOut) throw new OperationalAbort('check_runtime_failure', `${check.check_id} 未产生退出码，诊断 ${persisted.log_ref}`);
+    if (result.error && !timedOut)
+      throw new OperationalAbort(
+        'check_runtime_failure',
+        `${check.check_id} 无法执行，诊断 ${persisted.log_ref}: ${result.error.message}`,
+      );
+    if (exitCode === null && !timedOut)
+      throw new OperationalAbort('check_runtime_failure', `${check.check_id} 未产生退出码，诊断 ${persisted.log_ref}`);
     results.push({
       check_id: check.check_id,
       argv: check.argv,
@@ -582,11 +784,20 @@ function readJournal(runDir) {
   const lastNewline = text.lastIndexOf('\n');
   const complete = lastNewline < 0 ? '' : text.slice(0, lastNewline + 1);
   const trailing = lastNewline === text.length - 1 ? '' : text.slice(lastNewline + 1);
-  const events = complete.split('\n').filter(Boolean).map((line) => parseJsonStrict(line));
+  const events = complete
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => parseJsonStrict(line));
   let previous = null;
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index];
-    if (event.revision !== index || event.previous_event_digest !== previous || !DIGEST_PATTERN.test(event.event_digest ?? '') || envelopeDigest(event, 'event_digest') !== event.event_digest) throw new ValidationError(`event journal 链在 revision ${index} 无效`);
+    if (
+      event.revision !== index ||
+      event.previous_event_digest !== previous ||
+      !DIGEST_PATTERN.test(event.event_digest ?? '') ||
+      envelopeDigest(event, 'event_digest') !== event.event_digest
+    )
+      throw new ValidationError(`event journal 链在 revision ${index} 无效`);
     previous = event.event_digest;
   }
   return { events, complete, trailing };
@@ -610,7 +821,14 @@ function loadSnapshot(runDir) {
 function persistTransition(runDir, snapshot, kind) {
   const next = { ...snapshot, revision: snapshot.revision + 1, updated_at: new Date().toISOString() };
   const previous = readJournal(runDir).events.at(-1)?.event_digest ?? null;
-  const event = { schema_version: 1, revision: next.revision, kind, recorded_at: next.updated_at, previous_event_digest: previous, snapshot: next };
+  const event = {
+    schema_version: 1,
+    revision: next.revision,
+    kind,
+    recorded_at: next.updated_at,
+    previous_event_digest: previous,
+    snapshot: next,
+  };
   event.event_digest = envelopeDigest(event, 'event_digest');
   const fd = openSync(join(runDir, 'events.ndjson'), 'a', 0o600);
   try {
@@ -627,7 +845,11 @@ function persistTransition(runDir, snapshot, kind) {
 function withLock(runDir, callback) {
   const path = join(runDir, '.lock');
   const owner = acquireLock(path);
-  try { return callback(); } finally { releaseLock(path, owner); }
+  try {
+    return callback();
+  } finally {
+    releaseLock(path, owner);
+  }
 }
 
 /** @param {string} runDir @param {number|null} expectedRevision @param {(snapshot:Record<string,any>)=>{snapshot:Record<string,any>,kind:string}} callback */
@@ -637,15 +859,20 @@ function mutateRun(runDir, expectedRevision, callback) {
     let snapshot = loaded.snapshot;
     if (loaded.journal.trailing) atomicWriteText(join(runDir, 'events.ndjson'), loaded.journal.complete);
     if (loaded.needsRepair) atomicWriteJson(join(runDir, 'snapshot.json'), snapshot);
-    if (expectedRevision !== null && snapshot.revision !== expectedRevision) throw new ValidationError(`revision 冲突：expected ${expectedRevision}, actual ${snapshot.revision}`);
+    if (expectedRevision !== null && snapshot.revision !== expectedRevision)
+      throw new ValidationError(`revision 冲突：expected ${expectedRevision}, actual ${snapshot.revision}`);
     const currentDigest = skillContentDigest();
     if (!snapshot.terminal && snapshot.skill_provenance.content_digest !== currentDigest) {
-      snapshot = persistTransition(runDir, {
-        ...snapshot,
-        status: 'aborted',
-        terminal: null,
-        operational_abort: { code: 'skill_drift', diagnostics: 'Skill 内容摘要与 init 时不一致' },
-      }, 'operational_abort');
+      snapshot = persistTransition(
+        runDir,
+        {
+          ...snapshot,
+          status: 'aborted',
+          terminal: null,
+          operational_abort: { code: 'skill_drift', diagnostics: 'Skill 内容摘要与 init 时不一致' },
+        },
+        'operational_abort',
+      );
       throw new OperationalAbort('skill_drift', `run 已记录 abort at revision ${snapshot.revision}`);
     }
     try {
@@ -653,12 +880,16 @@ function mutateRun(runDir, expectedRevision, callback) {
       return persistTransition(runDir, result.snapshot, result.kind);
     } catch (error) {
       if (error instanceof OperationalAbort && !snapshot.terminal && snapshot.status !== 'aborted') {
-        persistTransition(runDir, {
-          ...snapshot,
-          status: 'aborted',
-          terminal: null,
-          operational_abort: { code: error.code, diagnostics: error.message },
-        }, 'operational_abort');
+        persistTransition(
+          runDir,
+          {
+            ...snapshot,
+            status: 'aborted',
+            terminal: null,
+            operational_abort: { code: error.code, diagnostics: error.message },
+          },
+          'operational_abort',
+        );
       }
       throw error;
     }
@@ -667,22 +898,44 @@ function mutateRun(runDir, expectedRevision, callback) {
 
 /** @param {Record<string, any>} review @param {Record<string, any>} snapshot @param {Set<string>} acceptanceIds */
 function validateReview(review, snapshot, acceptanceIds) {
-  try { validateJsonSchema(review, schema('review-result-v1.schema.json'), 'Review Result'); } catch (error) { throw new ValidationError(error instanceof Error ? error.message : String(error)); }
-  if (review.schema_version !== 1 || !review.review_result_id) throw new ValidationError('Review Result schema/id 无效');
-  if (review.contract_digest !== snapshot.contract_digest || review.verification_profile_digest !== snapshot.verification_profile_digest) throw new ValidationError('Review Result contract/profile binding 不匹配');
-  if (review.challenge_nonce !== snapshot.review_challenge_nonce) throw new ValidationError('Review Result challenge nonce 不匹配或已重放');
-  if (canonicalJson(review.artifact_ref) !== canonicalJson(snapshot.artifact_ref)) throw new ValidationError('Review Result Artifact binding 不匹配');
-  if (!REVIEW_VERDICTS.has(review.verdict) || !Array.isArray(review.findings) || !Array.isArray(review.forensics)) throw new ValidationError('Review Result verdict/findings/forensics 无效');
-  for (const finding of review.findings) {
-    if (!acceptanceIds.has(finding?.contract_item_id)) throw new ValidationError(`finding 引用未知 contract_item_id: ${finding?.contract_item_id}`);
-    if (!FINDING_CLASSES.has(finding?.class)) throw new ValidationError(`finding class 非法: ${finding?.class}`);
-    for (const field of ['evidence', 'expected', 'actual']) if (typeof finding[field] !== 'string' || !finding[field].trim()) throw new ValidationError(`finding ${field} 必须是非空字符串`);
+  try {
+    validateJsonSchema(review, schema('review-result-v1.schema.json'), 'Review Result');
+  } catch (error) {
+    throw new ValidationError(error instanceof Error ? error.message : String(error));
   }
-  if (review.forensics.some((item) => typeof item !== 'string' || !item.trim())) throw new ValidationError('forensics 必须是非空字符串数组');
+  if (review.schema_version !== 1 || !review.review_result_id)
+    throw new ValidationError('Review Result schema/id 无效');
+  if (
+    review.contract_digest !== snapshot.contract_digest ||
+    review.verification_profile_digest !== snapshot.verification_profile_digest
+  )
+    throw new ValidationError('Review Result contract/profile binding 不匹配');
+  if (review.challenge_nonce !== snapshot.review_challenge_nonce)
+    throw new ValidationError('Review Result challenge nonce 不匹配或已重放');
+  if (canonicalJson(review.artifact_ref) !== canonicalJson(snapshot.artifact_ref))
+    throw new ValidationError('Review Result Artifact binding 不匹配');
+  if (!REVIEW_VERDICTS.has(review.verdict) || !Array.isArray(review.findings) || !Array.isArray(review.forensics))
+    throw new ValidationError('Review Result verdict/findings/forensics 无效');
+  for (const finding of review.findings) {
+    if (!acceptanceIds.has(finding?.contract_item_id))
+      throw new ValidationError(`finding 引用未知 contract_item_id: ${finding?.contract_item_id}`);
+    if (!FINDING_CLASSES.has(finding?.class)) throw new ValidationError(`finding class 非法: ${finding?.class}`);
+    for (const field of ['evidence', 'expected', 'actual'])
+      if (typeof finding[field] !== 'string' || !finding[field].trim())
+        throw new ValidationError(`finding ${field} 必须是非空字符串`);
+  }
+  if (review.forensics.some((item) => typeof item !== 'string' || !item.trim()))
+    throw new ValidationError('forensics 必须是非空字符串数组');
   if (review.verdict === 'fail' && review.findings.length === 0) throw new ValidationError('fail 必须包含 finding');
-  if (review.verdict === 'no_defect_found' && (review.findings.length > 0 || review.forensics.length === 0)) throw new ValidationError('no_defect_found 必须无 finding 且有 forensics');
-  if (review.verdict === 'undecidable' && review.findings.length === 0) throw new ValidationError('undecidable 必须说明缺失证据');
-  if (!DIGEST_PATTERN.test(review.review_result_digest) || envelopeDigest(review, 'review_result_digest') !== review.review_result_digest) throw new ValidationError('Review Result digest 无效');
+  if (review.verdict === 'no_defect_found' && (review.findings.length > 0 || review.forensics.length === 0))
+    throw new ValidationError('no_defect_found 必须无 finding 且有 forensics');
+  if (review.verdict === 'undecidable' && review.findings.length === 0)
+    throw new ValidationError('undecidable 必须说明缺失证据');
+  if (
+    !DIGEST_PATTERN.test(review.review_result_digest) ||
+    envelopeDigest(review, 'review_result_digest') !== review.review_result_digest
+  )
+    throw new ValidationError('Review Result digest 无效');
 }
 
 /** @param {Record<string, any>} snapshot @param {string} runDir @param {string} outcome */
@@ -690,8 +943,10 @@ function terminalSnapshot(snapshot, runDir, outcome) {
   if (!TERMINAL_OUTCOMES.has(outcome)) throw new ValidationError(`非法 terminal outcome: ${outcome}`);
   const profile = readJson(join(runDir, 'profile.json'));
   const limitations = [];
-  if (profile.runtime.network_policy === 'denied' && snapshot.network_isolation_assurance !== 'host_reported') limitations.push('network_policy_not_os_enforced');
-  if (profile.runtime.cache_policy === 'disabled') limitations.push('generic_runtime_cannot_prove_all_tool_caches_disabled');
+  if (profile.runtime.network_policy === 'denied' && snapshot.network_isolation_assurance !== 'host_reported')
+    limitations.push('network_policy_not_os_enforced');
+  if (profile.runtime.cache_policy === 'disabled')
+    limitations.push('generic_runtime_cannot_prove_all_tool_caches_disabled');
   if (!snapshot.review_result) limitations.push('l1_not_run');
   const evidence = {
     schema_version: 1,
@@ -732,12 +987,14 @@ function terminalSnapshot(snapshot, runDir, outcome) {
     status: 'terminal',
     stages: {
       ...snapshot.stages,
-      smoke_l0: persisted.stages.smoke_l0?.status === 'not_run'
-        ? (snapshot.stages.smoke_l0 ?? { status: 'not_run' })
-        : persisted.stages.smoke_l0,
-      final_l0: persisted.stages.final_l0?.status === 'not_run'
-        ? (snapshot.stages.final_l0 ?? { status: 'not_run' })
-        : persisted.stages.final_l0,
+      smoke_l0:
+        persisted.stages.smoke_l0?.status === 'not_run'
+          ? (snapshot.stages.smoke_l0 ?? { status: 'not_run' })
+          : persisted.stages.smoke_l0,
+      final_l0:
+        persisted.stages.final_l0?.status === 'not_run'
+          ? (snapshot.stages.final_l0 ?? { status: 'not_run' })
+          : persisted.stages.final_l0,
     },
     terminal: { outcome, evidence_ref: 'evidence.json', evidence_digest: persisted.evidence_digest },
   };
@@ -751,33 +1008,49 @@ const CLI_SPEC = {
   digest: { values: ['kind', 'input'], flags: [] },
   readiness: { values: ['contract', 'profile', 'workdir', 'state-root'], flags: [] },
   preflight: { values: ['contract', 'profile', 'artifact'], flags: ['network-isolated'] },
-  init: { values: ['contract', 'profile', 'artifact', 'workdir', 'state-root', 'isolation-assurance', 'run-id'], flags: ['network-isolated', 'allow-repository-state'] },
-  'prepare-run': { values: ['contract', 'profile', 'artifact', 'workdir', 'state-root', 'isolation-assurance', 'run-id'], flags: ['network-isolated', 'allow-repository-state', 'verbose'] },
+  init: {
+    values: ['contract', 'profile', 'artifact', 'workdir', 'state-root', 'isolation-assurance', 'run-id'],
+    flags: ['network-isolated', 'allow-repository-state'],
+  },
+  'prepare-run': {
+    values: ['contract', 'profile', 'artifact', 'workdir', 'state-root', 'isolation-assurance', 'run-id'],
+    flags: ['network-isolated', 'allow-repository-state', 'verbose'],
+  },
   'run-smoke': { values: ['run', 'expected-revision'], flags: ['verbose'] },
   'review-input': { values: ['run'], flags: [] },
   'review-bundle': { values: ['run', 'out'], flags: [] },
-  'record-review': { values: ['run', 'review', 'verifier-run-id', 'isolation-assurance', 'expected-revision'], flags: ['stdin', 'verbose'] },
+  'record-review': {
+    values: ['run', 'review', 'verifier-run-id', 'isolation-assurance', 'expected-revision'],
+    flags: ['stdin', 'verbose'],
+  },
   'run-final': { values: ['run', 'expected-revision'], flags: ['verbose'] },
   'record-reflection': { values: ['run', 'input', 'expected-revision'], flags: [] },
   'propose-improvement': { values: ['run', 'reflection', 'input', 'expected-revision'], flags: [] },
-  status: { values: ['run'], flags: [] }, inspect: { values: ['run'], flags: [] }, validate: { values: ['run'], flags: [] }, doctor: { values: ['run'], flags: [] },
+  status: { values: ['run'], flags: [] },
+  inspect: { values: ['run'], flags: [] },
+  validate: { values: ['run'], flags: [] },
+  doctor: { values: ['run'], flags: [] },
 };
 const CLI_USAGE = {
   capabilities: '用法: capabilities [--json]',
-  scaffold: '用法: scaffold --kind contract|profile|artifact|review|bundle [--workdir <git-root> --base-sha <full-sha>] [--review-input <json>]',
+  scaffold:
+    '用法: scaffold --kind contract|profile|artifact|review|bundle [--workdir <git-root> --base-sha <full-sha>] [--review-input <json>]',
   prepare: '用法: prepare --workdir <git-root> [--out-dir <dir>]',
   digest: '用法: digest --kind contract|profile|review --input <json>',
   readiness: '用法: readiness --contract <json> --profile <json> --workdir <git-root> [--state-root <dir>]',
   preflight: '用法: preflight --contract <json> --profile <json> --artifact <json> [--network-isolated]',
   init: '用法: init --contract <json> --profile <json> --artifact <json> --workdir <git-root> --isolation-assurance host_reported|user_relayed [--state-root <dir>] [--run-id <id>]',
-  'prepare-run': '用法: prepare-run --contract <json> --profile <json> --artifact <json> --workdir <git-root> --isolation-assurance host_reported|user_relayed [--state-root <dir>] [--run-id <id>] [--network-isolated] [--verbose]',
+  'prepare-run':
+    '用法: prepare-run --contract <json> --profile <json> --artifact <json> --workdir <git-root> --isolation-assurance host_reported|user_relayed [--state-root <dir>] [--run-id <id>] [--network-isolated] [--verbose]',
   'run-smoke': '用法: run-smoke --run <run-dir> [--expected-revision <n>] [--verbose]',
   'review-input': '用法: review-input --run <run-dir>',
   'review-bundle': '用法: review-bundle --run <run-dir> [--out <path>]',
-  'record-review': '用法: record-review --run <run-dir> (--review <json>|--stdin) --verifier-run-id <id> --isolation-assurance host_reported|user_relayed [--expected-revision <n>] [--verbose]',
+  'record-review':
+    '用法: record-review --run <run-dir> (--review <json>|--stdin) --verifier-run-id <id> --isolation-assurance host_reported|user_relayed [--expected-revision <n>] [--verbose]',
   'run-final': '用法: run-final --run <run-dir> [--expected-revision <n>] [--verbose]',
   'record-reflection': '用法: record-reflection --run <run-dir> --input <json> [--expected-revision <n>]',
-  'propose-improvement': '用法: propose-improvement --run <run-dir> --reflection <ref> --input <json> [--expected-revision <n>]',
+  'propose-improvement':
+    '用法: propose-improvement --run <run-dir> --reflection <ref> --input <json> [--expected-revision <n>]',
   status: '用法: status --run <run-dir>',
   inspect: '用法: inspect --run <run-dir>',
   validate: '用法: validate --run <run-dir>',
@@ -791,14 +1064,16 @@ function helpText(command = null) {
     if (!CLI_SPEC[command]) throw new ValidationError(`未知命令: ${command}`);
     return `${CLI_USAGE[command] ?? `用法: ${command}`}\n`;
   }
-  return [
-    'verify-agent-output verification runtime',
-    '',
-    '命令：',
-    ...Object.keys(CLI_SPEC).map((name) => `  ${name.padEnd(20)} ${CLI_USAGE[name] ?? ''}`),
-    '',
-    '运行 `<command> --help` 查看子命令用法。',
-  ].join('\n') + '\n';
+  return (
+    [
+      'verify-agent-output verification runtime',
+      '',
+      '命令：',
+      ...Object.keys(CLI_SPEC).map((name) => `  ${name.padEnd(20)} ${CLI_USAGE[name] ?? ''}`),
+      '',
+      '运行 `<command> --help` 查看子命令用法。',
+    ].join('\n') + '\n'
+  );
 }
 
 /** @param {string} command */
@@ -817,10 +1092,12 @@ function parseCli(argv) {
     if (!token.startsWith('--')) throw new ValidationError(`未知位置参数: ${token}${usageHint(command)}`);
     const name = token.slice(2);
     if (spec.flags.includes(name)) {
-      if (argv[index + 1] !== undefined && !argv[index + 1].startsWith('--')) throw new ValidationError(`--${name} 不接受值${usageHint(command)}`);
+      if (argv[index + 1] !== undefined && !argv[index + 1].startsWith('--'))
+        throw new ValidationError(`--${name} 不接受值${usageHint(command)}`);
       flags.add(name);
     } else if (spec.values.includes(name)) {
-      if (argv[index + 1] === undefined || argv[index + 1].startsWith('--')) throw new ValidationError(`--${name} 缺少值${usageHint(command)}`);
+      if (argv[index + 1] === undefined || argv[index + 1].startsWith('--'))
+        throw new ValidationError(`--${name} 缺少值${usageHint(command)}`);
       options[name] = argv[index + 1];
       index += 1;
     } else throw new ValidationError(`未知选项: --${name}${usageHint(command)}`);
@@ -847,8 +1124,36 @@ function capabilities() {
     skill: 'verify-agent-output',
     runtime_version: RUNTIME_VERSION,
     protocol_versions: [PROTOCOL_VERSION],
-    contracts: { task_contract: [1], verification_profile: [1], artifact_ref: [1], review_result: [1], evidence_package: [1], reflection_record: [1], improvement_proposal: [1] },
-    features: ['input-scaffold', 'digest-helper', 'aggregate-preflight', 'prepare-scaffold-chain', 'prepare-run', 'readiness-preconditions', 'review-bundle', 'review-stdin', 'compact-cli-output', 'command-help', 'git-artifact', 'strict-json', 'rfc8785-digest', 'argv-l0', 'immutable-evidence', 'journal-recovery', 'skill-drift', 'evidence-bound-reflection', 'proposed-only-improvement'],
+    contracts: {
+      task_contract: [1],
+      verification_profile: [1],
+      artifact_ref: [1],
+      review_result: [1],
+      evidence_package: [1],
+      reflection_record: [1],
+      improvement_proposal: [1],
+    },
+    features: [
+      'input-scaffold',
+      'digest-helper',
+      'aggregate-preflight',
+      'prepare-scaffold-chain',
+      'prepare-run',
+      'readiness-preconditions',
+      'review-bundle',
+      'review-stdin',
+      'compact-cli-output',
+      'command-help',
+      'git-artifact',
+      'strict-json',
+      'rfc8785-digest',
+      'argv-l0',
+      'immutable-evidence',
+      'journal-recovery',
+      'skill-drift',
+      'evidence-bound-reflection',
+      'proposed-only-improvement',
+    ],
     content_digest: skillContentDigest(),
   };
 }
@@ -868,24 +1173,54 @@ function addDigest(value, field) {
  * @param {string} workdir
  */
 function scaffoldContract(workdir) {
-  return addDigest(buildScaffoldContract({
-    workdir,
-    contractId: randomUUID(),
-    skillSet: [{ name: 'verify-agent-output', version: RUNTIME_VERSION, content_digest: skillContentDigest(), provider_mode: 'primary' }],
-  }), 'contract_digest');
+  return addDigest(
+    buildScaffoldContract({
+      workdir,
+      contractId: randomUUID(),
+      skillSet: [
+        {
+          name: 'verify-agent-output',
+          version: RUNTIME_VERSION,
+          content_digest: skillContentDigest(),
+          provider_mode: 'primary',
+        },
+      ],
+    }),
+    'contract_digest',
+  );
 }
 
 function scaffoldProfile() {
-  return addDigest({
-    schema_version: 1,
-    profile_id: randomUUID(),
-    l0_checks: [{ check_id: SCAFFOLD_CHECK_ID, argv: [...SCAFFOLD_ARGV], cwd_rel: '.', stage: 'both', timeout_ms: 30_000, expected_exit_codes: [0] }],
-    l1_review: [{ contract_item_id: 'acceptance-1', lenses: ['functional', 'scope', 'verification_definition', 'safety'] }],
-    protected_verifier_paths: [],
-    allowed_validation_changes: [],
-    runtime: { env_allowlist: ['PATH'], executable_paths: { node: process.execPath }, cache_policy: 'trusted_identity', network_policy: 'contract_authorized', max_log_bytes: 1_048_576 },
-    human_gate: 'none',
-  }, 'verification_profile_digest');
+  return addDigest(
+    {
+      schema_version: 1,
+      profile_id: randomUUID(),
+      l0_checks: [
+        {
+          check_id: SCAFFOLD_CHECK_ID,
+          argv: [...SCAFFOLD_ARGV],
+          cwd_rel: '.',
+          stage: 'both',
+          timeout_ms: 30_000,
+          expected_exit_codes: [0],
+        },
+      ],
+      l1_review: [
+        { contract_item_id: 'acceptance-1', lenses: ['functional', 'scope', 'verification_definition', 'safety'] },
+      ],
+      protected_verifier_paths: [],
+      allowed_validation_changes: [],
+      runtime: {
+        env_allowlist: ['PATH'],
+        executable_paths: { node: process.execPath },
+        cache_policy: 'trusted_identity',
+        network_policy: 'contract_authorized',
+        max_log_bytes: 1_048_576,
+      },
+      human_gate: 'none',
+    },
+    'verification_profile_digest',
+  );
 }
 
 /** @param {Record<string,string>} options */
@@ -894,8 +1229,19 @@ function scaffoldArtifact(options) {
   const objectFormat = String(git(['rev-parse', '--show-object-format'], workdir)).trim();
   const artifactSha = options['artifact-sha'] ?? String(git(['rev-parse', 'HEAD'], workdir)).trim();
   const baseSha = required(options, 'base-sha');
-  const roots = String(git(['rev-list', '--max-parents=0', artifactSha], workdir)).trim().split('\n').filter(Boolean).sort();
-  const artifact = { schema_version: 1, provider: 'caller-supplied', repository_id: `git:${objectFormat}:${sha256(Buffer.from(canonicalJson(roots), 'utf8'))}`, object_format: objectFormat, base_sha: baseSha, artifact_sha: artifactSha };
+  const roots = String(git(['rev-list', '--max-parents=0', artifactSha], workdir))
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .sort();
+  const artifact = {
+    schema_version: 1,
+    provider: 'caller-supplied',
+    repository_id: `git:${objectFormat}:${sha256(Buffer.from(canonicalJson(roots), 'utf8'))}`,
+    object_format: objectFormat,
+    base_sha: baseSha,
+    artifact_sha: artifactSha,
+  };
   validateArtifact(artifact);
   verifyGitArtifact(artifact, workdir);
   return artifact;
@@ -907,36 +1253,62 @@ function scaffoldReview(options) {
   const contractDigest = input.contract_digest ?? input.contract?.contract_digest;
   const profileDigest = input.verification_profile_digest;
   const firstItem = input.reviewer_view?.[0];
-  if (!DIGEST_PATTERN.test(contractDigest ?? '') || !DIGEST_PATTERN.test(profileDigest ?? '') || !input.artifact_ref || !input.challenge_nonce || !firstItem?.contract_item_id) throw new ValidationError('review-input 缺少 Review Result 所需绑定字段');
-  return addDigest({
-    schema_version: 1,
-    review_result_id: randomUUID(),
-    contract_digest: contractDigest,
-    verification_profile_digest: profileDigest,
-    artifact_ref: input.artifact_ref,
-    challenge_nonce: input.challenge_nonce,
-    verdict: 'undecidable',
-    findings: [{ contract_item_id: firstItem.contract_item_id, class: 'verification_definition', evidence: 'TODO: identify the missing or conflicting evidence', expected: firstItem.requirement, actual: 'TODO: describe why the requirement cannot yet be decided' }],
-    forensics: ['TODO: replace with independent forensic actions before recording the review'],
-  }, 'review_result_digest');
+  if (
+    !DIGEST_PATTERN.test(contractDigest ?? '') ||
+    !DIGEST_PATTERN.test(profileDigest ?? '') ||
+    !input.artifact_ref ||
+    !input.challenge_nonce ||
+    !firstItem?.contract_item_id
+  )
+    throw new ValidationError('review-input 缺少 Review Result 所需绑定字段');
+  return addDigest(
+    {
+      schema_version: 1,
+      review_result_id: randomUUID(),
+      contract_digest: contractDigest,
+      verification_profile_digest: profileDigest,
+      artifact_ref: input.artifact_ref,
+      challenge_nonce: input.challenge_nonce,
+      verdict: 'undecidable',
+      findings: [
+        {
+          contract_item_id: firstItem.contract_item_id,
+          class: 'verification_definition',
+          evidence: 'TODO: identify the missing or conflicting evidence',
+          expected: firstItem.requirement,
+          actual: 'TODO: describe why the requirement cannot yet be decided',
+        },
+      ],
+      forensics: ['TODO: replace with independent forensic actions before recording the review'],
+    },
+    'review_result_digest',
+  );
 }
 
 /** @param {Record<string,string>} options */
 function scaffold(options) {
   if (!options.kind) throw new ValidationError(CLI_USAGE.scaffold);
   const kind = options.kind;
-  if (['artifact', 'bundle'].includes(kind) && (!options.workdir || !options['base-sha'])) throw new ValidationError(`${CLI_USAGE.scaffold}；artifact/bundle 必须提供 --workdir 与 --base-sha`);
-  if (kind === 'review' && !options['review-input']) throw new ValidationError(`${CLI_USAGE.scaffold}；review 必须提供 --review-input`);
+  if (['artifact', 'bundle'].includes(kind) && (!options.workdir || !options['base-sha']))
+    throw new ValidationError(`${CLI_USAGE.scaffold}；artifact/bundle 必须提供 --workdir 与 --base-sha`);
+  if (kind === 'review' && !options['review-input'])
+    throw new ValidationError(`${CLI_USAGE.scaffold}；review 必须提供 --review-input`);
   if (kind === 'contract') return scaffoldContract(options.workdir ?? process.cwd());
   if (kind === 'profile') return scaffoldProfile();
   if (kind === 'artifact') return scaffoldArtifact(options);
   if (kind === 'review') return scaffoldReview(options);
-  if (kind === 'bundle') return { contract: scaffoldContract(required(options, 'workdir')), profile: scaffoldProfile(), artifact: scaffoldArtifact(options) };
+  if (kind === 'bundle')
+    return {
+      contract: scaffoldContract(required(options, 'workdir')),
+      profile: scaffoldProfile(),
+      artifact: scaffoldArtifact(options),
+    };
   throw new ValidationError('--kind 必须是 contract/profile/artifact/review/bundle');
 }
 
 const RUNTIME_SCRIPT_PATH = join(DOMAIN_ROOT, 'verification-runtime.mjs');
-const PREPARE_NOTICE = 'Verification Profile 的 l0_checks 需 controller 按项目实际填写并确认；本命令不猜测任何测试命令，也不内置任何项目专属 preset。';
+const PREPARE_NOTICE =
+  'Verification Profile 的 l0_checks 需 controller 按项目实际填写并确认；本命令不猜测任何测试命令，也不内置任何项目专属 preset。';
 
 /** 串联 scaffold contract + scaffold profile，只产出骨架与 TODO 清单，不猜测测试命令。 @param {Record<string,string>} options */
 function prepare(options) {
@@ -975,7 +1347,8 @@ function prepare(options) {
   mkdirSync(outDir, { recursive: true, mode: 0o700 });
   const contractPath = join(outDir, 'contract.json');
   const profilePath = join(outDir, 'profile.json');
-  for (const path of [contractPath, profilePath]) if (existsSync(path)) throw new ValidationError(`prepare 拒绝覆盖已存在的文件: ${path}`);
+  for (const path of [contractPath, profilePath])
+    if (existsSync(path)) throw new ValidationError(`prepare 拒绝覆盖已存在的文件: ${path}`);
   writeNewJson(contractPath, contract);
   writeNewJson(profilePath, profile);
   return { ...result, out_dir: outDir, contract_path: contractPath, profile_path: profilePath };
@@ -985,7 +1358,9 @@ function prepare(options) {
 function digestEnvelope(options) {
   if (!options.kind || !options.input) throw new ValidationError(CLI_USAGE.digest);
   const kind = options.kind;
-  const field = { contract: 'contract_digest', profile: 'verification_profile_digest', review: 'review_result_digest' }[kind];
+  const field = { contract: 'contract_digest', profile: 'verification_profile_digest', review: 'review_result_digest' }[
+    kind
+  ];
   if (!field) throw new ValidationError('--kind 必须是 contract/profile/review');
   return addDigest(readJson(required(options, 'input')), field);
 }
@@ -1001,16 +1376,24 @@ function inspectValues(contract, profile, artifact, flags) {
     issues.push(...collectContractIssues(contract), ...substance.errors);
     warnings.push(...substance.warnings);
   }
-  const acceptanceIds = new Set(Array.isArray(contract?.acceptance) ? contract.acceptance.map((item) => item?.contract_item_id).filter(Boolean) : []);
+  const acceptanceIds = new Set(
+    Array.isArray(contract?.acceptance)
+      ? contract.acceptance.map((item) => item?.contract_item_id).filter(Boolean)
+      : [],
+  );
   if (profile) issues.push(...collectProfileIssues(profile, acceptanceIds), ...profileSubstance(profile).errors);
   // 覆盖判据要同时拿到两份文件才成立，所以只有这条路径能执行它。
   if (contract && profile) issues.push(...coverageSubstance(contract, profile).errors);
   if (artifact) issues.push(...collectArtifactIssues(artifact));
   if (contract) {
-    try { validateSkillBinding(contract, skillContentDigest()); }
-    catch (error) { issues.push(error instanceof Error ? error.message : String(error)); }
+    try {
+      validateSkillBinding(contract, skillContentDigest());
+    } catch (error) {
+      issues.push(error instanceof Error ? error.message : String(error));
+    }
   }
-  if (profile?.runtime?.network_policy === 'denied' && !flags.has('network-isolated')) issues.push('network_policy=denied 时必须由宿主提供 --network-isolated assurance');
+  if (profile?.runtime?.network_policy === 'denied' && !flags.has('network-isolated'))
+    issues.push('network_policy=denied 时必须由宿主提供 --network-isolated assurance');
   return {
     // warning 只描述"没写"，不足以拒绝创建，所以不参与 valid，也不参与退出码。
     valid: issues.length === 0,
@@ -1026,9 +1409,16 @@ function inspectValues(contract, profile, artifact, flags) {
 function inspectInputs(options, flags) {
   const issues = [];
   const load = (name, label) => {
-    if (!options[name]) { issues.push(`${label} 缺少 --${name}`); return null; }
-    try { return readJson(options[name]); }
-    catch (error) { issues.push(`${label} 无法读取: ${error instanceof Error ? error.message : String(error)}`); return null; }
+    if (!options[name]) {
+      issues.push(`${label} 缺少 --${name}`);
+      return null;
+    }
+    try {
+      return readJson(options[name]);
+    } catch (error) {
+      issues.push(`${label} 无法读取: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
   };
   const contract = load('contract', 'Task Contract');
   const profile = load('profile', 'Verification Profile');
@@ -1050,7 +1440,12 @@ function preflight(options, flags) {
 
 /** @param {string} path @param {number} mode */
 function accessible(path, mode) {
-  try { accessSync(path, mode); return true; } catch { return false; }
+  try {
+    accessSync(path, mode);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** 找到 path 自身或最近一个已存在的祖先目录。 @param {string} path */
@@ -1080,36 +1475,46 @@ function evaluateReadiness({ contract = null, profile = null, workdir, stateRoot
 
   let resolvedWorkdir = resolve(workdir);
   if (!existsSync(resolvedWorkdir)) record('workdir_git_root', false, `workdir 不存在: ${resolvedWorkdir}`);
-  else if (!statSync(resolvedWorkdir).isDirectory()) record('workdir_git_root', false, `workdir 不是目录: ${resolvedWorkdir}`);
+  else if (!statSync(resolvedWorkdir).isDirectory())
+    record('workdir_git_root', false, `workdir 不是目录: ${resolvedWorkdir}`);
   else {
     resolvedWorkdir = realpathSync(resolvedWorkdir);
     const toplevel = gitStatus(['rev-parse', '--show-toplevel'], resolvedWorkdir);
     if (toplevel.status !== 0) record('workdir_git_root', false, `workdir 不是 Git 仓库: ${resolvedWorkdir}`);
-    else if (realpathSync(String(toplevel.stdout).trim()) !== resolvedWorkdir) record('workdir_git_root', false, `workdir 不是 Git worktree 根目录，根目录是 ${String(toplevel.stdout).trim()}`);
+    else if (realpathSync(String(toplevel.stdout).trim()) !== resolvedWorkdir)
+      record('workdir_git_root', false, `workdir 不是 Git worktree 根目录，根目录是 ${String(toplevel.stdout).trim()}`);
     else record('workdir_git_root', true, `Git worktree 根目录: ${resolvedWorkdir}`);
   }
 
   const stateRootPath = resolve(stateRoot ?? join(tmpdir(), 'verify-agent-output-state'));
   const stateAnchor = nearestExistingAncestor(stateRootPath);
-  if (existsSync(stateRootPath) && !statSync(stateRootPath).isDirectory()) record('state_root_writable', false, `state root 不是目录: ${stateRootPath}`);
-  else if (!accessible(stateAnchor, fsConstants.W_OK | fsConstants.X_OK)) record('state_root_writable', false, `state root 不可写: ${stateRootPath}（受阻于 ${stateAnchor}）`);
+  if (existsSync(stateRootPath) && !statSync(stateRootPath).isDirectory())
+    record('state_root_writable', false, `state root 不是目录: ${stateRootPath}`);
+  else if (!accessible(stateAnchor, fsConstants.W_OK | fsConstants.X_OK))
+    record('state_root_writable', false, `state root 不可写: ${stateRootPath}（受阻于 ${stateAnchor}）`);
   else record('state_root_writable', true, `state root 可写: ${stateRootPath}`);
 
   if (contract && typeof contract.environment?.repository === 'string' && contract.environment.repository) {
     const declared = resolve(contract.environment.repository);
     if (existsSync(declared) && existsSync(resolvedWorkdir) && realpathSync(declared) !== resolvedWorkdir) {
-      notes.push(`Task Contract environment.repository (${declared}) 与 workdir (${resolvedWorkdir}) 不是同一目录；readiness 不据此拦截，请自行确认是否有意为之。`);
+      notes.push(
+        `Task Contract environment.repository (${declared}) 与 workdir (${resolvedWorkdir}) 不是同一目录；readiness 不据此拦截，请自行确认是否有意为之。`,
+      );
     }
   }
 
   const executablePaths = profile?.runtime?.executable_paths;
   if (executablePaths && typeof executablePaths === 'object') {
     for (const [name, path] of Object.entries(executablePaths)) {
-      if (typeof path !== 'string' || !path) record(`executable:${name}`, false, `runtime.executable_paths.${name} 不是路径字符串`);
-      else if (!isAbsolute(path)) record(`executable:${name}`, false, `runtime.executable_paths.${name} 必须是绝对路径: ${path}`);
+      if (typeof path !== 'string' || !path)
+        record(`executable:${name}`, false, `runtime.executable_paths.${name} 不是路径字符串`);
+      else if (!isAbsolute(path))
+        record(`executable:${name}`, false, `runtime.executable_paths.${name} 必须是绝对路径: ${path}`);
       else if (!existsSync(path)) record(`executable:${name}`, false, `冻结 executable 不存在: ${name} -> ${path}`);
-      else if (!statSync(path).isFile()) record(`executable:${name}`, false, `冻结 executable 不是文件: ${name} -> ${path}`);
-      else if (!accessible(path, fsConstants.X_OK)) record(`executable:${name}`, false, `冻结 executable 不可执行: ${name} -> ${path}`);
+      else if (!statSync(path).isFile())
+        record(`executable:${name}`, false, `冻结 executable 不是文件: ${name} -> ${path}`);
+      else if (!accessible(path, fsConstants.X_OK))
+        record(`executable:${name}`, false, `冻结 executable 不可执行: ${name} -> ${path}`);
       else record(`executable:${name}`, true, `${name} -> ${path}`);
     }
   }
@@ -1135,13 +1540,19 @@ function evaluateReadiness({ contract = null, profile = null, workdir, stateRoot
     }
   }
 
-  const allowlist = Array.isArray(profile?.runtime?.env_allowlist) ? profile.runtime.env_allowlist.filter((name) => typeof name === 'string' && name) : [];
+  const allowlist = Array.isArray(profile?.runtime?.env_allowlist)
+    ? profile.runtime.env_allowlist.filter((name) => typeof name === 'string' && name)
+    : [];
   if (allowlist.length > 0) {
     const missing = allowlist.filter((name) => process.env[name] === undefined);
-    notes.push(`env_allowlist 是否为 L0 必需无法机械判定，readiness 不猜测也不拦截；当前未设置的变量：${missing.length ? missing.join(', ') : '（无）'}。`);
+    notes.push(
+      `env_allowlist 是否为 L0 必需无法机械判定，readiness 不猜测也不拦截；当前未设置的变量：${missing.length ? missing.join(', ') : '（无）'}。`,
+    );
   }
 
-  const blockers = checks.filter((item) => !item.ok).map((item) => ({ kind: 'precondition', check_id: item.check_id, detail: item.detail }));
+  const blockers = checks
+    .filter((item) => !item.ok)
+    .map((item) => ({ kind: 'precondition', check_id: item.check_id, detail: item.detail }));
   return {
     ready: blockers.length === 0,
     workdir: resolvedWorkdir,
@@ -1158,12 +1569,27 @@ function readiness(options) {
   const workdir = required(options, 'workdir');
   const loaded = {};
   const readErrors = [];
-  for (const [name, label] of [['contract', 'Task Contract'], ['profile', 'Verification Profile']]) {
+  for (const [name, label] of [
+    ['contract', 'Task Contract'],
+    ['profile', 'Verification Profile'],
+  ]) {
     const path = required(options, name);
-    try { loaded[name] = readJson(path); }
-    catch (error) { readErrors.push({ kind: 'precondition', check_id: `${name}_readable`, detail: `${label} 无法读取或解析: ${error instanceof Error ? error.message : String(error)}` }); }
+    try {
+      loaded[name] = readJson(path);
+    } catch (error) {
+      readErrors.push({
+        kind: 'precondition',
+        check_id: `${name}_readable`,
+        detail: `${label} 无法读取或解析: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
   }
-  const report = evaluateReadiness({ contract: loaded.contract ?? null, profile: loaded.profile ?? null, workdir, stateRoot: options['state-root'] ?? null });
+  const report = evaluateReadiness({
+    contract: loaded.contract ?? null,
+    profile: loaded.profile ?? null,
+    workdir,
+    stateRoot: options['state-root'] ?? null,
+  });
   if (readErrors.length === 0) return report;
   return { ...report, ready: false, blockers: [...readErrors, ...report.blockers] };
 }
@@ -1182,11 +1608,27 @@ function prepareRun(options, flags) {
   const stateRoot = options['state-root'] ?? join(tmpdir(), 'verify-agent-output-state');
   const readinessReport = evaluateReadiness({ contract, profile, workdir, stateRoot });
   if (!readinessReport.ready) {
-    return { prepared: false, status: 'blocked_precondition', readiness: readinessReport, preflight: null, run_id: null, revision: null, evidence_digest: null };
+    return {
+      prepared: false,
+      status: 'blocked_precondition',
+      readiness: readinessReport,
+      preflight: null,
+      run_id: null,
+      revision: null,
+      evidence_digest: null,
+    };
   }
   const preflightReport = inspectValues(contract, profile, artifact, flags);
   if (!preflightReport.valid) {
-    return { prepared: false, status: 'invalid_input', readiness: readinessReport, preflight: preflightReport, run_id: null, revision: null, evidence_digest: null };
+    return {
+      prepared: false,
+      status: 'invalid_input',
+      readiness: readinessReport,
+      preflight: preflightReport,
+      run_id: null,
+      revision: null,
+      evidence_digest: null,
+    };
   }
 
   const temporary = mkdtempSync(join(tmpdir(), 'verify-agent-output-prepare-'));
@@ -1199,13 +1641,16 @@ function prepareRun(options, flags) {
     writeNewJson(paths.contract, contract);
     writeNewJson(paths.profile, profile);
     writeNewJson(paths.artifact, artifact);
-    const initialized = initialize({
-      ...options,
-      contract: paths.contract,
-      profile: paths.profile,
-      artifact: paths.artifact,
-      'state-root': stateRoot,
-    }, flags);
+    const initialized = initialize(
+      {
+        ...options,
+        contract: paths.contract,
+        profile: paths.profile,
+        artifact: paths.artifact,
+        'state-root': stateRoot,
+      },
+      flags,
+    );
     return {
       prepared: true,
       ...initialized,
@@ -1229,7 +1674,8 @@ function initialize(options, flags) {
   const { contract, profile, artifact } = checked;
   const workdir = realpathSync(required(options, 'workdir'));
   const plannedAssurance = required(options, 'isolation-assurance');
-  if (!['host_reported', 'user_relayed'].includes(plannedAssurance)) throw new ValidationError('isolation-assurance 非法');
+  if (!['host_reported', 'user_relayed'].includes(plannedAssurance))
+    throw new ValidationError('isolation-assurance 非法');
   const acceptanceIds = validateContract(contract);
   validateProfile(profile, acceptanceIds);
   validateArtifact(artifact);
@@ -1238,7 +1684,8 @@ function initialize(options, flags) {
   const gitIdentity = verifyGitArtifact(artifact, workdir);
   verifyProtectedPaths(artifact, profile, workdir);
   const stateRoot = resolve(options['state-root'] ?? join(tmpdir(), 'verify-agent-output-state'));
-  if (pathInside(stateRoot, workdir) && !flags.has('allow-repository-state')) throw new ValidationError('state root 位于仓库内；需显式 --allow-repository-state');
+  if (pathInside(stateRoot, workdir) && !flags.has('allow-repository-state'))
+    throw new ValidationError('state root 位于仓库内；需显式 --allow-repository-state');
   mkdirSync(join(stateRoot, 'runs'), { recursive: true, mode: 0o700 });
   const runId = options['run-id'] ?? randomUUID();
   if (!/^[A-Za-z0-9._-]+$/u.test(runId)) throw new ValidationError('run-id 只允许字母、数字、点、下划线和连字符');
@@ -1255,7 +1702,9 @@ function initialize(options, flags) {
     verification_profile_digest: profile.verification_profile_digest,
     artifact_ref: artifact,
     runtime_repository_identity: gitIdentity.runtime_repository_identity,
-    executable_identities: Object.fromEntries(Object.entries(profile.runtime.executable_paths).map(([name, path]) => [name, executableIdentity(path)])),
+    executable_identities: Object.fromEntries(
+      Object.entries(profile.runtime.executable_paths).map(([name, path]) => [name, executableIdentity(path)]),
+    ),
     argv_file_identities: freezeArgvFiles(profile, workdir),
     workdir,
     network_isolation_assurance: flags.has('network-isolated') ? 'host_reported' : 'not_required',
@@ -1275,11 +1724,25 @@ function initialize(options, flags) {
   writeNewJson(join(runDir, 'contract.json'), contract);
   writeNewJson(join(runDir, 'profile.json'), profile);
   writeNewJson(join(runDir, 'artifact.json'), artifact);
-  const initialEvent = { schema_version: 1, revision: 0, kind: 'initialized', recorded_at: now, previous_event_digest: null, snapshot };
+  const initialEvent = {
+    schema_version: 1,
+    revision: 0,
+    kind: 'initialized',
+    recorded_at: now,
+    previous_event_digest: null,
+    snapshot,
+  };
   initialEvent.event_digest = envelopeDigest(initialEvent, 'event_digest');
   writeFileSync(join(runDir, 'events.ndjson'), `${canonicalJson(initialEvent)}\n`, { flag: 'wx', mode: 0o600 });
   atomicWriteJson(join(runDir, 'snapshot.json'), snapshot);
-  return { run_id: runId, run_dir: runDir, revision: 0, status: snapshot.status, review_challenge_nonce: snapshot.review_challenge_nonce, ...(checked.report.warnings.length ? { warnings: checked.report.warnings } : {}) };
+  return {
+    run_id: runId,
+    run_dir: runDir,
+    revision: 0,
+    status: snapshot.status,
+    review_challenge_nonce: snapshot.review_challenge_nonce,
+    ...(checked.report.warnings.length ? { warnings: checked.report.warnings } : {}),
+  };
 }
 
 /** @param {Record<string,string>} options */
@@ -1299,7 +1762,16 @@ function recordReflection(options) {
     mkdirSync(join(runDir, 'reflections'), { recursive: true, mode: 0o700 });
     const ref = `reflections/${record.reflection_id}.json`;
     writeNewJson(join(runDir, ref), record);
-    return { snapshot: { ...snapshot, reflection_refs: [...(snapshot.reflection_refs ?? []), { reflection_id: record.reflection_id, reflection_digest: record.reflection_digest, ref }] }, kind: 'reflection_recorded' };
+    return {
+      snapshot: {
+        ...snapshot,
+        reflection_refs: [
+          ...(snapshot.reflection_refs ?? []),
+          { reflection_id: record.reflection_id, reflection_digest: record.reflection_digest, ref },
+        ],
+      },
+      kind: 'reflection_recorded',
+    };
   });
 }
 
@@ -1310,13 +1782,33 @@ function proposeImprovement(options) {
   const reflectionPath = resolve(runDir, required(options, 'reflection'));
   if (!pathInside(reflectionPath, runDir)) throw new ValidationError('Reflection 路径越出 run 目录');
   return mutateRun(runDir, expectedRevision(options), (snapshot) => {
-    const reflection = readAndValidateReflection(reflectionPath, 'verify-agent-output', parseJsonStrict, envelopeDigest);
-    if (!(snapshot.reflection_refs ?? []).some((item) => item.reflection_digest === reflection.reflection_digest)) throw new ValidationError('Reflection 未登记到当前 run');
-    const proposal = buildProposal({ input, reflections: [reflection], skill: snapshot.skill_provenance, envelopeDigest });
+    const reflection = readAndValidateReflection(
+      reflectionPath,
+      'verify-agent-output',
+      parseJsonStrict,
+      envelopeDigest,
+    );
+    if (!(snapshot.reflection_refs ?? []).some((item) => item.reflection_digest === reflection.reflection_digest))
+      throw new ValidationError('Reflection 未登记到当前 run');
+    const proposal = buildProposal({
+      input,
+      reflections: [reflection],
+      skill: snapshot.skill_provenance,
+      envelopeDigest,
+    });
     mkdirSync(join(runDir, 'proposals'), { recursive: true, mode: 0o700 });
     const ref = `proposals/${proposal.proposal_id}.json`;
     writeNewJson(join(runDir, ref), proposal);
-    return { snapshot: { ...snapshot, improvement_proposal_refs: [...(snapshot.improvement_proposal_refs ?? []), { proposal_id: proposal.proposal_id, proposal_digest: proposal.proposal_digest, ref }] }, kind: 'improvement_proposed' };
+    return {
+      snapshot: {
+        ...snapshot,
+        improvement_proposal_refs: [
+          ...(snapshot.improvement_proposal_refs ?? []),
+          { proposal_id: proposal.proposal_id, proposal_digest: proposal.proposal_digest, ref },
+        ],
+      },
+      kind: 'improvement_proposed',
+    };
   });
 }
 
@@ -1337,7 +1829,10 @@ function assertRunReadiness(snapshot, runDir) {
     exclude: INLINE_READINESS_EXCLUDED,
   });
   if (report.ready) return report;
-  throw new OperationalAbort('stale_precondition', `readiness 前置检查未通过（环境问题，不是 Artifact 缺陷）：${report.blockers.map((item) => `${item.check_id}: ${item.detail}`).join('; ')}`);
+  throw new OperationalAbort(
+    'stale_precondition',
+    `readiness 前置检查未通过（环境问题，不是 Artifact 缺陷）：${report.blockers.map((item) => `${item.check_id}: ${item.detail}`).join('; ')}`,
+  );
 }
 
 /** @param {Record<string,string>} options */
@@ -1347,7 +1842,11 @@ function runSmoke(options) {
     if (snapshot.status !== 'initialized') throw new ValidationError(`run-smoke 不接受状态 ${snapshot.status}`);
     assertRunReadiness(snapshot, runDir);
     const result = executeChecks(snapshot, 'smoke', runDir);
-    let next = { ...snapshot, stages: { ...snapshot.stages, smoke_l0: result }, status: result.passed ? 'smoke_passed' : 'terminal' };
+    let next = {
+      ...snapshot,
+      stages: { ...snapshot.stages, smoke_l0: result },
+      status: result.passed ? 'smoke_passed' : 'terminal',
+    };
     if (!result.passed) next = terminalSnapshot(next, runDir, 'fail');
     return { snapshot: next, kind: result.passed ? 'smoke_passed' : 'smoke_failed' };
   });
@@ -1367,14 +1866,31 @@ function reviewInput(options) {
     run_id: snapshot.run_id,
     contract_digest: snapshot.contract_digest,
     verification_profile_digest: snapshot.verification_profile_digest,
-    contract: { contract_id: contract.contract_id, objective: contract.objective, scope: contract.scope, acceptance: contract.acceptance, permissions: contract.permissions, contract_digest: contract.contract_digest },
+    contract: {
+      contract_id: contract.contract_id,
+      objective: contract.objective,
+      scope: contract.scope,
+      acceptance: contract.acceptance,
+      permissions: contract.permissions,
+      contract_digest: contract.contract_digest,
+    },
     artifact_ref: snapshot.artifact_ref,
     verification_entry: {
-      l0_checks: profile.l0_checks.map(({ check_id, argv, cwd_rel, stage, timeout_ms, expected_exit_codes }) => ({ check_id, argv, cwd_rel, stage, timeout_ms, expected_exit_codes })),
+      l0_checks: profile.l0_checks.map(({ check_id, argv, cwd_rel, stage, timeout_ms, expected_exit_codes }) => ({
+        check_id,
+        argv,
+        cwd_rel,
+        stage,
+        timeout_ms,
+        expected_exit_codes,
+      })),
       protected_verifier_paths: profile.protected_verifier_paths,
       allowed_validation_changes: profile.allowed_validation_changes,
     },
-    reviewer_view: profile.l1_review.map((item) => ({ ...item, requirement: byId.get(item.contract_item_id).requirement })),
+    reviewer_view: profile.l1_review.map((item) => ({
+      ...item,
+      requirement: byId.get(item.contract_item_id).requirement,
+    })),
     required_output: 'Review Result v1',
     challenge_nonce: snapshot.review_challenge_nonce,
   };
@@ -1432,7 +1948,10 @@ function reviewBundle(options) {
   const input = reviewInput({ run: runDir });
   const { snapshot } = loadSnapshot(runDir);
   const contract = readJson(join(runDir, 'contract.json'));
-  const projection = contract.extensions && typeof contract.extensions === 'object' && !Array.isArray(contract.extensions) ? contract.extensions.projection : undefined;
+  const projection =
+    contract.extensions && typeof contract.extensions === 'object' && !Array.isArray(contract.extensions)
+      ? contract.extensions.projection
+      : undefined;
   const contractKind = projection && typeof projection === 'object' ? 'projected' : 'public';
   const digestCommand = `node ${RUNTIME_SCRIPT_PATH} digest --kind review --input <review-result.json>`;
   const bundle = {
@@ -1449,7 +1968,15 @@ function reviewBundle(options) {
     permissions: {
       mode: 'read_only',
       writable_paths: [],
-      forbidden_operations: ['git commit', 'git checkout', 'git switch', 'git reset', 'git stash', '修改业务产物', '修改 Task Contract / Verification Profile / 验证定义'],
+      forbidden_operations: [
+        'git commit',
+        'git checkout',
+        'git switch',
+        'git reset',
+        'git stash',
+        '修改业务产物',
+        '修改 Task Contract / Verification Profile / 验证定义',
+      ],
     },
     stop_conditions: [
       '产出 fail / no_defect_found / undecidable 三态之一的 Review Result v1 后立即停止',
@@ -1476,10 +2003,12 @@ function reviewPayload(options, flags) {
   const fromStdin = flags.has('stdin');
   if (fromStdin && options.review) throw new ValidationError('record-review 的 --review 与 --stdin 互斥');
   if (!fromStdin) return readJson(required(options, 'review'));
-  if (process.stdin.isTTY === true) throw new ValidationError('--stdin 拒绝从交互式 TTY 等待输入；请使用 pipe 或 --review <json>');
+  if (process.stdin.isTTY === true)
+    throw new ValidationError('--stdin 拒绝从交互式 TTY 等待输入；请使用 pipe 或 --review <json>');
   const text = readFileSync(0, 'utf8');
   if (!text.trim()) throw new ValidationError('--stdin 未收到 Review Result JSON');
-  if (Buffer.byteLength(text, 'utf8') > REVIEW_STDIN_MAX_BYTES) throw new ValidationError(`--stdin 超过 ${REVIEW_STDIN_MAX_BYTES} bytes 上限`);
+  if (Buffer.byteLength(text, 'utf8') > REVIEW_STDIN_MAX_BYTES)
+    throw new ValidationError(`--stdin 超过 ${REVIEW_STDIN_MAX_BYTES} bytes 上限`);
   const parsed = parseJsonStrict(text);
   return parsed.review_result_digest ? parsed : addDigest(parsed, 'review_result_digest');
 }
@@ -1494,13 +2023,23 @@ function recordReview(options, flags) {
   return mutateRun(runDir, expectedRevision(options), (snapshot) => {
     if (snapshot.status !== 'smoke_passed') throw new ValidationError(`record-review 不接受状态 ${snapshot.status}`);
     if (verifierRunId === snapshot.run_id) throw new ValidationError('verifier-run-id 必须与被验收 run 隔离');
-    if (assurance !== snapshot.planned_isolation_assurance) throw new ValidationError('isolation-assurance 与 init 冻结值不一致');
+    if (assurance !== snapshot.planned_isolation_assurance)
+      throw new ValidationError('isolation-assurance 与 init 冻结值不一致');
     verifyGitArtifact(snapshot.artifact_ref, snapshot.workdir, snapshot.runtime_repository_identity);
     const contract = readJson(join(runDir, 'contract.json'));
     const acceptanceIds = validateContract(contract);
     validateReview(review, snapshot, acceptanceIds);
     writeNewJson(join(runDir, 'review-result.json'), review);
-    let next = { ...snapshot, status: 'review_recorded', review_result: review, review_provenance: { verifier_run_id: verifierRunId, isolation_assurance: assurance, challenge_nonce: snapshot.review_challenge_nonce } };
+    let next = {
+      ...snapshot,
+      status: 'review_recorded',
+      review_result: review,
+      review_provenance: {
+        verifier_run_id: verifierRunId,
+        isolation_assurance: assurance,
+        challenge_nonce: snapshot.review_challenge_nonce,
+      },
+    };
     const safety = review.findings.some((finding) => finding.class === 'safety');
     if (safety) next = terminalSnapshot(next, runDir, 'blocked_safety');
     else if (review.verdict === 'fail') next = terminalSnapshot(next, runDir, 'fail');
@@ -1513,7 +2052,8 @@ function recordReview(options, flags) {
 function runFinal(options) {
   const runDir = realpathSync(required(options, 'run'));
   return mutateRun(runDir, expectedRevision(options), (snapshot) => {
-    if (snapshot.status !== 'review_recorded' || snapshot.review_result?.verdict !== 'no_defect_found') throw new ValidationError(`run-final 不接受状态 ${snapshot.status}`);
+    if (snapshot.status !== 'review_recorded' || snapshot.review_result?.verdict !== 'no_defect_found')
+      throw new ValidationError(`run-final 不接受状态 ${snapshot.status}`);
     const result = executeChecks(snapshot, 'final', runDir);
     let next = { ...snapshot, stages: { ...snapshot.stages, final_l0: result } };
     next = terminalSnapshot(next, runDir, result.passed ? 'pass' : 'fail');
@@ -1539,7 +2079,12 @@ function validateRun(options) {
   const ids = validateContract(contract);
   validateProfile(profile, ids);
   validateArtifact(artifact);
-  if (contract.contract_digest !== snapshot.contract_digest || profile.verification_profile_digest !== snapshot.verification_profile_digest || canonicalJson(artifact) !== canonicalJson(snapshot.artifact_ref)) throw new ValidationError('冻结 envelope 与 snapshot 不一致');
+  if (
+    contract.contract_digest !== snapshot.contract_digest ||
+    profile.verification_profile_digest !== snapshot.verification_profile_digest ||
+    canonicalJson(artifact) !== canonicalJson(snapshot.artifact_ref)
+  )
+    throw new ValidationError('冻结 envelope 与 snapshot 不一致');
   const logProblems = [];
   for (const stage of Object.values(snapshot.stages)) {
     for (const check of stage?.checks ?? []) {
@@ -1550,20 +2095,56 @@ function validateRun(options) {
   let evidence = null;
   if (snapshot.terminal?.evidence_ref) {
     evidence = readJson(join(runDir, snapshot.terminal.evidence_ref));
-    if (envelopeDigest(evidence, 'evidence_digest') !== evidence.evidence_digest || evidence.evidence_digest !== snapshot.terminal.evidence_digest) throw new ValidationError('Evidence digest 无效');
-    if (evidence.run_id !== snapshot.run_id || evidence.terminal_outcome !== snapshot.terminal.outcome || evidence.contract_digest !== snapshot.contract_digest || evidence.verification_profile_digest !== snapshot.verification_profile_digest || canonicalJson(evidence.artifact_ref) !== canonicalJson(snapshot.artifact_ref) || canonicalJson(evidence.stages) !== canonicalJson({ smoke_l0: snapshot.stages.smoke_l0 ?? { status: 'not_run' }, l1_review: snapshot.review_result ?? { status: 'not_run' }, final_l0: snapshot.stages.final_l0 ?? { status: 'not_run' } })) throw new ValidationError('Evidence 与 terminal snapshot 不一致');
+    if (
+      envelopeDigest(evidence, 'evidence_digest') !== evidence.evidence_digest ||
+      evidence.evidence_digest !== snapshot.terminal.evidence_digest
+    )
+      throw new ValidationError('Evidence digest 无效');
+    if (
+      evidence.run_id !== snapshot.run_id ||
+      evidence.terminal_outcome !== snapshot.terminal.outcome ||
+      evidence.contract_digest !== snapshot.contract_digest ||
+      evidence.verification_profile_digest !== snapshot.verification_profile_digest ||
+      canonicalJson(evidence.artifact_ref) !== canonicalJson(snapshot.artifact_ref) ||
+      canonicalJson(evidence.stages) !==
+        canonicalJson({
+          smoke_l0: snapshot.stages.smoke_l0 ?? { status: 'not_run' },
+          l1_review: snapshot.review_result ?? { status: 'not_run' },
+          final_l0: snapshot.stages.final_l0 ?? { status: 'not_run' },
+        })
+    )
+      throw new ValidationError('Evidence 与 terminal snapshot 不一致');
   }
   for (const ref of snapshot.reflection_refs ?? []) {
-    const value = readAndValidateReflection(join(runDir, ref.ref), 'verify-agent-output', parseJsonStrict, envelopeDigest);
-    if (value.reflection_digest !== ref.reflection_digest) throw new ValidationError(`Reflection digest 无效: ${ref.ref}`);
+    const value = readAndValidateReflection(
+      join(runDir, ref.ref),
+      'verify-agent-output',
+      parseJsonStrict,
+      envelopeDigest,
+    );
+    if (value.reflection_digest !== ref.reflection_digest)
+      throw new ValidationError(`Reflection digest 无效: ${ref.ref}`);
     verifyEvidenceRefs(runDir, value.evidence_refs, parseJsonStrict, canonicalJson);
   }
   for (const ref of snapshot.improvement_proposal_refs ?? []) {
     const value = readJson(join(runDir, ref.ref));
-    if (value.lifecycle !== 'proposed' || value.target_skill?.name !== 'verify-agent-output' || envelopeDigest(value, 'proposal_digest') !== value.proposal_digest || value.proposal_digest !== ref.proposal_digest) throw new ValidationError(`Proposal digest/lifecycle 无效: ${ref.ref}`);
+    if (
+      value.lifecycle !== 'proposed' ||
+      value.target_skill?.name !== 'verify-agent-output' ||
+      envelopeDigest(value, 'proposal_digest') !== value.proposal_digest ||
+      value.proposal_digest !== ref.proposal_digest
+    )
+      throw new ValidationError(`Proposal digest/lifecycle 无效: ${ref.ref}`);
   }
   if (logProblems.length > 0) throw new ValidationError(`日志摘要无效: ${logProblems.join(', ')}`);
-  return { valid: true, run_id: snapshot.run_id, revision: snapshot.revision, status: snapshot.status, evidence_digest: evidence?.evidence_digest ?? null, recovery_needed: loaded.needsRepair };
+  return {
+    valid: true,
+    run_id: snapshot.run_id,
+    revision: snapshot.revision,
+    status: snapshot.status,
+    evidence_digest: evidence?.evidence_digest ?? null,
+    recovery_needed: loaded.needsRepair,
+  };
 }
 
 /** @param {Record<string,string>} options */
@@ -1572,7 +2153,10 @@ function doctor(options) {
   const loaded = loadSnapshot(runDir);
   const currentDigest = skillContentDigest();
   return {
-    healthy: !loaded.needsRepair && !existsSync(join(runDir, '.lock')) && currentDigest === loaded.snapshot.skill_provenance.content_digest,
+    healthy:
+      !loaded.needsRepair &&
+      !existsSync(join(runDir, '.lock')) &&
+      currentDigest === loaded.snapshot.skill_provenance.content_digest,
     run_id: loaded.snapshot.run_id,
     revision: loaded.snapshot.revision,
     snapshot_matches_journal: !loaded.needsRepair,
@@ -1580,7 +2164,10 @@ function doctor(options) {
     skill_drift: currentDigest !== loaded.snapshot.skill_provenance.content_digest,
     // 冻结的两份文件就在 run 目录里，实质性判据都能重跑；但 doctor 是只读回看路径，只报不判，
     // 否则判据出现之前冻结的历史 run 的审计结论会随 runtime 版本变化。
-    substance_warnings: substanceWarnings(readJson(join(runDir, 'contract.json')), readJson(join(runDir, 'profile.json'))),
+    substance_warnings: substanceWarnings(
+      readJson(join(runDir, 'contract.json')),
+      readJson(join(runDir, 'profile.json')),
+    ),
     // 旧 run 即使已漂移也要能只读检查：同时给出冻结时的摘要与当前摘要，便于判断漂移了什么。
     frozen_content_digest: loaded.snapshot.skill_provenance.content_digest,
     current_content_digest: currentDigest,
@@ -1589,30 +2176,50 @@ function doctor(options) {
 
 /** @param {string[]} argv */
 export function main(argv = process.argv.slice(2)) {
-  if (['--help', '-h', 'help'].includes(argv[0] ?? '')) return { __help: helpText(argv[0] === 'help' ? argv[1] ?? null : null) };
+  if (['--help', '-h', 'help'].includes(argv[0] ?? ''))
+    return { __help: helpText(argv[0] === 'help' ? (argv[1] ?? null) : null) };
   if (['--help', '-h'].includes(argv[1] ?? '')) return { __help: helpText(argv[0] ?? null) };
   const { command, options, flags } = parseCli(argv);
   switch (command) {
-    case 'capabilities': return capabilities();
-    case 'scaffold': return scaffold(options);
-    case 'prepare': return prepare(options);
-    case 'digest': return digestEnvelope(options);
-    case 'readiness': return readiness(options);
-    case 'preflight': return preflight(options, flags);
-    case 'init': return initialize(options, flags);
-    case 'prepare-run': return prepareRun(options, flags);
-    case 'run-smoke': return runSmoke(options);
-    case 'review-input': return reviewInput(options);
-    case 'review-bundle': return reviewBundle(options);
-    case 'record-review': return recordReview(options, flags);
-    case 'run-final': return runFinal(options);
-    case 'record-reflection': return recordReflection(options);
-    case 'propose-improvement': return proposeImprovement(options);
+    case 'capabilities':
+      return capabilities();
+    case 'scaffold':
+      return scaffold(options);
+    case 'prepare':
+      return prepare(options);
+    case 'digest':
+      return digestEnvelope(options);
+    case 'readiness':
+      return readiness(options);
+    case 'preflight':
+      return preflight(options, flags);
+    case 'init':
+      return initialize(options, flags);
+    case 'prepare-run':
+      return prepareRun(options, flags);
+    case 'run-smoke':
+      return runSmoke(options);
+    case 'review-input':
+      return reviewInput(options);
+    case 'review-bundle':
+      return reviewBundle(options);
+    case 'record-review':
+      return recordReview(options, flags);
+    case 'run-final':
+      return runFinal(options);
+    case 'record-reflection':
+      return recordReflection(options);
+    case 'propose-improvement':
+      return proposeImprovement(options);
     case 'status':
-    case 'inspect': return status(options);
-    case 'validate': return validateRun(options);
-    case 'doctor': return doctor(options);
-    default: throw new ValidationError(`命令必须是 ${CLI_COMMANDS}`);
+    case 'inspect':
+      return status(options);
+    case 'validate':
+      return validateRun(options);
+    case 'doctor':
+      return doctor(options);
+    default:
+      throw new ValidationError(`命令必须是 ${CLI_COMMANDS}`);
   }
 }
 
@@ -1634,9 +2241,12 @@ function compactRunResult(result) {
     ...(result?.prepared !== undefined ? { prepared: result.prepared } : {}),
     // prepare-run 是 happy path 的入口。不带 preflight 原因的话，调用方只看得到 invalid_input，不知道该改哪个字段。
     ...(result?.prepared === false && result?.preflight?.errors?.length ? { errors: result.preflight.errors } : {}),
-    ...(result?.terminal && result.terminal.outcome !== 'pass' ? {
-      next_mode_hint: '本次单 Artifact 验收已终止并保留 Evidence；若已授权修复且预期多轮，请用 run-agent-verify-loop 创建新 Artifact/run。',
-    } : {}),
+    ...(result?.terminal && result.terminal.outcome !== 'pass'
+      ? {
+          next_mode_hint:
+            '本次单 Artifact 验收已终止并保留 Evidence；若已授权修复且预期多轮，请用 run-agent-verify-loop 创建新 Artifact/run。',
+        }
+      : {}),
   };
 }
 
@@ -1656,7 +2266,8 @@ export function runCli(argv = process.argv.slice(2)) {
     const command = argv[0];
     if (result?.__help) process.stdout.write(result.__help);
     else {
-      const compact = ['prepare-run', 'run-smoke', 'record-review', 'run-final'].includes(command) && !argv.includes('--verbose');
+      const compact =
+        ['prepare-run', 'run-smoke', 'record-review', 'run-final'].includes(command) && !argv.includes('--verbose');
       process.stdout.write(`${JSON.stringify(compact ? compactRunResult(result) : result, null, 2)}\n`);
     }
     if (command === 'preflight' && result?.valid === false) return 2;
@@ -1664,8 +2275,15 @@ export function runCli(argv = process.argv.slice(2)) {
     if (command === 'prepare-run' && result?.prepared === false) return 2;
     return 0;
   } catch (error) {
-    const code = error instanceof OperationalAbort ? error.code : error instanceof ValidationError ? 'invalid_input' : 'runtime_error';
-    process.stderr.write(`${JSON.stringify({ error: code, message: error instanceof Error ? error.message : String(error) })}\n`);
+    const code =
+      error instanceof OperationalAbort
+        ? error.code
+        : error instanceof ValidationError
+          ? 'invalid_input'
+          : 'runtime_error';
+    process.stderr.write(
+      `${JSON.stringify({ error: code, message: error instanceof Error ? error.message : String(error) })}\n`,
+    );
     return error instanceof ValidationError ? 2 : 3;
   }
 }

@@ -49,6 +49,9 @@ export function renderCliHelp(script, cliSpec, notes = []) {
     lines.push('', '说明:');
     for (const note of notes) lines.push(`  ${note}`);
   }
-  lines.push('', '无参数 / help / --help / -h 打印本清单并退出 0；未知命令与非法输入仍按各脚本原有错误形状返回并非零退出。');
+  lines.push(
+    '',
+    '无参数 / help / --help / -h 打印本清单并退出 0；未知命令与非法输入仍按各脚本原有错误形状返回并非零退出。',
+  );
   return `${lines.join('\n')}\n`;
 }

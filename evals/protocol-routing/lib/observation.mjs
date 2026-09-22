@@ -44,7 +44,14 @@
  */
 export function parseObservation(text) {
   /** @type {Observation} */
-  const out = { meta: {}, initial_repo: { status: '', head: '' }, initial_ledger: null, events: [], payloads: {}, end: null };
+  const out = {
+    meta: {},
+    initial_repo: { status: '', head: '' },
+    initial_ledger: null,
+    events: [],
+    payloads: {},
+    end: null,
+  };
   let seen = false;
   for (const line of text.split('\n')) {
     const trimmed = line.trim();
@@ -57,11 +64,22 @@ export function parseObservation(text) {
       out.initial_ledger = initialLedger ?? null;
       seen = true;
     } else if (record.type === 'tool') {
-      out.events.push({ seq: record.seq ?? out.events.length + 1, tool_name: record.tool_name, tool_input: record.tool_input, repo: record.repo, ledger: record.ledger ?? null });
+      out.events.push({
+        seq: record.seq ?? out.events.length + 1,
+        tool_name: record.tool_name,
+        tool_input: record.tool_input,
+        repo: record.repo,
+        ledger: record.ledger ?? null,
+      });
     } else if (record.type === 'payload') {
       out.payloads[record.ref] = record.value;
     } else if (record.type === 'end') {
-      out.end = { exit_code: record.exit_code ?? null, error: record.error ?? null, host_result: record.host_result ?? null, early_terminated: record.early_terminated ?? null };
+      out.end = {
+        exit_code: record.exit_code ?? null,
+        error: record.error ?? null,
+        host_result: record.host_result ?? null,
+        early_terminated: record.early_terminated ?? null,
+      };
     }
   }
   if (!seen) throw new Error('观测记录缺少 session 头行');
@@ -73,9 +91,17 @@ export function parseObservation(text) {
  * @returns {string}
  */
 export function serializeObservation(observation) {
-  const lines = [JSON.stringify({ type: 'session', ...observation.meta, initial_repo: observation.initial_repo, initial_ledger: observation.initial_ledger ?? null })];
+  const lines = [
+    JSON.stringify({
+      type: 'session',
+      ...observation.meta,
+      initial_repo: observation.initial_repo,
+      initial_ledger: observation.initial_ledger ?? null,
+    }),
+  ];
   for (const event of observation.events) lines.push(JSON.stringify({ type: 'tool', ...event }));
-  for (const [ref, value] of Object.entries(observation.payloads ?? {})) lines.push(JSON.stringify({ type: 'payload', ref, value }));
+  for (const [ref, value] of Object.entries(observation.payloads ?? {}))
+    lines.push(JSON.stringify({ type: 'payload', ref, value }));
   if (observation.end) lines.push(JSON.stringify({ type: 'end', ...observation.end }));
   return `${lines.join('\n')}\n`;
 }

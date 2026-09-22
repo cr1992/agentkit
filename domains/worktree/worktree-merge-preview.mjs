@@ -17,7 +17,11 @@ const CONFLICT_SCAN_PRINT_CAP = 10;
  * 声明，portable core 既不猜命令也不代跑（与 batch-integrate 是同一条边界）。
  */
 const REGENERATED_PATH_RULES = [
-  { kind: 'lockfile', pattern: /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|Cargo\.lock|pubspec\.lock|Podfile\.lock|Gemfile\.lock|poetry\.lock|uv\.lock|composer\.lock|go\.sum|flake\.lock)$/u },
+  {
+    kind: 'lockfile',
+    pattern:
+      /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|Cargo\.lock|pubspec\.lock|Podfile\.lock|Gemfile\.lock|poetry\.lock|uv\.lock|composer\.lock|go\.sum|flake\.lock)$/u,
+  },
   { kind: 'golden', pattern: /(^|\/)(goldens?|__snapshots__|snapshots)\//u },
   { kind: 'golden', pattern: /\.(golden|snap|ambr)$/u },
   { kind: 'codegen', pattern: /(^|\/)(__generated__|generated)\//u },
@@ -93,14 +97,19 @@ export function classifyPairState({ mergeTreeOk, conflicted, adjacentFiles }) {
  * @param {string} cwd @param {string} a @param {string} b
  */
 function mergeTreeDryRun(cwd, a, b) {
-  const result = runFileCapture(
-    'git',
-    ['merge-tree', '--write-tree', '-z', '--name-only', a, b],
-    { cwd, timeoutMs: MERGE_TREE_TIMEOUT_MS },
-  );
+  const result = runFileCapture('git', ['merge-tree', '--write-tree', '-z', '--name-only', a, b], {
+    cwd,
+    timeoutMs: MERGE_TREE_TIMEOUT_MS,
+  });
   if (result.status === 0 && result.ok) return { ok: true, conflicted: false, files: [], notes: [], reason: null };
   if (result.status !== 1) {
-    return { ok: false, conflicted: null, files: [], notes: [], reason: (result.stderr || result.stdout || 'git merge-tree 执行失败').slice(0, 300) };
+    return {
+      ok: false,
+      conflicted: null,
+      files: [],
+      notes: [],
+      reason: (result.stderr || result.stdout || 'git merge-tree 执行失败').slice(0, 300),
+    };
   }
   // -z 输出：<冲突树 OID>NUL <冲突文件名>NUL... NUL（段结束）
   // 之后是结构化信息记录：<路径数>NUL <路径>NUL... <conflict-type>NUL <人读 message>NUL
@@ -146,7 +155,11 @@ export function predictReviewRefresh(cwd, recordedBaseSha, targetSha, headSha) {
   }
   const version = gitTry(['--version'], cwd);
   if (!mergeTreeScanSupported(version.ok ? version.out : null)) {
-    return { state: 'unknown', method: 'merge-tree', reason: 'Git 2.39+ required for structured merge-tree prediction' };
+    return {
+      state: 'unknown',
+      method: 'merge-tree',
+      reason: 'Git 2.39+ required for structured merge-tree prediction',
+    };
   }
   const preview = mergeTreeDryRun(cwd, targetSha, headSha);
   if (!preview.ok) return { state: 'unknown', method: 'merge-tree', reason: preview.reason };
@@ -202,7 +215,8 @@ function scanCommitPair(cwd, a, b) {
   } else {
     const changedA = changedPathsBetween(cwd, base.out, a);
     const changedB = changedPathsBetween(cwd, base.out, b);
-    if (changedA && changedB) adjacent = [...changedA].filter((path) => changedB.has(path) && !conflicted.has(path)).sort();
+    if (changedA && changedB)
+      adjacent = [...changedA].filter((path) => changedB.has(path) && !conflicted.has(path)).sort();
     else adjacentReason = 'git diff 失败或超时，同文件相邻面未知。';
   }
   // 全量清单：REGEN 汇总、计数都基于它；截断只发生在展示用的 files 上。
@@ -215,7 +229,12 @@ function scanCommitPair(cwd, a, b) {
         conflict_type: conflictType,
         regenerated: regeneratedPathKind(path),
       })),
-    ...(adjacent ?? []).map((path) => ({ path, class: 'adjacent', conflict_type: null, regenerated: regeneratedPathKind(path) })),
+    ...(adjacent ?? []).map((path) => ({
+      path,
+      class: 'adjacent',
+      conflict_type: null,
+      regenerated: regeneratedPathKind(path),
+    })),
   ];
   return {
     state: classifyPairState({
@@ -230,7 +249,9 @@ function scanCommitPair(cwd, a, b) {
     files_total: allFiles.length,
     files_truncated: allFiles.length > CONFLICT_SCAN_FILES_CAP,
     conflict_notes: dryRun.notes,
-    regenerated: allFiles.filter((file) => file.regenerated).map((file) => ({ path: file.path, kind: file.regenerated, class: file.class })),
+    regenerated: allFiles
+      .filter((file) => file.regenerated)
+      .map((file) => ({ path: file.path, kind: file.regenerated, class: file.class })),
     reason: adjacentReason,
   };
 }
@@ -260,17 +281,18 @@ export function computeConflictScan(cwd, target, inputs) {
   if (!mergeTreeScanSupported(versionText.ok ? versionText.out : null)) {
     return unsupported(
       `冲突预测要求 Git ≥ 2.39（本机：${versionText.ok ? versionText.out : '版本不可读'}）：` +
-      '2.38 的 `merge-tree -z` 信息段还不是结构化 NUL 记录，按新格式解会错判冲突类型。' +
-      '本次跳过冲突预测，不影响计划本身。',
+        '2.38 的 `merge-tree -z` 信息段还不是结构化 NUL 记录，按新格式解会错判冲突类型。' +
+        '本次跳过冲突预测，不影响计划本身。',
     );
   }
-  const probe = runFileCapture(
-    'git',
-    ['merge-tree', '--write-tree', '-z', '--name-only', target.sha, target.sha],
-    { cwd, timeoutMs: MERGE_TREE_TIMEOUT_MS },
-  );
+  const probe = runFileCapture('git', ['merge-tree', '--write-tree', '-z', '--name-only', target.sha, target.sha], {
+    cwd,
+    timeoutMs: MERGE_TREE_TIMEOUT_MS,
+  });
   if (probe.status !== 0) {
-    return unsupported(`本机 \`git merge-tree --write-tree\` 自检未通过：${(probe.stderr || probe.stdout || '原因未知').slice(0, 200)}；本次跳过冲突预测，不影响计划本身。`);
+    return unsupported(
+      `本机 \`git merge-tree --write-tree\` 自检未通过：${(probe.stderr || probe.stdout || '原因未知').slice(0, 200)}；本次跳过冲突预测，不影响计划本身。`,
+    );
   }
   const identify = (item) => ({ task: item.task, worktree_id: item.worktree_id, head: item.head });
   const againstTarget = inputs.map((item) => ({
@@ -291,22 +313,31 @@ export function computeConflictScan(cwd, target, inputs) {
   // 每个输入的"冲突面"：直接支撑"冲突面大的压轴"这条排序口径。
   // conflicting_peers 排在 conflict_files 前面，是因为没有文件条目的目录重命名类冲突
   // 同样是真冲突，不能因为 conflict_files=0 被排到干净输入后面。
-  const load = inputs.map((item) => {
-    const related = pairs.filter((pair) => pair.a.worktree_id === item.worktree_id || pair.b.worktree_id === item.worktree_id);
-    return {
-      task: item.task,
-      worktree_id: item.worktree_id,
-      conflicting_peers: related.filter((pair) => pair.state === 'conflict').length,
-      conflict_files: related.reduce((sum, pair) => sum + pair.conflict_files, 0),
-      adjacent_files: related.reduce((sum, pair) => sum + (pair.adjacent_files ?? 0), 0),
-      incomplete_peers: related.filter((pair) => pair.state === 'incomplete' || pair.state === 'error' || pair.adjacent_files === null).length,
-      target_conflict_files: againstTarget.find((row) => row.input.worktree_id === item.worktree_id)?.conflict_files ?? 0,
-    };
-  }).sort((left, right) =>
-    right.conflicting_peers - left.conflicting_peers ||
-    right.conflict_files - left.conflict_files ||
-    right.adjacent_files - left.adjacent_files ||
-    left.task.localeCompare(right.task));
+  const load = inputs
+    .map((item) => {
+      const related = pairs.filter(
+        (pair) => pair.a.worktree_id === item.worktree_id || pair.b.worktree_id === item.worktree_id,
+      );
+      return {
+        task: item.task,
+        worktree_id: item.worktree_id,
+        conflicting_peers: related.filter((pair) => pair.state === 'conflict').length,
+        conflict_files: related.reduce((sum, pair) => sum + pair.conflict_files, 0),
+        adjacent_files: related.reduce((sum, pair) => sum + (pair.adjacent_files ?? 0), 0),
+        incomplete_peers: related.filter(
+          (pair) => pair.state === 'incomplete' || pair.state === 'error' || pair.adjacent_files === null,
+        ).length,
+        target_conflict_files:
+          againstTarget.find((row) => row.input.worktree_id === item.worktree_id)?.conflict_files ?? 0,
+      };
+    })
+    .sort(
+      (left, right) =>
+        right.conflicting_peers - left.conflicting_peers ||
+        right.conflict_files - left.conflict_files ||
+        right.adjacent_files - left.adjacent_files ||
+        left.task.localeCompare(right.task),
+    );
   // 汇总跑在**未截断**的全量命中上：先截 50 再统计会让排在后面的 lock/golden 从汇总消失。
   const regenerated = new Map();
   for (const pair of [...pairs, ...againstTarget]) {
@@ -351,10 +382,14 @@ function formatPairCounts(row) {
 /** @param {Record<string,any>} row @param {string} indent */
 function printPairDetail(row, indent) {
   for (const file of row.files.slice(0, CONFLICT_SCAN_PRINT_CAP)) {
-    console.log(`${indent}${file.class.padEnd(12)} ${file.path}${file.conflict_type ? ` ${file.conflict_type}` : ''}${file.regenerated ? ` [${file.regenerated}]` : ''}`);
+    console.log(
+      `${indent}${file.class.padEnd(12)} ${file.path}${file.conflict_type ? ` ${file.conflict_type}` : ''}${file.regenerated ? ` [${file.regenerated}]` : ''}`,
+    );
   }
   if (row.files_total > CONFLICT_SCAN_PRINT_CAP) {
-    console.log(`${indent}… 共 ${row.files_total} 项${row.files_truncated ? `（--json 亦按 ${CONFLICT_SCAN_FILES_CAP} 项上限截断；计数与产物类汇总仍是全量）` : ''}`);
+    console.log(
+      `${indent}… 共 ${row.files_total} 项${row.files_truncated ? `（--json 亦按 ${CONFLICT_SCAN_FILES_CAP} 项上限截断；计数与产物类汇总仍是全量）` : ''}`,
+    );
   }
   // 冲突但没有文件条目时，信息性记录是唯一线索，必须打出来。
   if (row.state === 'conflict' && row.conflict_files === 0) {
@@ -375,12 +410,14 @@ export function printConflictScan(scan) {
   const summary = scan.summary;
   console.log(
     `  [SCAN] pairs=${summary.pair_count} conflicting=${summary.conflicting_pairs} adjacent_only=${summary.adjacent_only_pairs}` +
-    ` incomplete=${summary.incomplete_pairs} failed=${summary.failed_pairs} unknown_adjacency=${summary.unknown_adjacency_rows}`,
+      ` incomplete=${summary.incomplete_pairs} failed=${summary.failed_pairs} unknown_adjacency=${summary.unknown_adjacency_rows}`,
   );
-  const ordered = [...scan.pairs].sort((left, right) =>
-    (right.state === 'conflict' ? 1 : 0) - (left.state === 'conflict' ? 1 : 0) ||
-    right.conflict_files - left.conflict_files ||
-    (right.adjacent_files ?? 0) - (left.adjacent_files ?? 0));
+  const ordered = [...scan.pairs].sort(
+    (left, right) =>
+      (right.state === 'conflict' ? 1 : 0) - (left.state === 'conflict' ? 1 : 0) ||
+      right.conflict_files - left.conflict_files ||
+      (right.adjacent_files ?? 0) - (left.adjacent_files ?? 0),
+  );
   for (const pair of ordered) {
     if (pair.state === 'error') {
       console.log(`    [PAIR] ${pair.a.task} × ${pair.b.task} 扫描失败：${pair.reason}`);
@@ -398,10 +435,14 @@ export function printConflictScan(scan) {
     if (row.state !== 'clean') printPairDetail(row, '        ');
   }
   for (const row of summary.inputs) {
-    console.log(`    [LOAD] ${row.task} conflict=${row.conflict_files} adjacent=${row.adjacent_files} peers=${row.conflicting_peers} vs_target=${row.target_conflict_files}`);
+    console.log(
+      `    [LOAD] ${row.task} conflict=${row.conflict_files} adjacent=${row.adjacent_files} peers=${row.conflicting_peers} vs_target=${row.target_conflict_files}`,
+    );
   }
   for (const hit of summary.regenerated_paths) {
-    console.log(`    [REGEN] ${hit.path} (${hit.kind}) 命中 ${hit.pairs} 处；这类产物只能在合成态重新生成，见 Profile post_integrate_steps`);
+    console.log(
+      `    [REGEN] ${hit.path} (${hit.kind}) 命中 ${hit.pairs} 处；这类产物只能在合成态重新生成，见 Profile post_integrate_steps`,
+    );
   }
   if (summary.incomplete_pairs > 0 || summary.failed_pairs > 0 || summary.unknown_adjacency_rows > 0) {
     console.log('    [WARN] 存在未完成的格子：矩阵不完整，不能据它断言"没有冲突"。');

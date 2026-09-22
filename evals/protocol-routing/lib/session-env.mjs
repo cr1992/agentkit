@@ -18,15 +18,23 @@ export const INHERITED_ENV_KEYS = Object.freeze([
   // 进程跑起来必需
   'PATH',
   'TERM',
-  'TMPDIR', 'TMP', 'TEMP',
-  'LANG', 'LANGUAGE',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'LANG',
+  'LANGUAGE',
   // Node / TLS：企业内网自带 CA 时缺了就连不上
   'NODE_EXTRA_CA_CERTS',
   'NODE_OPTIONS',
-  'SSL_CERT_FILE', 'SSL_CERT_DIR',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
   // 代理：内网出口
-  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY',
-  'http_proxy', 'https_proxy', 'no_proxy',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
   // Claude Code 认证。HOME 被重定向到会话目录，交互式 OAuth / keychain 那条路走不通，
   // 能用的只有「由环境变量带进来」的两条，二者同级：
   // - ANTHROPIC_API_KEY：控制台 API key，`claude --help` 点名了它（CI 走这条）；
@@ -57,7 +65,8 @@ export function buildSessionEnv(parentEnv, overrides = {}) {
   const env = {};
   for (const [key, value] of Object.entries(parentEnv)) {
     if (value === undefined) continue;
-    if (INHERITED_ENV_KEYS.includes(key) || INHERITED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) env[key] = value;
+    if (INHERITED_ENV_KEYS.includes(key) || INHERITED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix)))
+      env[key] = value;
   }
   return { ...env, ...overrides };
 }

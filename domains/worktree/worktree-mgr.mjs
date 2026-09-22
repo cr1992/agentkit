@@ -3,7 +3,18 @@
 
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -48,13 +59,7 @@ export {
   worktreeSkillDigest,
 } from './worktree-core.mjs';
 
-const {
-  PREFIX,
-  die,
-  parseArgs,
-  rejectUnknownFlags,
-  worktreeSkillDigest,
-} = core;
+const { PREFIX, die, parseArgs, rejectUnknownFlags, worktreeSkillDigest } = core;
 const { WorktreeProfileError } = profile;
 const { GitlabSubmitError } = provider;
 const { WorktreeTraceError } = trace;
@@ -84,7 +89,7 @@ const dependencies = {
   managerScript,
   processPlatform: process.platform,
   processExecPath: process.execPath,
-  processGetuid: () => typeof process.getuid === 'function' ? process.getuid() : 0,
+  processGetuid: () => (typeof process.getuid === 'function' ? process.getuid() : 0),
   LEDGER_ID_PATTERN,
   isLedgerId,
   ...mergePreview,
@@ -138,7 +143,45 @@ export const verifyArtifactEnvelope = artifactCommands.verifyArtifactEnvelope;
 
 function cmdCapabilities(args) {
   rejectUnknownFlags(args.flags, ['json']);
-  console.log(JSON.stringify({ skill: 'manage-worktrees', runtime_version: '1.6.0', contracts: { worktree_binding: [1], artifact_ref: [1], reflection_record: [1], improvement_proposal: [1], batch_result: [1] }, features: ['git-common-dir-ledger', 'ownership-epochs', 'artifact-verification', 'incident-reflection', 'proposed-only-improvement', 'batch-integrate', 'batch-conflict-scan', 'declared-post-integrate-steps', 'batch-result', 'evidence-archive-reclaim', 'durable-pushed-ref-proof', 'auto-armed-review-watch', 'persistent-review-watch-intent', 'launchd-watch-service', 'review-target-advance-prediction', 'explicit-review-refresh', 'managed-history-rewrite', 'stack-parent-attribution', 'structured-change-registration'], content_digest: worktreeSkillDigest() }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        skill: 'manage-worktrees',
+        runtime_version: '1.6.0',
+        contracts: {
+          worktree_binding: [1],
+          artifact_ref: [1],
+          reflection_record: [1],
+          improvement_proposal: [1],
+          batch_result: [1],
+        },
+        features: [
+          'git-common-dir-ledger',
+          'ownership-epochs',
+          'artifact-verification',
+          'incident-reflection',
+          'proposed-only-improvement',
+          'batch-integrate',
+          'batch-conflict-scan',
+          'declared-post-integrate-steps',
+          'batch-result',
+          'evidence-archive-reclaim',
+          'durable-pushed-ref-proof',
+          'auto-armed-review-watch',
+          'persistent-review-watch-intent',
+          'launchd-watch-service',
+          'review-target-advance-prediction',
+          'explicit-review-refresh',
+          'managed-history-rewrite',
+          'stack-parent-attribution',
+          'structured-change-registration',
+        ],
+        content_digest: worktreeSkillDigest(),
+      },
+      null,
+      2,
+    ),
+  );
 }
 
 function usage() {
@@ -199,7 +242,6 @@ capabilities [--json]
 
 所有命令支持 --config <path>；默认 Profile 固定从 primary worktree 读取。`);
 }
-
 
 function main(argv = process.argv.slice(2)) {
   if (!argv[0] || ['--help', '-h', 'help'].includes(argv[0])) {
@@ -269,7 +311,11 @@ export function runCli(argv = process.argv.slice(2)) {
     main(argv);
     return Number.isInteger(process.exitCode) ? process.exitCode : 0;
   } catch (error) {
-    if (error instanceof WorktreeProfileError || error instanceof WorktreeTraceError || error instanceof GitlabSubmitError) {
+    if (
+      error instanceof WorktreeProfileError ||
+      error instanceof WorktreeTraceError ||
+      error instanceof GitlabSubmitError
+    ) {
       die(`${error.code}: ${error.message}`);
     }
     throw error;

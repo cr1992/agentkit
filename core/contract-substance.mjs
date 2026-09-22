@@ -35,7 +35,11 @@ const quote = (/** @type {unknown} */ value) => JSON.stringify(value);
 
 /** @param {unknown} argv */
 function isScaffoldArgv(argv) {
-  return Array.isArray(argv) && argv.length === SCAFFOLD_ARGV.length && argv.every((item, index) => item === SCAFFOLD_ARGV[index]);
+  return (
+    Array.isArray(argv) &&
+    argv.length === SCAFFOLD_ARGV.length &&
+    argv.every((item, index) => item === SCAFFOLD_ARGV[index])
+  );
 }
 
 /**
@@ -52,22 +56,31 @@ export function contractSubstance(contract) {
   const acceptance = Array.isArray(contract?.acceptance) ? contract.acceptance : [];
   acceptance.forEach((item, index) => {
     if (item?.requirement === SCAFFOLD_REQUIREMENT) {
-      errors.push(`acceptance[${index}].requirement = ${quote(SCAFFOLD_REQUIREMENT)}：仍是 scaffold 占位文本，需写明可观察的验收要求`);
+      errors.push(
+        `acceptance[${index}].requirement = ${quote(SCAFFOLD_REQUIREMENT)}：仍是 scaffold 占位文本，需写明可观察的验收要求`,
+      );
     }
   });
   const include = Array.isArray(contract?.scope?.include) ? contract.scope.include : [];
   include.forEach((item, index) => {
-    if (item === SCAFFOLD_SCOPE_ITEM) errors.push(`scope.include[${index}] = ${quote(SCAFFOLD_SCOPE_ITEM)}：仍是 scaffold 占位，需列出本次任务的真实范围`);
+    if (item === SCAFFOLD_SCOPE_ITEM)
+      errors.push(
+        `scope.include[${index}] = ${quote(SCAFFOLD_SCOPE_ITEM)}：仍是 scaffold 占位，需列出本次任务的真实范围`,
+      );
   });
   const warnings = [];
   // 只读合同越界由 permissions 本身兜住；写入合同则全靠 scope.exclude 与 stop_conditions 划边界，
   // 两处都空等于把"改哪里、什么时候停"完全交给执行方判断。
   if (contract?.permissions?.mode === 'write') {
     if (!(Array.isArray(contract?.scope?.exclude) ? contract.scope.exclude : []).length) {
-      warnings.push('permissions.mode = "write" 且 scope.exclude 为空：写入型合同没有划出任何不可触碰的面，改动跑偏时没有范围边界可对照');
+      warnings.push(
+        'permissions.mode = "write" 且 scope.exclude 为空：写入型合同没有划出任何不可触碰的面，改动跑偏时没有范围边界可对照',
+      );
     }
     if (!(Array.isArray(contract?.stop_conditions) ? contract.stop_conditions : []).length) {
-      warnings.push('permissions.mode = "write" 且 stop_conditions 为空：写入型合同没有声明任何终止条件，执行失控时没有机械停机点');
+      warnings.push(
+        'permissions.mode = "write" 且 stop_conditions 为空：写入型合同没有声明任何终止条件，执行失控时没有机械停机点',
+      );
     }
   }
   return { errors, warnings };
@@ -83,7 +96,10 @@ export function profileSubstance(profile) {
   const errors = [];
   const checks = Array.isArray(profile?.l0_checks) ? profile.l0_checks : [];
   checks.forEach((check, index) => {
-    if (check?.check_id === SCAFFOLD_CHECK_ID) errors.push(`l0_checks[${index}].check_id = ${quote(SCAFFOLD_CHECK_ID)}：这是 scaffold 占位检查的标识，需替换为真实检查`);
+    if (check?.check_id === SCAFFOLD_CHECK_ID)
+      errors.push(
+        `l0_checks[${index}].check_id = ${quote(SCAFFOLD_CHECK_ID)}：这是 scaffold 占位检查的标识，需替换为真实检查`,
+      );
   });
   if (checks.length > 0 && checks.every((check) => isScaffoldArgv(check?.argv))) {
     errors.push(`l0_checks[*].argv 全部为 ${quote(SCAFFOLD_ARGV)}：只证明运行环境存在，没有检查本次 Artifact`);
@@ -103,7 +119,11 @@ export function profileSubstance(profile) {
  */
 export function coverageSubstance(contract, profile) {
   const errors = [];
-  const reviewed = new Set((Array.isArray(profile?.l1_review) ? profile.l1_review : []).map((item) => item?.contract_item_id).filter((id) => typeof id === 'string' && id));
+  const reviewed = new Set(
+    (Array.isArray(profile?.l1_review) ? profile.l1_review : [])
+      .map((item) => item?.contract_item_id)
+      .filter((id) => typeof id === 'string' && id),
+  );
   const acceptance = Array.isArray(contract?.acceptance) ? contract.acceptance : [];
   acceptance.forEach((item, index) => {
     const id = item?.contract_item_id;

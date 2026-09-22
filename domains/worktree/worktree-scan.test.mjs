@@ -45,19 +45,13 @@ test('kiro_tasks adapter 由 Profile 显式启用', (t) => {
   const fixture = makeRepo({
     schema_version: 1,
     scan: {
-      sources: [
-        'git_worktrees',
-        { type: 'kiro_tasks', glob: '.kiro/specs/*/tasks.md' },
-      ],
+      sources: ['git_worktrees', { type: 'kiro_tasks', glob: '.kiro/specs/*/tasks.md' }],
     },
   });
   t.after(fixture.cleanup);
   const spec = join(fixture.repo, '.kiro', 'specs', 'fixture');
   mkdirSync(spec, { recursive: true });
-  writeFileSync(
-    join(spec, 'tasks.md'),
-    '- [-] FIX-1. fixture\n  - **影响文件或目录**: `src/claimed.ts`\n',
-  );
+  writeFileSync(join(spec, 'tasks.md'), '- [-] FIX-1. fixture\n  - **影响文件或目录**: `src/claimed.ts`\n');
   const output = scan(fixture.repo, ['scan', '--target', 'src/claimed.ts']);
   assert.match(output, /COLLIDE/);
   assert.match(output, /task:\[-\]/);
@@ -98,7 +92,10 @@ test('Git 仓库根路径不同但 basename 相同不误报，adapter 相对路�
   writeFileSync(join(nested, 'main.dart'), 'dirty\n');
   assert.match(scan(fixture.repo, ['scan', '--target', 'lib/main.dart']), /CLEAR/);
 
-  const adapterFixture = makeRepo({ schema_version: 1, scan: { sources: [{ type: 'kiro_tasks', glob: '.kiro/specs/*/tasks.md' }] } });
+  const adapterFixture = makeRepo({
+    schema_version: 1,
+    scan: { sources: [{ type: 'kiro_tasks', glob: '.kiro/specs/*/tasks.md' }] },
+  });
   t.after(adapterFixture.cleanup);
   const spec = join(adapterFixture.repo, '.kiro', 'specs', 'fixture');
   mkdirSync(spec, { recursive: true });
@@ -118,10 +115,7 @@ test('kiro_tasks adapter 使用 Profile 声明的 glob', (t) => {
   t.after(fixture.cleanup);
   const nested = join(fixture.repo, 'planning', 'mobile', 'phase-one');
   mkdirSync(nested, { recursive: true });
-  writeFileSync(
-    join(nested, 'work-items.md'),
-    '- [-] PORT-1. fixture\n  - **影响文件或目录**: `src/portable.ts`\n',
-  );
+  writeFileSync(join(nested, 'work-items.md'), '- [-] PORT-1. fixture\n  - **影响文件或目录**: `src/portable.ts`\n');
   const output = scan(fixture.repo, ['scan', '--target', 'src/portable.ts']);
   assert.match(output, /COLLIDE/);
   assert.match(output, /task:\[-\]/);

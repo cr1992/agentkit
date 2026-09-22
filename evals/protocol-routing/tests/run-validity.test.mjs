@@ -42,27 +42,53 @@ test('宿主 result 事件 is_error=true 即判无效，不论 subtype 是不是
 
 test('错误 subtype 判无效，但 error_max_turns 是真实终点，仍然有效', () => {
   for (const subtype of FAILURE_RESULT_SUBTYPES) {
-    const verdict = classifyRunValidity({ events: [], end: { exit_code: 1, host_result: { subtype, is_error: false } } });
+    const verdict = classifyRunValidity({
+      events: [],
+      end: { exit_code: 1, host_result: { subtype, is_error: false } },
+    });
     assert.equal(verdict.valid, false, subtype);
     assert.equal(verdict.signal, 'result_error_subtype');
   }
   assert.ok(!FAILURE_RESULT_SUBTYPES.includes('error_max_turns'));
-  const maxTurns = classifyRunValidity({ events: [{}], end: { exit_code: 0, host_result: { subtype: 'error_max_turns', is_error: false } } });
+  const maxTurns = classifyRunValidity({
+    events: [{}],
+    end: { exit_code: 0, host_result: { subtype: 'error_max_turns', is_error: false } },
+  });
   assert.equal(maxTurns.valid, true, '跑到轮次上限是会话自己的终点，不该重试');
 });
 
 test('最终文本以 API Error 开头是兜底判据：宿主忘了置 is_error 也拦得住', () => {
-  const verdict = classifyRunValidity({ events: [], end: { exit_code: 0, host_result: { subtype: 'success', is_error: false, final_text_prefix: '  API Error: overloaded' } } });
+  const verdict = classifyRunValidity({
+    events: [],
+    end: {
+      exit_code: 0,
+      host_result: { subtype: 'success', is_error: false, final_text_prefix: '  API Error: overloaded' },
+    },
+  });
   assert.equal(verdict.valid, false);
   assert.equal(verdict.signal, 'final_text_api_error');
 });
 
 test('非零退出 + 零工具事件判无效；但零工具事件本身绝不单独成立', () => {
-  assert.equal(classifyRunValidity({ events: [], end: { exit_code: 2, host_result: null } }).signal, 'nonzero_exit_no_events');
+  assert.equal(
+    classifyRunValidity({ events: [], end: { exit_code: 2, host_result: null } }).signal,
+    'nonzero_exit_no_events',
+  );
 
   // ⚠️ 这条是整个判据的安全面：一个「读了文档、想了想、什么都没做」的会话，
   // 观测量就是 `NONE`，是正向用例要量的真实结果，必须仍然计入 k/n。
-  const didNothing = classifyRunValidity({ events: [], end: { exit_code: 0, host_result: { subtype: 'success', is_error: false, num_turns: 4, final_text_prefix: '我看了一下，这件事不需要隔离。' } } });
+  const didNothing = classifyRunValidity({
+    events: [],
+    end: {
+      exit_code: 0,
+      host_result: {
+        subtype: 'success',
+        is_error: false,
+        num_turns: 4,
+        final_text_prefix: '我看了一下，这件事不需要隔离。',
+      },
+    },
+  });
   assert.equal(didNothing.valid, true);
   assert.equal(didNothing.signal, null);
 
@@ -91,7 +117,22 @@ test('回放「第 1 次 API Error、第 2 次正常」：重试成功后只留�
 test('端到端：整轮都是 API Error 时 k/n 全为 0/0，报告单列无效运行一节', async () => {
   const out = mkdtempSync(join(tmpdir(), 'protocol-routing-invalid-'));
   try {
-    const code = await main(['--driver', 'replay', '--replay', join(REPLAY, 'api-error'), '--runs', '2', '--cases', '1,8', '--out', out, '--quiet'], { sleep: noSleep });
+    const code = await main(
+      [
+        '--driver',
+        'replay',
+        '--replay',
+        join(REPLAY, 'api-error'),
+        '--runs',
+        '2',
+        '--cases',
+        '1,8',
+        '--out',
+        out,
+        '--quiet',
+      ],
+      { sleep: noSleep },
+    );
     assert.equal(code, 0, '无效运行不是「会话起不来」，不该让整轮非零退出');
     const report = JSON.parse(readFileSync(join(out, 'report.json'), 'utf8'));
     // 不进 k/n：两栏分母都是 0，而计划次数仍然是 2。
@@ -111,11 +152,15 @@ test('端到端：整轮都是 API Error 时 k/n 全为 0/0，报告单列无效
     assert.match(markdown, /## 无效运行（不进 k\/n）/u);
     assert.match(markdown, /result_is_error/u);
     assert.match(markdown, /另有 2 次无效运行，未计入 k\/n/u);
-  } finally { rmSync(out, { recursive: true, force: true }); }
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
 });
 
 test('没有无效运行时报告里那一节写「无」，逐条明细的计划 n 与有效 n 相等', () => {
-  const markdown = renderMarkdown(buildReport({ cases: CASES, runs: 3, driver: { driver: 'replay' }, sessions: [], invalidRuns: [] }));
+  const markdown = renderMarkdown(
+    buildReport({ cases: CASES, runs: 3, driver: { driver: 'replay' }, sessions: [], invalidRuns: [] }),
+  );
   assert.match(markdown, /## 无效运行（不进 k\/n）\n\n无。/u);
   assert.match(markdown, /\| # \| 类 \| 情境 \| 断言 \| k\/n \| 计划 n \| 无效 \|/u);
 });

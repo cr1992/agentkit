@@ -30,13 +30,18 @@ function findSkillDirs(dir) {
 
 function parseFrontmatter(text, rel) {
   const match = text.match(/^---\n([\s\S]*?)\n---/);
-  if (!match) { errors.push(`${rel}: 缺少 frontmatter（--- 包围块）`); return {}; }
+  if (!match) {
+    errors.push(`${rel}: 缺少 frontmatter（--- 包围块）`);
+    return {};
+  }
   const fields = {};
   let current = null;
   for (const line of match[1].split('\n')) {
     const kv = line.match(/^([a-zA-Z_-]+):\s*(.*)$/);
-    if (kv) { current = kv[1]; fields[current] = kv[2]; }
-    else if (current && /^\s+\S/.test(line)) fields[current] += ' ' + line.trim();
+    if (kv) {
+      current = kv[1];
+      fields[current] = kv[2];
+    } else if (current && /^\s+\S/.test(line)) fields[current] += ' ' + line.trim();
   }
   for (const key of ['name', 'description']) {
     if (fields[key]) fields[key] = fields[key].trim().replace(/^["']|["']$/g, '');
@@ -78,8 +83,10 @@ for (const dir of skillDirs) {
   if (name && !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) errors.push(`${rel}: name 必须是 kebab-case`);
   if (!description) errors.push(`${rel}: 缺少 description（宿主路由唯一依据）`);
   else {
-    if (description.length > MAX_DESCRIPTION) errors.push(`${rel}: description 超长（${description.length} > ${MAX_DESCRIPTION}）`);
-    if (!/当|时使用|时触发|Use when|use when/.test(description)) errors.push(`${rel}: description 缺少触发条件句（如「当用户说…时使用」或 Use when …）`);
+    if (description.length > MAX_DESCRIPTION)
+      errors.push(`${rel}: description 超长（${description.length} > ${MAX_DESCRIPTION}）`);
+    if (!/当|时使用|时触发|Use when|use when/.test(description))
+      errors.push(`${rel}: description 缺少触发条件句（如「当用户说…时使用」或 Use when …）`);
   }
   if (seen.has(name)) errors.push(`${rel}: name「${name}」与 ${seen.get(name)} 重复（安装按名字平铺，必须全仓唯一）`);
   seen.set(name, rel);
@@ -93,14 +100,21 @@ for (const dir of skillDirs) {
     const frel = file.slice(ROOT.length + 1);
     if (basename(file) === 'config.json' && !frel.includes('/examples/')) {
       let tracked = true;
-      try { execFileSync('git', ['ls-files', '--error-unmatch', frel], { cwd: ROOT, stdio: 'ignore' }); }
-      catch { tracked = false; }
+      try {
+        execFileSync('git', ['ls-files', '--error-unmatch', frel], { cwd: ROOT, stdio: 'ignore' });
+      } catch {
+        tracked = false;
+      }
       if (tracked) errors.push(`${frel}: 个人配置文件不应入库（个性化取值放 ~/.config/<skill-name>/）`);
       else warnings.push(`${frel}: 本地个人配置建议移到 ~/.config/<skill-name>/，避免被安装更新覆盖`);
       continue;
     }
     let text;
-    try { text = readFileSync(file, 'utf8'); } catch { continue; }
+    try {
+      text = readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
     if (/[\x00]/.test(text.slice(0, 512))) continue;
 
     for (const [re, label] of SENSITIVE) {
@@ -127,7 +141,10 @@ for (const dir of skillDirs) {
       // SKILL.md 里引用的按需文档必须真实存在于 docs/<域>/，否则 agent 执行命令只会拿到索引。
       for (const m of text.matchAll(/`agentkit docs ([a-z]+) ([a-z0-9-]+)`/g)) {
         const [, domain, topic] = m;
-        if (!DOC_DOMAINS.has(domain)) { errors.push(`${frel}: agentkit docs 未知文档域「${domain}」`); continue; }
+        if (!DOC_DOMAINS.has(domain)) {
+          errors.push(`${frel}: agentkit docs 未知文档域「${domain}」`);
+          continue;
+        }
         if (!existsSync(join(ROOT, 'docs', domain, `${topic}.md`))) {
           errors.push(`${frel}: agentkit docs ${domain} ${topic} 指向不存在的 docs/${domain}/${topic}.md`);
         }
@@ -139,5 +156,8 @@ for (const dir of skillDirs) {
 console.log(`扫描 ${skillDirs.length} 个 skill`);
 for (const w of warnings) console.log(`WARN  ${w}`);
 for (const e of errors) console.log(`ERROR ${e}`);
-if (errors.length) { console.log(`\n${errors.length} 个 error，${warnings.length} 个 warning`); process.exit(1); }
+if (errors.length) {
+  console.log(`\n${errors.length} 个 error，${warnings.length} 个 warning`);
+  process.exit(1);
+}
 console.log(`全部通过（${warnings.length} 个 warning）`);

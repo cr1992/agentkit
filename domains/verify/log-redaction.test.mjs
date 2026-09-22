@@ -32,7 +32,11 @@ test('日志脱敏不碰形似但不是 token 的普通文本', () => {
 });
 
 test('名字像秘密的环境变量，其值无论形态都被抹掉；Bearer 同理', () => {
-  const out = sanitizeLog('v=hunter2-plain\nAuthorization: Bearer abc.def-ghi', { DEPLOY_PASSWORD: 'hunter2-plain', PATH: '/usr/bin' }, 4096);
+  const out = sanitizeLog(
+    'v=hunter2-plain\nAuthorization: Bearer abc.def-ghi',
+    { DEPLOY_PASSWORD: 'hunter2-plain', PATH: '/usr/bin' },
+    4096,
+  );
   assert.equal(out.includes('hunter2-plain'), false);
   assert.match(out, /Bearer \[REDACTED\]/);
   assert.match(out, /v=\[REDACTED\]/);

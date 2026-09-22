@@ -47,13 +47,11 @@ export function createCommands(deps) {
 
   /** @param {Record<string,any>} record @param {{remote:string,branch:string}} upstream */
   function readRemoteBranchHead(record, upstream) {
-    const remote = gitTry(
-      ['ls-remote', '--heads', upstream.remote, `refs/heads/${upstream.branch}`],
-      record.path,
-      { timeoutMs: FETCH_TIMEOUT_MS },
-    );
+    const remote = gitTry(['ls-remote', '--heads', upstream.remote, `refs/heads/${upstream.branch}`], record.path, {
+      timeoutMs: FETCH_TIMEOUT_MS,
+    });
     if (!remote.ok) die(`无法读取 upstream ${upstream.remote}/${upstream.branch}。`);
-    return remote.out ? remote.out.split(/\s+/u)[0]?.toLowerCase() ?? null : null;
+    return remote.out ? (remote.out.split(/\s+/u)[0]?.toLowerCase() ?? null) : null;
   }
 
   /**
@@ -70,11 +68,15 @@ export function createCommands(deps) {
 
   /** @param {Record<string,any>} record @param {Record<string,any>} refresh @param {string} newHead */
   function reviewRefreshRewrite(record, refresh, newHead) {
-    const rewrite = [...(record.history_rewrites ?? [])].reverse().find((candidate) =>
-      candidate.kind === 'rebase'
-      && candidate.old_head === refresh.old_head
-      && candidate.new_head === newHead
-      && candidate.new_base_sha === refresh.target_sha);
+    const rewrite = [...(record.history_rewrites ?? [])]
+      .reverse()
+      .find(
+        (candidate) =>
+          candidate.kind === 'rebase' &&
+          candidate.old_head === refresh.old_head &&
+          candidate.new_head === newHead &&
+          candidate.new_base_sha === refresh.target_sha,
+      );
     if (!rewrite) die('refresh-review 找不到对应的 managed rebase lineage，拒绝推进或回滚。', 2);
     if (refresh.managed_rebase_token && refresh.managed_rebase_token !== rewrite.token) {
       die('refresh-review managed rebase token 已变化，拒绝推进或回滚。', 2);
@@ -86,19 +88,26 @@ export function createCommands(deps) {
   function recordReviewRefreshRebased(loaded, record, refresh, snapshot) {
     if (refresh.state === 'prepared') {
       const rewrite = reviewRefreshRewrite(record, refresh, snapshot.head);
-      return updateRecord(record, 'review_refresh_rebased', (next) => {
-        if (next.review_refresh?.token !== refresh.token) throw new WorktreeTraceError('REVIEW_REFRESH_CHANGED', 'refresh marker 已变化。');
-        next.review_refresh.state = 'rebased';
-        next.review_refresh.new_head = snapshot.head;
-        next.review_refresh.managed_rebase_token = rewrite.token;
-        next.review_refresh.rebased_at = new Date().toISOString();
-      }, {
-        token: refresh.token,
-        old_head: refresh.old_head,
-        new_head: snapshot.head,
-        target_ref: refresh.target_ref,
-        target_sha: refresh.target_sha,
-      }, loaded.context.common_dir);
+      return updateRecord(
+        record,
+        'review_refresh_rebased',
+        (next) => {
+          if (next.review_refresh?.token !== refresh.token)
+            throw new WorktreeTraceError('REVIEW_REFRESH_CHANGED', 'refresh marker 已变化。');
+          next.review_refresh.state = 'rebased';
+          next.review_refresh.new_head = snapshot.head;
+          next.review_refresh.managed_rebase_token = rewrite.token;
+          next.review_refresh.rebased_at = new Date().toISOString();
+        },
+        {
+          token: refresh.token,
+          old_head: refresh.old_head,
+          new_head: snapshot.head,
+          target_ref: refresh.target_ref,
+          target_sha: refresh.target_sha,
+        },
+        loaded.context.common_dir,
+      );
     }
     if (refresh.new_head && refresh.new_head !== snapshot.head) {
       die(`refresh-review HEAD 漂移：record=${refresh.new_head}, live=${snapshot.head}`, 2);
@@ -111,54 +120,75 @@ export function createCommands(deps) {
     const upstream = { remote: refresh.upstream_remote, branch: refresh.upstream_branch };
     const remoteHead = readRemoteBranchHead(record, upstream);
     if (remoteHead === null) {
-      die(`refresh-review upstream 分支 ${upstream.remote}/${upstream.branch} 已不存在；拒绝隐式重建或 force push。`, 2);
+      die(
+        `refresh-review upstream 分支 ${upstream.remote}/${upstream.branch} 已不存在；拒绝隐式重建或 force push。`,
+        2,
+      );
     }
     if (remoteHead === newHead) return;
     if (remoteHead !== refresh.upstream_sha) {
-      die(`refresh-review upstream lease 已变化：expected=${refresh.upstream_sha}, actual=${remoteHead}；拒绝 force push。`, 2);
+      die(
+        `refresh-review upstream lease 已变化：expected=${refresh.upstream_sha}, actual=${remoteHead}；拒绝 force push。`,
+        2,
+      );
     }
-    const pushed = runFileCapture('git', [
-      'push',
-      `--force-with-lease=refs/heads/${upstream.branch}:${refresh.upstream_sha}`,
-      upstream.remote,
-      `HEAD:refs/heads/${upstream.branch}`,
-    ], { cwd: record.path, timeoutMs: SUBMIT_PUSH_TIMEOUT_MS });
+    const pushed = runFileCapture(
+      'git',
+      [
+        'push',
+        `--force-with-lease=refs/heads/${upstream.branch}:${refresh.upstream_sha}`,
+        upstream.remote,
+        `HEAD:refs/heads/${upstream.branch}`,
+      ],
+      { cwd: record.path, timeoutMs: SUBMIT_PUSH_TIMEOUT_MS },
+    );
     if (!pushed.ok) {
-      die(`refresh-review force-with-lease push 失败；可修复凭证/网络后重跑 --continue。\n${(pushed.out || 'unknown error').slice(0, 1000)}`);
+      die(
+        `refresh-review force-with-lease push 失败；可修复凭证/网络后重跑 --continue。\n${(pushed.out || 'unknown error').slice(0, 1000)}`,
+      );
     }
     const confirmed = readRemoteBranchHead(record, upstream);
-    if (confirmed !== newHead) die(`refresh-review push 后远端回读不一致：expected=${newHead}, actual=${confirmed ?? 'missing'}`);
+    if (confirmed !== newHead)
+      die(`refresh-review push 后远端回读不一致：expected=${newHead}, actual=${confirmed ?? 'missing'}`);
   }
 
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} record @param {Record<string,any>} refresh @param {string} newHead */
   function recordReviewRefreshPushed(loaded, record, refresh, newHead) {
     if (record.review_refresh.state === 'pushed') return record;
-    return updateRecord(record, 'review_refresh_pushed', (next) => {
-      if (next.review_refresh?.token !== refresh.token) throw new WorktreeTraceError('REVIEW_REFRESH_CHANGED', 'push 登记时 refresh marker 已变化。');
-      next.review_refresh.state = 'pushed';
-      next.review_refresh.pushed_at = new Date().toISOString();
-      next.task_status = 'ready_for_review';
-      next.last_head = newHead;
-      next.last_seen_at = new Date().toISOString();
-      if (next.change_request) {
-        next.change_request.head_sha = newHead;
-        next.change_request.source_head_stale = false;
-        next.change_request.refreshed_at = new Date().toISOString();
-      }
-    }, {
-      token: refresh.token,
-      upstream_remote: refresh.upstream_remote,
-      upstream_branch: refresh.upstream_branch,
-      old_upstream_sha: refresh.upstream_sha,
-      new_head: newHead,
-    }, loaded.context.common_dir);
+    return updateRecord(
+      record,
+      'review_refresh_pushed',
+      (next) => {
+        if (next.review_refresh?.token !== refresh.token)
+          throw new WorktreeTraceError('REVIEW_REFRESH_CHANGED', 'push 登记时 refresh marker 已变化。');
+        next.review_refresh.state = 'pushed';
+        next.review_refresh.pushed_at = new Date().toISOString();
+        next.task_status = 'ready_for_review';
+        next.last_head = newHead;
+        next.last_seen_at = new Date().toISOString();
+        if (next.change_request) {
+          next.change_request.head_sha = newHead;
+          next.change_request.source_head_stale = false;
+          next.change_request.refreshed_at = new Date().toISOString();
+        }
+      },
+      {
+        token: refresh.token,
+        upstream_remote: refresh.upstream_remote,
+        upstream_branch: refresh.upstream_branch,
+        old_upstream_sha: refresh.upstream_sha,
+        new_head: newHead,
+      },
+      loaded.context.common_dir,
+    );
   }
 
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} record @param {Record<string,any>} refresh @param {string} newHead */
   function ensureCompletedReviewWatcher(loaded, record, refresh, newHead) {
-    const active = record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
-      ? record.auto_reclaim
-      : null;
+    const active =
+      record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
+        ? record.auto_reclaim
+        : null;
     if (active && active.head_sha === newHead && active.target_ref === refresh.target_ref) return record;
     return startWatcher(loaded, record, {
       targetRef: refresh.target_ref,
@@ -176,18 +206,25 @@ export function createCommands(deps) {
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} record @param {Record<string,any>} refresh @param {string} newHead */
   function recordReviewRefreshCompleted(loaded, record, refresh, newHead) {
     const completedAt = new Date().toISOString();
-    return updateRecord(record, 'review_refresh_completed', (next) => {
-      if (next.review_refresh?.token !== refresh.token) throw new WorktreeTraceError('REVIEW_REFRESH_CHANGED', '完成登记时 refresh marker 已变化。');
-      next.review_refreshes ??= [];
-      next.review_refreshes.push({ ...next.review_refresh, state: 'completed', completed_at: completedAt });
-      next.review_refresh = null;
-    }, {
-      token: refresh.token,
-      old_head: refresh.old_head,
-      new_head: newHead,
-      target_ref: refresh.target_ref,
-      target_sha: refresh.target_sha,
-    }, loaded.context.common_dir);
+    return updateRecord(
+      record,
+      'review_refresh_completed',
+      (next) => {
+        if (next.review_refresh?.token !== refresh.token)
+          throw new WorktreeTraceError('REVIEW_REFRESH_CHANGED', '完成登记时 refresh marker 已变化。');
+        next.review_refreshes ??= [];
+        next.review_refreshes.push({ ...next.review_refresh, state: 'completed', completed_at: completedAt });
+        next.review_refresh = null;
+      },
+      {
+        token: refresh.token,
+        old_head: refresh.old_head,
+        new_head: newHead,
+        target_ref: refresh.target_ref,
+        target_sha: refresh.target_sha,
+      },
+      loaded.context.common_dir,
+    );
   }
 
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} record */
@@ -197,7 +234,8 @@ export function createCommands(deps) {
     if (refresh.state === 'aborting') die('review refresh 已进入回滚收口；请运行 refresh-review --abort。', 2);
     if (record.history_operation) die('managed rebase 尚未完成；先解决冲突并运行 refresh-review --continue。', 2);
     const snapshot = liveGitSnapshot(record);
-    if (!snapshot.present || snapshot.dirty !== false || !snapshot.head) die('refresh-review 完成前要求 worktree clean 且 HEAD 可读。', 2);
+    if (!snapshot.present || snapshot.dirty !== false || !snapshot.head)
+      die('refresh-review 完成前要求 worktree clean 且 HEAD 可读。', 2);
     if (!isAncestor(record.path, refresh.target_sha, snapshot.head)) {
       die(`refresh-review live HEAD 未基于冻结 target ${refresh.target_sha}，拒绝 push。`, 2);
     }
@@ -209,7 +247,9 @@ export function createCommands(deps) {
     record = recordReviewRefreshPushed(loaded, record, current, newHead);
     record = ensureCompletedReviewWatcher(loaded, record, current, newHead);
     record = recordReviewRefreshCompleted(loaded, record, current, newHead);
-    log(`review refresh 已完成 ${record.task}: ${current.old_head.slice(0, 12)} -> ${newHead.slice(0, 12)}；已 force-with-lease push 并重新武装 watcher。`);
+    log(
+      `review refresh 已完成 ${record.task}: ${current.old_head.slice(0, 12)} -> ${newHead.slice(0, 12)}；已 force-with-lease push 并重新武装 watcher。`,
+    );
   }
 
   /** @param {Record<string,any>} record @param {Record<string,any>} refresh */
@@ -245,11 +285,20 @@ export function createCommands(deps) {
     }
     const snapshot = liveGitSnapshot(record);
     const currentBranch = gitTry(['branch', '--show-current'], record.path);
-    if (!snapshot.present || snapshot.dirty !== false || !snapshot.head || !currentBranch.ok || currentBranch.out !== record.branch) {
+    if (
+      !snapshot.present ||
+      snapshot.dirty !== false ||
+      !snapshot.head ||
+      !currentBranch.ok ||
+      currentBranch.out !== record.branch
+    ) {
       die('refresh-review abort 要求 clean、存在且仍位于登记 branch 的 worktree。', 2);
     }
     if (snapshot.head !== refresh.old_head && snapshot.head !== refresh.new_head) {
-      die(`refresh-review abort HEAD 漂移：old=${refresh.old_head}, rebased=${refresh.new_head}, live=${snapshot.head}`, 2);
+      die(
+        `refresh-review abort HEAD 漂移：old=${refresh.old_head}, rebased=${refresh.new_head}, live=${snapshot.head}`,
+        2,
+      );
     }
     if (snapshot.head !== refresh.old_head) {
       const reset = gitTry(['reset', '--hard', refresh.old_head], record.path);
@@ -273,7 +322,8 @@ export function createCommands(deps) {
 
   /** @param {Record<string,any>} next @param {Record<string,any>} refresh @param {Record<string,any>} rewrite @param {string} abortedAt */
   function applyReviewRefreshRollback(next, refresh, rewrite, abortedAt) {
-    if (next.base_sha !== refresh.target_sha) throw new WorktreeTraceError('REVIEW_REFRESH_BASE_CHANGED', 'abort 补偿前 base 已变化。');
+    if (next.base_sha !== refresh.target_sha)
+      throw new WorktreeTraceError('REVIEW_REFRESH_BASE_CHANGED', 'abort 补偿前 base 已变化。');
     const epoch = next.ownership_epochs?.at(-1);
     if (epoch && !epoch.ended_at) {
       epoch.ended_at = abortedAt;
@@ -311,33 +361,42 @@ export function createCommands(deps) {
     if (record.review_refresh?.state === 'aborting') return record;
     const abortedAt = new Date().toISOString();
     const rewrite = pendingRebase ? null : reviewRefreshRewrite(record, refresh, refresh.new_head);
-    return updateRecord(record, 'review_refresh_abort_restored', (next) => {
-      if (next.review_refresh?.token !== refresh.token) throw new WorktreeTraceError('REVIEW_REFRESH_CHANGED', 'abort 恢复时 refresh marker 已变化。');
-      if (rewrite) applyReviewRefreshRollback(next, refresh, rewrite, abortedAt);
-      next.review_refresh.state = 'aborting';
-      next.review_refresh.abort_kind = rewrite ? 'rebased_before_push' : 'managed_rebase';
-      next.review_refresh.restored_at = abortedAt;
-      next.task_status = refresh.old_task_status ?? 'ready_for_review';
-      next.last_head = refresh.old_head;
-      next.last_seen_at = abortedAt;
-    }, {
-      token: refresh.token,
-      abort_kind: rewrite ? 'rebased_before_push' : 'managed_rebase',
-      restored_head: refresh.old_head,
-      restored_base_ref: refresh.old_base_ref ?? rewrite?.old_base_ref ?? record.base_ref,
-      restored_base_sha: refresh.old_base_sha,
-      managed_rebase_token: rewrite?.token ?? null,
-    }, loaded.context.common_dir);
+    return updateRecord(
+      record,
+      'review_refresh_abort_restored',
+      (next) => {
+        if (next.review_refresh?.token !== refresh.token)
+          throw new WorktreeTraceError('REVIEW_REFRESH_CHANGED', 'abort 恢复时 refresh marker 已变化。');
+        if (rewrite) applyReviewRefreshRollback(next, refresh, rewrite, abortedAt);
+        next.review_refresh.state = 'aborting';
+        next.review_refresh.abort_kind = rewrite ? 'rebased_before_push' : 'managed_rebase';
+        next.review_refresh.restored_at = abortedAt;
+        next.task_status = refresh.old_task_status ?? 'ready_for_review';
+        next.last_head = refresh.old_head;
+        next.last_seen_at = abortedAt;
+      },
+      {
+        token: refresh.token,
+        abort_kind: rewrite ? 'rebased_before_push' : 'managed_rebase',
+        restored_head: refresh.old_head,
+        restored_base_ref: refresh.old_base_ref ?? rewrite?.old_base_ref ?? record.base_ref,
+        restored_base_sha: refresh.old_base_sha,
+        managed_rebase_token: rewrite?.token ?? null,
+      },
+      loaded.context.common_dir,
+    );
   }
 
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} record @param {Record<string,any>} refresh */
   function ensureAbortedReviewWatcher(loaded, record, refresh) {
-    const active = record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
-      ? record.auto_reclaim
-      : null;
+    const active =
+      record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
+        ? record.auto_reclaim
+        : null;
     const heartbeat = readWatcherHeartbeat(loaded.context.common_dir, record.worktree_id);
     const health = watcherHealth(record, heartbeat);
-    if (active && active.head_sha === refresh.old_head && active.target_ref === refresh.target_ref && health.healthy) return record;
+    if (active && active.head_sha === refresh.old_head && active.target_ref === refresh.target_ref && health.healthy)
+      return record;
     return startWatcher(loaded, record, {
       targetRef: refresh.target_ref,
       targetSha: refresh.target_base_sha ?? refresh.old_base_sha,
@@ -354,14 +413,20 @@ export function createCommands(deps) {
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} record @param {Record<string,any>} refresh */
   function recordReviewRefreshAborted(loaded, record, refresh) {
     const completedAt = new Date().toISOString();
-    return updateRecord(record, 'review_refresh_aborted', (next) => {
-      if (next.review_refresh?.token !== refresh.token || next.review_refresh?.state !== 'aborting') {
-        throw new WorktreeTraceError('REVIEW_REFRESH_CHANGED', 'abort 收口时 refresh marker 已变化。');
-      }
-      next.review_refreshes ??= [];
-      next.review_refreshes.push({ ...next.review_refresh, state: 'aborted', aborted_at: completedAt });
-      next.review_refresh = null;
-    }, { token: refresh.token, restored_head: refresh.old_head }, loaded.context.common_dir);
+    return updateRecord(
+      record,
+      'review_refresh_aborted',
+      (next) => {
+        if (next.review_refresh?.token !== refresh.token || next.review_refresh?.state !== 'aborting') {
+          throw new WorktreeTraceError('REVIEW_REFRESH_CHANGED', 'abort 收口时 refresh marker 已变化。');
+        }
+        next.review_refreshes ??= [];
+        next.review_refreshes.push({ ...next.review_refresh, state: 'aborted', aborted_at: completedAt });
+        next.review_refresh = null;
+      },
+      { token: refresh.token, restored_head: refresh.old_head },
+      loaded.context.common_dir,
+    );
   }
 
   /**
@@ -422,7 +487,10 @@ export function createCommands(deps) {
     const upstream = reviewRefreshUpstream(record);
     const sha = readRemoteBranchHead(record, upstream);
     if (sha === null) {
-      die(`refresh-review upstream 分支 ${upstream.remote}/${upstream.branch} 已不存在；无法冻结 source branch 边界。`, 2);
+      die(
+        `refresh-review upstream 分支 ${upstream.remote}/${upstream.branch} 已不存在；无法冻结 source branch 边界。`,
+        2,
+      );
     }
     if (sha !== snapshot.head) {
       die(`refresh-review upstream 与冻结 HEAD 不一致：expected=${snapshot.head}, actual=${sha}。`, 2);
@@ -433,49 +501,57 @@ export function createCommands(deps) {
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} record @param {Record<string,any>} preparation */
   function recordReviewRefreshPrepared(loaded, record, preparation) {
     const { token, snapshot, watch, target, upstream, reason, pauseBeforePush, explicitConfig } = preparation;
-    return updateRecord(record, 'review_refresh_prepared', (next) => {
-      if (next.review_refresh || next.history_operation) throw new WorktreeTraceError('REVIEW_REFRESH_ALREADY_PENDING', '刷新准备时已有操作。');
-      const live = liveGitSnapshot(next);
-      if (live.head !== snapshot.head || live.dirty !== false) throw new WorktreeTraceError('REVIEW_REFRESH_HEAD_CHANGED', '刷新准备时 worktree 已漂移。');
-      if (next.auto_reclaim?.token !== watch.token || next.auto_reclaim?.head_sha !== snapshot.head) {
-        throw new WorktreeTraceError('REVIEW_REFRESH_WATCH_CHANGED', '刷新准备时 watcher 已变化。');
-      }
-      next.review_refresh = {
+    return updateRecord(
+      record,
+      'review_refresh_prepared',
+      (next) => {
+        if (next.review_refresh || next.history_operation)
+          throw new WorktreeTraceError('REVIEW_REFRESH_ALREADY_PENDING', '刷新准备时已有操作。');
+        const live = liveGitSnapshot(next);
+        if (live.head !== snapshot.head || live.dirty !== false)
+          throw new WorktreeTraceError('REVIEW_REFRESH_HEAD_CHANGED', '刷新准备时 worktree 已漂移。');
+        if (next.auto_reclaim?.token !== watch.token || next.auto_reclaim?.head_sha !== snapshot.head) {
+          throw new WorktreeTraceError('REVIEW_REFRESH_WATCH_CHANGED', '刷新准备时 watcher 已变化。');
+        }
+        next.review_refresh = {
+          token,
+          state: 'prepared',
+          old_head: snapshot.head,
+          old_task_status: next.task_status,
+          old_base_ref: next.base_ref,
+          old_base_sha: next.base_sha,
+          old_base_reason: next.base_reason ?? null,
+          old_stack_parent: structuredClone(next.stack_parent ?? null),
+          old_change_request: structuredClone(next.change_request ?? null),
+          target_ref: target.ref,
+          target_sha: target.sha,
+          target_base_sha: watch.target_base_sha ?? next.base_sha,
+          upstream_remote: upstream.remote,
+          upstream_branch: upstream.branch,
+          upstream_sha: upstream.sha,
+          interval_ms: watch.interval_ms,
+          change_ref: watch.change_ref ?? null,
+          notify: watch.notify ?? 'auto',
+          watch_armed_by: watch.armed_by ?? 'explicit',
+          pause_before_push: pauseBeforePush,
+          explicit_config: explicitConfig ? loaded.profile_path : null,
+          reason,
+          prepared_at: new Date().toISOString(),
+        };
+      },
+      {
         token,
-        state: 'prepared',
         old_head: snapshot.head,
-        old_task_status: next.task_status,
-        old_base_ref: next.base_ref,
-        old_base_sha: next.base_sha,
-        old_base_reason: next.base_reason ?? null,
-        old_stack_parent: structuredClone(next.stack_parent ?? null),
-        old_change_request: structuredClone(next.change_request ?? null),
+        old_base_sha: record.base_sha,
         target_ref: target.ref,
         target_sha: target.sha,
-        target_base_sha: watch.target_base_sha ?? next.base_sha,
         upstream_remote: upstream.remote,
         upstream_branch: upstream.branch,
         upstream_sha: upstream.sha,
-        interval_ms: watch.interval_ms,
-        change_ref: watch.change_ref ?? null,
-        notify: watch.notify ?? 'auto',
-        watch_armed_by: watch.armed_by ?? 'explicit',
-        pause_before_push: pauseBeforePush,
-        explicit_config: explicitConfig ? loaded.profile_path : null,
-        reason,
-        prepared_at: new Date().toISOString(),
-      };
-    }, {
-      token,
-      old_head: snapshot.head,
-      old_base_sha: record.base_sha,
-      target_ref: target.ref,
-      target_sha: target.sha,
-      upstream_remote: upstream.remote,
-      upstream_branch: upstream.branch,
-      upstream_sha: upstream.sha,
-      prediction: predictReviewRefresh(record.path, record.base_sha, target.sha, snapshot.head),
-    }, loaded.context.common_dir);
+        prediction: predictReviewRefresh(record.path, record.base_sha, target.sha, snapshot.head),
+      },
+      loaded.context.common_dir,
+    );
   }
 
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} record @param {Record<string,any>} preparation */
@@ -483,31 +559,42 @@ export function createCommands(deps) {
     const live = liveGitSnapshot(record);
     if (!live.head || record.history_operation) die('refresh-review 无法在 push 前形成稳定 rebase 结果。', 2);
     const rewrite = reviewRefreshRewrite(record, record.review_refresh, live.head);
-    updateRecord(record, 'review_refresh_rebased', (next) => {
-      if (next.review_refresh?.token !== preparation.token) throw new WorktreeTraceError('REVIEW_REFRESH_CHANGED', '暂停前 refresh marker 已变化。');
-      next.review_refresh.state = 'rebased';
-      next.review_refresh.new_head = live.head;
-      next.review_refresh.managed_rebase_token = rewrite.token;
-      next.review_refresh.rebased_at = new Date().toISOString();
-    }, {
-      token: preparation.token,
-      old_head: preparation.snapshot.head,
-      new_head: live.head,
-      target_ref: preparation.target.ref,
-      target_sha: preparation.target.sha,
-    }, loaded.context.common_dir);
-    log(`review refresh 已完成本地 rebase，暂停在 push 前；运行项目门禁后执行 refresh-review ${record.task} --continue。`);
+    updateRecord(
+      record,
+      'review_refresh_rebased',
+      (next) => {
+        if (next.review_refresh?.token !== preparation.token)
+          throw new WorktreeTraceError('REVIEW_REFRESH_CHANGED', '暂停前 refresh marker 已变化。');
+        next.review_refresh.state = 'rebased';
+        next.review_refresh.new_head = live.head;
+        next.review_refresh.managed_rebase_token = rewrite.token;
+        next.review_refresh.rebased_at = new Date().toISOString();
+      },
+      {
+        token: preparation.token,
+        old_head: preparation.snapshot.head,
+        new_head: live.head,
+        target_ref: preparation.target.ref,
+        target_sha: preparation.target.sha,
+      },
+      loaded.context.common_dir,
+    );
+    log(
+      `review refresh 已完成本地 rebase，暂停在 push 前；运行项目门禁后执行 refresh-review ${record.task} --continue。`,
+    );
   }
 
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} record @param {Record<string,any>} preparation */
   function executeReviewRefresh(loaded, record, preparation) {
-    const rebased = runManagedRebaseChild(record, [
-      '--onto', preparation.target.ref,
-      '--expected-head', preparation.snapshot.head,
-      '--reason', preparation.reason,
-    ], preparation.explicitConfig ? loaded.profile_path : null);
+    const rebased = runManagedRebaseChild(
+      record,
+      ['--onto', preparation.target.ref, '--expected-head', preparation.snapshot.head, '--reason', preparation.reason],
+      preparation.explicitConfig ? loaded.profile_path : null,
+    );
     if (!rebased.ok) {
-      die(`review refresh 停在 managed rebase；解决冲突并 git add 后运行 refresh-review ${record.task} --continue，或用 --abort 放弃。\n${rebased.out}`);
+      die(
+        `review refresh 停在 managed rebase；解决冲突并 git add 后运行 refresh-review ${record.task} --continue，或用 --abort 放弃。\n${rebased.out}`,
+      );
     }
     record = selectRecord(loadRecords(loaded.context.common_dir), record.task, record.worktree_id);
     if (preparation.pauseBeforePush) {
@@ -527,11 +614,16 @@ export function createCommands(deps) {
     if (args.flags.get('abort') && args.flags.get('continue')) die('refresh-review --abort 与 --continue 互斥。', 2);
     const explicitConfig = flag(args.flags, 'config');
     const loaded = loadRepositoryProfile({ explicitConfigPath: explicitConfig });
-    let record = selectRecord(loadRecords(loaded.context.common_dir), args.positionals[0] ?? null, flag(args.flags, 'id'));
+    let record = selectRecord(
+      loadRecords(loaded.context.common_dir),
+      args.positionals[0] ?? null,
+      flag(args.flags, 'id'),
+    );
     if (args.flags.get('abort')) return abortReviewRefresh(loaded, record, explicitConfig);
     if (record.review_refresh) {
       if (!args.flags.get('continue')) {
-        const recovery = record.review_refresh.state === 'aborting' ? '--abort' : '--continue（或在允许状态用 --abort）';
+        const recovery =
+          record.review_refresh.state === 'aborting' ? '--abort' : '--continue（或在允许状态用 --abort）';
         die(`已有 review refresh；运行 refresh-review ${record.task} ${recovery} 恢复。`, 2);
       }
       return continueReviewRefresh(loaded, record, explicitConfig);
@@ -542,9 +634,10 @@ export function createCommands(deps) {
       die(`refresh-review 要求 ready_for_review/present，当前 ${record.task_status}/${record.worktree_state}。`, 2);
     }
     const snapshot = historyChangeSnapshot(record, 'refresh-review');
-    const watch = record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
-      ? structuredClone(record.auto_reclaim)
-      : null;
+    const watch =
+      record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
+        ? structuredClone(record.auto_reclaim)
+        : null;
     if (!watch || watch.head_sha !== snapshot.head) die('refresh-review 要求 watcher 已冻结当前 live HEAD。', 2);
     const target = resolveReviewRefreshTarget(record, args, snapshot, watch);
     if (!target) return;
@@ -565,8 +658,6 @@ export function createCommands(deps) {
     record = recordReviewRefreshPrepared(loaded, record, preparation);
     executeReviewRefresh(loaded, record, preparation);
   }
-
-
 
   return {
     cmdRefreshReview,

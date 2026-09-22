@@ -40,7 +40,10 @@ export const MAX_ATTEMPTS = 3;
 /** 重试退避（毫秒），按尝试次序取。故障多半是瞬时网络/证书问题，立刻重试大概率还是同一个错。 */
 export const RETRY_BACKOFF_MS = Object.freeze([5000, 20000]);
 
-const defaultSleep = (/** @type {number} */ ms) => new Promise((done) => { setTimeout(done, ms); });
+const defaultSleep = (/** @type {number} */ ms) =>
+  new Promise((done) => {
+    setTimeout(done, ms);
+  });
 
 /** 布尔开关：不吃下一个 token。 */
 const FLAGS = new Set(['quiet', 'allow-bypass-permissions']);
@@ -48,13 +51,33 @@ const FLAGS = new Set(['quiet', 'allow-bypass-permissions']);
 /** @param {string[]} argv */
 export function parseArgs(argv) {
   /** @type {Record<string, string | boolean>} */
-  const options = { driver: 'replay', runs: '3', cases: 'all', shard: '', out: '', replay: '', model: '', bin: 'claude', 'budget-usd': '', quiet: false, 'allow-bypass-permissions': false };
+  const options = {
+    driver: 'replay',
+    runs: '3',
+    cases: 'all',
+    shard: '',
+    out: '',
+    replay: '',
+    model: '',
+    bin: 'claude',
+    'budget-usd': '',
+    quiet: false,
+    'allow-bypass-permissions': false,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (!token.startsWith('--')) throw new Error(`未知参数 ${token}`);
     const key = token.slice(2);
-    if (!Object.hasOwn(options, key)) throw new Error(`未知选项 --${key}，可选：${Object.keys(options).map((name) => `--${name}`).join(' ')}`);
-    if (FLAGS.has(key)) { options[key] = true; continue; }
+    if (!Object.hasOwn(options, key))
+      throw new Error(
+        `未知选项 --${key}，可选：${Object.keys(options)
+          .map((name) => `--${name}`)
+          .join(' ')}`,
+      );
+    if (FLAGS.has(key)) {
+      options[key] = true;
+      continue;
+    }
     const value = argv[i + 1];
     if (value === undefined || value.startsWith('--')) throw new Error(`--${key} 需要取值`);
     options[key] = value;
@@ -70,7 +93,8 @@ function makeDriver(options, outDir) {
     return createReplayDriver({ dir: resolve(options.replay) });
   }
   if (options.driver === 'claude-headless') {
-    if (!options.model) throw new Error('--driver claude-headless 需要 --model <模型 ID>：评测必须固定模型并记录模型 ID');
+    if (!options.model)
+      throw new Error('--driver claude-headless 需要 --model <模型 ID>：评测必须固定模型并记录模型 ID');
     return createHeadlessClaudeDriver({
       bin: options.bin,
       model: options.model,
@@ -100,7 +124,14 @@ function makeDriver(options, outDir) {
  * }} input
  * @returns {Promise<{ observation: any, attempts: number, validity: import('./lib/run-validity.mjs').Validity, discarded: Array<import('./lib/run-validity.mjs').Validity> }>}
  */
-export async function runSessionWithRetries({ driver, evalCase, runIndex, maxAttempts = MAX_ATTEMPTS, backoffMs = RETRY_BACKOFF_MS, sleep = undefined }) {
+export async function runSessionWithRetries({
+  driver,
+  evalCase,
+  runIndex,
+  maxAttempts = MAX_ATTEMPTS,
+  backoffMs = RETRY_BACKOFF_MS,
+  sleep = undefined,
+}) {
   const wait = sleep ?? defaultSleep;
   /** @type {Array<import('./lib/run-validity.mjs').Validity>} */
   const discarded = [];
@@ -129,7 +160,8 @@ export async function main(argv, hooks = {}) {
   // merge-reports.mjs 合成一份，合并结果与串行逐项相等（见 lib/merge.mjs）。
   const shard = options.shard ? parseShardSpec(String(options.shard)) : null;
   const cases = shard ? selectShard(selected, shard) : selected;
-  if (shard && !cases.length) throw new Error(`--shard ${options.shard} 这一片是空的：被选中的用例（${selected.length} 条）比分片数还少`);
+  if (shard && !cases.length)
+    throw new Error(`--shard ${options.shard} 这一片是空的：被选中的用例（${selected.length} 条）比分片数还少`);
   const outDir = resolve(String(options.out) || `./protocol-routing-eval-${Date.now()}`);
   // 先建驱动器再建目录：被拒绝时（例如没显式同意 bypassPermissions）不该留下空目录。
   const driver = makeDriver(options, outDir);
@@ -147,10 +179,19 @@ export async function main(argv, hooks = {}) {
     for (let runIndex = 1; runIndex <= runs; runIndex += 1) {
       try {
         const attempted = await runSessionWithRetries({ driver, evalCase, runIndex, sleep: hooks.sleep });
-        if (attempted.validity.valid) { sessions.push({ case_id: evalCase.id, run: runIndex, observation: attempted.observation }); continue; }
+        if (attempted.validity.valid) {
+          sessions.push({ case_id: evalCase.id, run: runIndex, observation: attempted.observation });
+          continue;
+        }
         // 无效运行：基础设施故障，不是协议行为。重试用尽后记 `invalid`，**不进 k/n**，
         // 在报告里单列一节（用例、run、原因摘要、重试次数）。判据见 lib/run-validity.mjs。
-        invalidRuns.push({ case_id: evalCase.id, run: runIndex, attempts: attempted.attempts, signal: attempted.validity.signal, reason: attempted.validity.reason });
+        invalidRuns.push({
+          case_id: evalCase.id,
+          run: runIndex,
+          attempts: attempted.attempts,
+          signal: attempted.validity.signal,
+          reason: attempted.validity.reason,
+        });
       } catch (error) {
         // 单个会话起不来不终止整轮，但也不算「不符合」——没跑出来的会话不是数据点。
         // 它表现为该用例的 n 比 --runs 小，同时列进 report.session_failures，退出码 1。
@@ -179,7 +220,8 @@ export async function main(argv, hooks = {}) {
   writeFileSync(resolve(outDir, 'report.md'), markdown);
   if (!options.quiet) process.stdout.write(markdown);
   if (failures.length) {
-    if (!options.quiet) process.stderr.write(redactSecrets(`\n${failures.length} 个会话没有跑出记录：\n- ${failures.join('\n- ')}\n`));
+    if (!options.quiet)
+      process.stderr.write(redactSecrets(`\n${failures.length} 个会话没有跑出记录：\n- ${failures.join('\n- ')}\n`));
     return 1;
   }
   return 0;
@@ -187,6 +229,11 @@ export async function main(argv, hooks = {}) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(process.argv.slice(2))
-    .then((code) => { process.exitCode = code; })
-    .catch((error) => { process.stderr.write(`${error.message}\n`); process.exitCode = 2; });
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((error) => {
+      process.stderr.write(`${error.message}\n`);
+      process.exitCode = 2;
+    });
 }

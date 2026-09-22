@@ -15,20 +15,26 @@ const HELP_COMMANDS = new Set([undefined, '--help', '-h', 'help', 'capabilities'
 export class RuntimeBundleError extends Error {}
 
 function readJson(path, label) {
-  try { return JSON.parse(readFileSync(path, 'utf8')); }
-  catch (error) { throw new RuntimeBundleError(`${label} 无法解析：${error instanceof Error ? error.message : String(error)}`); }
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    throw new RuntimeBundleError(`${label} 无法解析：${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function safeExistingPath(packageRoot, value, label) {
-  if (typeof value !== 'string' || !value || isAbsolute(value)) throw new RuntimeBundleError(`${label} 必须是包内相对路径`);
+  if (typeof value !== 'string' || !value || isAbsolute(value))
+    throw new RuntimeBundleError(`${label} 必须是包内相对路径`);
   const absolute = resolve(packageRoot, value);
   const lexical = relative(packageRoot, absolute);
-  if (!lexical || lexical === '..' || lexical.startsWith(`..${sep}`) || isAbsolute(lexical)) throw new RuntimeBundleError(`${label} 越出包根`);
+  if (!lexical || lexical === '..' || lexical.startsWith(`..${sep}`) || isAbsolute(lexical))
+    throw new RuntimeBundleError(`${label} 越出包根`);
   if (!existsSync(absolute)) throw new RuntimeBundleError(`${label} 不存在：${value}`);
   const realRoot = realpathSync(packageRoot);
   const real = realpathSync(absolute);
   const resolved = relative(realRoot, real);
-  if (resolved === '..' || resolved.startsWith(`..${sep}`) || isAbsolute(resolved)) throw new RuntimeBundleError(`${label} 通过符号链接越出包根`);
+  if (resolved === '..' || resolved.startsWith(`..${sep}`) || isAbsolute(resolved))
+    throw new RuntimeBundleError(`${label} 通过符号链接越出包根`);
   return absolute;
 }
 
@@ -41,26 +47,37 @@ export function validateShellManifest(packageRoot = DEFAULT_PACKAGE_ROOT) {
   const pkg = readJson(resolve(packageRoot, 'package.json'), 'package.json');
   if (manifest.schema_version !== 1) throw new RuntimeBundleError('shell manifest schema_version 必须为 1');
   if (manifest.package_name !== pkg.name || manifest.package_version !== pkg.version) {
-    throw new RuntimeBundleError(`CLI/shell 版本不匹配：package ${pkg.name}@${pkg.version}，manifest ${manifest.package_name}@${manifest.package_version}`);
+    throw new RuntimeBundleError(
+      `CLI/shell 版本不匹配：package ${pkg.name}@${pkg.version}，manifest ${manifest.package_name}@${manifest.package_version}`,
+    );
   }
   if (manifest.cli?.command !== 'agentkit') throw new RuntimeBundleError('shell manifest CLI 命令必须为 agentkit');
   safeExistingPath(packageRoot, manifest.cli?.entry, 'shell manifest cli.entry');
 
   const names = Object.keys(manifest.skills ?? {}).sort();
-  if (JSON.stringify(names) !== JSON.stringify([...SKILLS].sort())) throw new RuntimeBundleError('shell manifest 必须且只能声明四件套 Skill');
+  if (JSON.stringify(names) !== JSON.stringify([...SKILLS].sort()))
+    throw new RuntimeBundleError('shell manifest 必须且只能声明四件套 Skill');
   for (const skill of SKILLS) {
     const descriptor = manifest.skills[skill];
-    if (!descriptor || typeof descriptor.domain !== 'string' || !descriptor.domain) throw new RuntimeBundleError(`${skill} 缺少 domain`);
+    if (!descriptor || typeof descriptor.domain !== 'string' || !descriptor.domain)
+      throw new RuntimeBundleError(`${skill} 缺少 domain`);
     safeExistingPath(packageRoot, descriptor.shell, `${skill}.shell`);
     const scriptsDir = resolve(packageRoot, skill, 'scripts');
     safeExistingPath(packageRoot, `${skill}/scripts`, `${skill}.scripts`);
-    const actualEntries = readdirSync(scriptsDir).filter((name) => name.endsWith('.mjs')).sort();
+    const actualEntries = readdirSync(scriptsDir)
+      .filter((name) => name.endsWith('.mjs'))
+      .sort();
     const declaredEntries = Object.keys(descriptor.entries ?? {}).sort();
-    if (JSON.stringify(actualEntries) !== JSON.stringify(declaredEntries)) throw new RuntimeBundleError(`${skill} 的兼容入口与 shell manifest 不一致`);
+    if (JSON.stringify(actualEntries) !== JSON.stringify(declaredEntries))
+      throw new RuntimeBundleError(`${skill} 的兼容入口与 shell manifest 不一致`);
     for (const entryName of declaredEntries) {
       const entry = descriptor.entries[entryName];
       safeExistingPath(packageRoot, entry?.target, `${skill}.${entryName}.target`);
-      if (entry.mutates_state !== false && (!Array.isArray(entry.read_only_commands) || entry.read_only_commands.some((item) => typeof item !== 'string' || !item))) {
+      if (
+        entry.mutates_state !== false &&
+        (!Array.isArray(entry.read_only_commands) ||
+          entry.read_only_commands.some((item) => typeof item !== 'string' || !item))
+      ) {
         throw new RuntimeBundleError(`${skill}.${entryName} 必须声明 read_only_commands 或 mutates_state:false`);
       }
     }
@@ -95,7 +112,13 @@ export function runtimeBundleDigest(packageRoot = DEFAULT_PACKAGE_ROOT) {
     { prefix: 'schemas', path: resolve(packageRoot, 'schemas') },
     { prefix: 'domains', path: resolve(packageRoot, 'domains') },
   ];
-  for (const domain of ['orchestrate', 'worktree', 'verify', 'loop']) roots.push({ prefix: `docs/${domain}`, path: resolve(packageRoot, 'docs', domain) });
-  for (const skill of SKILLS) roots.push({ prefix: `skills/${skill}`, path: resolve(packageRoot, skill), entries: ['SKILL.md', 'agents', 'scripts'] });
+  for (const domain of ['orchestrate', 'worktree', 'verify', 'loop'])
+    roots.push({ prefix: `docs/${domain}`, path: resolve(packageRoot, 'docs', domain) });
+  for (const skill of SKILLS)
+    roots.push({
+      prefix: `skills/${skill}`,
+      path: resolve(packageRoot, skill),
+      entries: ['SKILL.md', 'agents', 'scripts'],
+    });
   return distributionDigest(roots);
 }

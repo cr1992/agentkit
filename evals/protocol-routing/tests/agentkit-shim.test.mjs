@@ -41,7 +41,9 @@ test('垫片在会话环境里可解析，且版本等于被测 checkout 的版�
 
     // 真的是同一份实现，不是碰巧同名：直接跑 checkout 的入口应当给出同一个版本。
     assert.equal(execFileSync(process.execPath, [AGENTKIT_BIN, '--version'], { encoding: 'utf8' }).trim(), version);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('垫片脚本是 exec 转发，路径里有空格和引号也成立', () => {
@@ -54,8 +56,16 @@ test('垫片脚本是 exec 转发，路径里有空格和引号也成立', () =>
     const env = buildSessionEnv(process.env, { PATH: prependToPath(shim.dir, process.env.PATH) });
     assert.equal(execFileSync('sh', ['-c', 'agentkit --version'], { env, encoding: 'utf8' }).trim(), CHECKOUT_VERSION);
     // 退出码原样透传：SKILL.md 里到处在看 agentkit 的退出码。
-    assert.throws(() => execFileSync('sh', ['-c', 'agentkit no-such-domain'], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+    assert.throws(() =>
+      execFileSync('sh', ['-c', 'agentkit no-such-domain'], {
+        env,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('分类器把垫片形态与 node 入口形态归成同一类', () => {

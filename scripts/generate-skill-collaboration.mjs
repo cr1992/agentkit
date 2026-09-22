@@ -1,55 +1,52 @@
 #!/usr/bin/env node
 
-import assert from "node:assert/strict";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import assert from 'node:assert/strict';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, "..");
-const outputDir = path.join(repoRoot, "docs", "architecture");
+const repoRoot = path.resolve(scriptDir, '..');
+const outputDir = path.join(repoRoot, 'docs', 'architecture');
 
-const skillNames = [
-  "run-agent-verify-loop",
-  "orchestrate-subagents",
-  "manage-worktrees",
-  "verify-agent-output",
-];
+const skillNames = ['run-agent-verify-loop', 'orchestrate-subagents', 'manage-worktrees', 'verify-agent-output'];
 
 const fixedTerms = [
   ...skillNames,
-  "Controller / User Goal",
-  "Loop",
-  "provider",
-  "Task Contract",
-  "Artifact Ref + Binding",
-  "Evidence Package",
-  "Convergence Report",
-  "pass · fail · undecidable",
+  'Controller / User Goal',
+  'Loop',
+  'provider',
+  'Task Contract',
+  'Artifact Ref + Binding',
+  'Evidence Package',
+  'Convergence Report',
+  'pass · fail · undecidable',
 ];
 
 const copy = {
-  lang: "en",
-  title: "Explicit bounded implementation–verification Loop",
-  subtitle: "The Loop coordinates independent provider capabilities after the Controller explicitly selects this mode.",
-  controllerCopy: "freeze Task Contract · choose providers · final authorization",
-  loopMode: "explicit Loop mode",
-  loopAction: "record iteration · consume Evidence · continue / fuse / wait / stop",
-  dispatch: "dispatch implementation",
-  orchestrateAction: "dispatch roles · control task state",
-  managedWriter: "managed writer",
-  worktreeAction: "isolate writes · freeze Artifact Ref + Binding",
-  frozenArtifact: "frozen Artifact",
-  verifierAction: "verify one frozen Artifact · emit Evidence Package",
-  footer: "Each provider also works independently. One-shot verification calls verify-agent-output directly and does not enter this Loop.",
+  lang: 'en',
+  title: 'Explicit bounded implementation–verification Loop',
+  subtitle: 'The Loop coordinates independent provider capabilities after the Controller explicitly selects this mode.',
+  controllerCopy: 'freeze Task Contract · choose providers · final authorization',
+  loopMode: 'explicit Loop mode',
+  loopAction: 'record iteration · consume Evidence · continue / fuse / wait / stop',
+  dispatch: 'dispatch implementation',
+  orchestrateAction: 'dispatch roles · control task state',
+  managedWriter: 'managed writer',
+  worktreeAction: 'isolate writes · freeze Artifact Ref + Binding',
+  frozenArtifact: 'frozen Artifact',
+  verifierAction: 'verify one frozen Artifact · emit Evidence Package',
+  footer:
+    'Each provider also works independently. One-shot verification calls verify-agent-output directly and does not enter this Loop.',
 };
 
-const escapeXml = (value) => value
-  .replaceAll("&", "&amp;")
-  .replaceAll("<", "&lt;")
-  .replaceAll(">", "&gt;")
-  .replaceAll('"', "&quot;")
-  .replaceAll("'", "&apos;");
+const escapeXml = (value) =>
+  value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
 
 function svgFor() {
   const t = Object.fromEntries(Object.entries(copy).map(([key, value]) => [key, escapeXml(value)]));
@@ -105,15 +102,19 @@ function svgFor() {
 
 async function main() {
   await mkdir(outputDir, { recursive: true });
-  const checkOnly = process.argv.includes("--check");
+  const checkOnly = process.argv.includes('--check');
   const svg = svgFor();
   for (const name of skillNames) assert.match(svg, new RegExp(`>${name}<`));
   for (const term of fixedTerms) assert.ok(svg.includes(term), `diagram missing fixed term: ${term}`);
-  const svgPath = path.join(outputDir, "skill-collaboration.svg");
+  const svgPath = path.join(outputDir, 'skill-collaboration.svg');
   if (checkOnly) {
-    assert.equal(await readFile(svgPath, "utf8"), svg, "diagram is stale; run node scripts/generate-skill-collaboration.mjs");
+    assert.equal(
+      await readFile(svgPath, 'utf8'),
+      svg,
+      'diagram is stale; run node scripts/generate-skill-collaboration.mjs',
+    );
   } else {
-    await writeFile(svgPath, svg, "utf8");
+    await writeFile(svgPath, svg, 'utf8');
   }
 }
 

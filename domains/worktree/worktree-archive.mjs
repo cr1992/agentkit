@@ -46,7 +46,8 @@ export function createCommands(deps) {
     if (snapshot.present) {
       return {
         ok: false,
-        reason: 'worktree 目录仍然存在；archive 只接受目录已经不存在的历史 record（目录还在时请走 reclaim，或先确认后再手工清理）。',
+        reason:
+          'worktree 目录仍然存在；archive 只接受目录已经不存在的历史 record（目录还在时请走 reclaim，或先确认后再手工清理）。',
       };
     }
     const branchExists = localBranchExists(loaded, record);
@@ -66,9 +67,10 @@ export function createCommands(deps) {
     }
     return {
       ok: false,
-      reason: candidateRefs.length > 0
-        ? `分支 ${record.branch} 仍然存在，且未合入已知 base（${candidateRefs.join(', ')}）；请先确认已合入或删除分支后再归档。`
-        : `分支 ${record.branch} 仍然存在，且没有可用于判断合入状态的 base ref；请先补登记 base 或删除分支后再归档。`,
+      reason:
+        candidateRefs.length > 0
+          ? `分支 ${record.branch} 仍然存在，且未合入已知 base（${candidateRefs.join(', ')}）；请先确认已合入或删除分支后再归档。`
+          : `分支 ${record.branch} 仍然存在，且没有可用于判断合入状态的 base ref；请先补登记 base 或删除分支后再归档。`,
     };
   }
 
@@ -98,11 +100,14 @@ export function createCommands(deps) {
     }
     assertHistoryOperationIdle(record, 'archive');
 
-    const activeWatch = record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
-      ? record.auto_reclaim
-      : null;
+    const activeWatch =
+      record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
+        ? record.auto_reclaim
+        : null;
     if (activeWatch) {
-      log(`KEEP ${record.path}: worktree 仍处于 ready_for_review 武装监听状态（state=${activeWatch.state}）；请先 unwatch ${record.task} 再归档。`);
+      log(
+        `KEEP ${record.path}: worktree 仍处于 ready_for_review 武装监听状态（state=${activeWatch.state}）；请先 unwatch ${record.task} 再归档。`,
+      );
       process.exitCode = 1;
       return;
     }
@@ -122,13 +127,21 @@ export function createCommands(deps) {
       branch_tip_sha: evaluation.branchTipSha,
       matched_base_ref: evaluation.matchedRef,
     };
-    const updated = updateRecord(record, 'archived', (next) => {
-      next.worktree_state = 'archived';
-      next.archived_at = now;
-      next.archive = { ...details };
-    }, details, loaded.context.common_dir);
+    const updated = updateRecord(
+      record,
+      'archived',
+      (next) => {
+        next.worktree_state = 'archived';
+        next.archived_at = now;
+        next.archive = { ...details };
+      },
+      details,
+      loaded.context.common_dir,
+    );
 
-    log(`已归档 ${updated.worktree_id.slice(0, 8)} task=${updated.task}（basis=${evaluation.basis}${evaluation.matchedRef ? `, base=${evaluation.matchedRef}` : ''}）；不删除分支、不删除目录、不改 refs。`);
+    log(
+      `已归档 ${updated.worktree_id.slice(0, 8)} task=${updated.task}（basis=${evaluation.basis}${evaluation.matchedRef ? `, base=${evaluation.matchedRef}` : ''}）；不删除分支、不删除目录、不改 refs。`,
+    );
   }
 
   return { cmdArchive };

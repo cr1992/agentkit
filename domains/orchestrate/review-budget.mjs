@@ -32,7 +32,8 @@ function readJson(path) {
 
 /** @param {unknown} value @param {string} label @param {number} minimum */
 function integer(value, label, minimum = 0) {
-  if (!Number.isSafeInteger(value) || Number(value) < minimum) throw new ReviewBudgetError(`${label} 必须是 >= ${minimum} 的安全整数`);
+  if (!Number.isSafeInteger(value) || Number(value) < minimum)
+    throw new ReviewBudgetError(`${label} 必须是 >= ${minimum} 的安全整数`);
   return Number(value);
 }
 
@@ -46,41 +47,69 @@ export function validateReviewPolicy(policy) {
     'review_only_after_smoke_pass',
     'max_review_input_tokens',
   ];
-  if (!policy || policy.schema_version !== 1 || Object.keys(policy).some((key) => !keys.includes(key))) throw new ReviewBudgetError('review policy schema/字段无效');
+  if (!policy || policy.schema_version !== 1 || Object.keys(policy).some((key) => !keys.includes(key)))
+    throw new ReviewBudgetError('review policy schema/字段无效');
   const normalized = {
     schema_version: 1,
-    max_primary_reviews_per_artifact: integer(policy.max_primary_reviews_per_artifact, 'max_primary_reviews_per_artifact'),
-    max_escalation_reviews_per_artifact: integer(policy.max_escalation_reviews_per_artifact, 'max_escalation_reviews_per_artifact'),
+    max_primary_reviews_per_artifact: integer(
+      policy.max_primary_reviews_per_artifact,
+      'max_primary_reviews_per_artifact',
+    ),
+    max_escalation_reviews_per_artifact: integer(
+      policy.max_escalation_reviews_per_artifact,
+      'max_escalation_reviews_per_artifact',
+    ),
     require_distinct_lens: policy.require_distinct_lens,
     review_only_after_smoke_pass: policy.review_only_after_smoke_pass,
     max_review_input_tokens: integer(policy.max_review_input_tokens, 'max_review_input_tokens', 1),
   };
-  if (typeof normalized.require_distinct_lens !== 'boolean' || typeof normalized.review_only_after_smoke_pass !== 'boolean') throw new ReviewBudgetError('review policy boolean 字段无效');
+  if (
+    typeof normalized.require_distinct_lens !== 'boolean' ||
+    typeof normalized.review_only_after_smoke_pass !== 'boolean'
+  )
+    throw new ReviewBudgetError('review policy boolean 字段无效');
   return normalized;
 }
 
 /** @param {unknown} value */
 function validateHistory(value) {
-  if (!Array.isArray(value)) throw new ReviewBudgetError('history 必须是数组：没有历史 review 传 []，已有 review 传 [{review_id, artifact_digest, lens, kind, outcome}, ...]');
+  if (!Array.isArray(value))
+    throw new ReviewBudgetError(
+      'history 必须是数组：没有历史 review 传 []，已有 review 传 [{review_id, artifact_digest, lens, kind, outcome}, ...]',
+    );
   const ids = new Set();
   return value.map((item) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) throw new ReviewBudgetError('history item 无效');
-    if (typeof item.review_id !== 'string' || !item.review_id || ids.has(item.review_id)) throw new ReviewBudgetError('history review_id 缺失或重复');
+    if (typeof item.review_id !== 'string' || !item.review_id || ids.has(item.review_id))
+      throw new ReviewBudgetError('history review_id 缺失或重复');
     ids.add(item.review_id);
-    if (!DIGEST.test(String(item.artifact_digest ?? '')) || typeof item.lens !== 'string' || !item.lens || !REVIEW_KINDS.has(item.kind) || !REVIEW_OUTCOMES.has(item.outcome)) throw new ReviewBudgetError(`history item 无效: ${item.review_id}`);
+    if (
+      !DIGEST.test(String(item.artifact_digest ?? '')) ||
+      typeof item.lens !== 'string' ||
+      !item.lens ||
+      !REVIEW_KINDS.has(item.kind) ||
+      !REVIEW_OUTCOMES.has(item.outcome)
+    )
+      throw new ReviewBudgetError(`history item 无效: ${item.review_id}`);
     return item;
   });
 }
 
 /** @param {Record<string,any>} request */
 function validateRequest(request) {
-  if (!request || request.schema_version !== 1 || !DIGEST.test(String(request.artifact_digest ?? ''))) throw new ReviewBudgetError('review request schema/artifact_digest 无效');
-  if (typeof request.lens !== 'string' || !request.lens.trim() || !REVIEW_KINDS.has(request.kind)) throw new ReviewBudgetError('review request lens/kind 无效');
-  if (typeof request.decision_impact !== 'string' || !request.decision_impact.trim()) throw new ReviewBudgetError('review request 必须说明 decision_impact');
-  if (typeof request.smoke_passed !== 'boolean') throw new ReviewBudgetError('review request smoke_passed 必须是 boolean');
+  if (!request || request.schema_version !== 1 || !DIGEST.test(String(request.artifact_digest ?? '')))
+    throw new ReviewBudgetError('review request schema/artifact_digest 无效');
+  if (typeof request.lens !== 'string' || !request.lens.trim() || !REVIEW_KINDS.has(request.kind))
+    throw new ReviewBudgetError('review request lens/kind 无效');
+  if (typeof request.decision_impact !== 'string' || !request.decision_impact.trim())
+    throw new ReviewBudgetError('review request 必须说明 decision_impact');
+  if (typeof request.smoke_passed !== 'boolean')
+    throw new ReviewBudgetError('review request smoke_passed 必须是 boolean');
   integer(request.estimated_input_tokens, 'estimated_input_tokens');
-  if (request.kind === 'escalation' && !ESCALATION_TRIGGERS.has(request.escalation_trigger)) throw new ReviewBudgetError('escalation review 必须给出 undecidable/evidence_conflict/protocol_ambiguity trigger');
-  if (request.kind === 'primary' && request.escalation_trigger != null) throw new ReviewBudgetError('primary review 不接受 escalation_trigger');
+  if (request.kind === 'escalation' && !ESCALATION_TRIGGERS.has(request.escalation_trigger))
+    throw new ReviewBudgetError('escalation review 必须给出 undecidable/evidence_conflict/protocol_ambiguity trigger');
+  if (request.kind === 'primary' && request.escalation_trigger != null)
+    throw new ReviewBudgetError('primary review 不接受 escalation_trigger');
   return request;
 }
 
@@ -107,18 +136,25 @@ export function evaluateReviewBudget(rawPolicy, rawHistory, rawRequest) {
     },
   });
 
-  if (policy.review_only_after_smoke_pass && !request.smoke_passed) return result(false, 'SMOKE_REQUIRED', 'run_smoke_first');
-  if (request.estimated_input_tokens > policy.max_review_input_tokens) return result(false, 'REVIEW_INPUT_BUDGET_EXCEEDED', 'project_contract_or_reduce_scope');
-  if (sameArtifact.some((item) => item.outcome === 'blocked_safety')) return result(false, 'SAFETY_STOP', 'escalate_to_human');
-  if (policy.require_distinct_lens && sameArtifact.some((item) => item.lens === request.lens)) return result(false, 'DUPLICATE_REVIEW_LENS', 'reuse_existing_review_or_choose_decision_changing_lens');
+  if (policy.review_only_after_smoke_pass && !request.smoke_passed)
+    return result(false, 'SMOKE_REQUIRED', 'run_smoke_first');
+  if (request.estimated_input_tokens > policy.max_review_input_tokens)
+    return result(false, 'REVIEW_INPUT_BUDGET_EXCEEDED', 'project_contract_or_reduce_scope');
+  if (sameArtifact.some((item) => item.outcome === 'blocked_safety'))
+    return result(false, 'SAFETY_STOP', 'escalate_to_human');
+  if (policy.require_distinct_lens && sameArtifact.some((item) => item.lens === request.lens))
+    return result(false, 'DUPLICATE_REVIEW_LENS', 'reuse_existing_review_or_choose_decision_changing_lens');
 
   if (request.kind === 'primary') {
-    if (primaryCount >= policy.max_primary_reviews_per_artifact) return result(false, 'PRIMARY_REVIEW_LIMIT', 'reuse_existing_review');
+    if (primaryCount >= policy.max_primary_reviews_per_artifact)
+      return result(false, 'PRIMARY_REVIEW_LIMIT', 'reuse_existing_review');
     return result(true, 'ALLOWED_PRIMARY', 'dispatch_one_reviewer');
   }
   if (primaryCount === 0) return result(false, 'PRIMARY_REVIEW_MISSING', 'run_primary_review_first');
-  if (escalationCount >= policy.max_escalation_reviews_per_artifact) return result(false, 'ESCALATION_REVIEW_LIMIT', 'stop_or_escalate_to_human');
-  if (request.escalation_trigger === 'undecidable' && !sameArtifact.some((item) => item.outcome === 'undecidable')) return result(false, 'UNDECIDABLE_EVIDENCE_MISSING', 'reuse_primary_result');
+  if (escalationCount >= policy.max_escalation_reviews_per_artifact)
+    return result(false, 'ESCALATION_REVIEW_LIMIT', 'stop_or_escalate_to_human');
+  if (request.escalation_trigger === 'undecidable' && !sameArtifact.some((item) => item.outcome === 'undecidable'))
+    return result(false, 'UNDECIDABLE_EVIDENCE_MISSING', 'reuse_primary_result');
   return result(true, 'ALLOWED_ESCALATION', 'dispatch_distinct_escalation_reviewer');
 }
 
@@ -129,12 +165,31 @@ function usage() {
 /** @param {string[]} argv */
 export function main(argv = process.argv.slice(2)) {
   if (isHelpRequest(argv)) return { help: usage() };
-  if (argv[0] === 'capabilities') return { runtime: 'review-budget', runtime_version: '1.0.0', contracts: { review_policy: [1], review_budget_request: [1] }, features: ['per-artifact-review-limit', 'distinct-lens-gate', 'smoke-first-gate', 'review-input-token-limit', 'safety-stop'] };
-  if (argv[0] !== 'evaluate') throw new ReviewBudgetError(`命令必须是 ${Object.keys(CLI_SPEC).join('/')}；参数清单见 --help`);
+  if (argv[0] === 'capabilities')
+    return {
+      runtime: 'review-budget',
+      runtime_version: '1.0.0',
+      contracts: { review_policy: [1], review_budget_request: [1] },
+      features: [
+        'per-artifact-review-limit',
+        'distinct-lens-gate',
+        'smoke-first-gate',
+        'review-input-token-limit',
+        'safety-stop',
+      ],
+    };
+  if (argv[0] !== 'evaluate')
+    throw new ReviewBudgetError(`命令必须是 ${Object.keys(CLI_SPEC).join('/')}；参数清单见 --help`);
   const options = {};
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index];
-    if (!token.startsWith('--') || !CLI_OPTIONS.has(token.slice(2)) || !argv[index + 1] || argv[index + 1].startsWith('--')) throw new ReviewBudgetError(`选项无效或缺值: ${token}；参数清单见 --help`);
+    if (
+      !token.startsWith('--') ||
+      !CLI_OPTIONS.has(token.slice(2)) ||
+      !argv[index + 1] ||
+      argv[index + 1].startsWith('--')
+    )
+      throw new ReviewBudgetError(`选项无效或缺值: ${token}；参数清单见 --help`);
     options[token.slice(2)] = argv[++index];
   }
   for (const key of ['policy', 'history', 'request']) if (!options[key]) throw new ReviewBudgetError(`缺少 --${key}`);
@@ -143,8 +198,11 @@ export function main(argv = process.argv.slice(2)) {
 
 export function isCliEntry(metaUrl = import.meta.url, argv1 = process.argv[1]) {
   if (!argv1) return false;
-  try { return realpathSync(fileURLToPath(metaUrl)) === realpathSync(argv1); }
-  catch { return pathToFileURL(resolve(argv1)).href === metaUrl; }
+  try {
+    return realpathSync(fileURLToPath(metaUrl)) === realpathSync(argv1);
+  } catch {
+    return pathToFileURL(resolve(argv1)).href === metaUrl;
+  }
 }
 
 export function runCli(argv = process.argv.slice(2)) {
@@ -154,7 +212,9 @@ export function runCli(argv = process.argv.slice(2)) {
     else process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return result.allowed === false ? 2 : 0;
   } catch (error) {
-    process.stderr.write(`${JSON.stringify({ error: 'invalid_input', message: error instanceof Error ? error.message : String(error) })}\n`);
+    process.stderr.write(
+      `${JSON.stringify({ error: 'invalid_input', message: error instanceof Error ? error.message : String(error) })}\n`,
+    );
     return 2;
   }
 }

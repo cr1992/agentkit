@@ -25,12 +25,24 @@ const SKILL_TOOL = 'Skill';
 
 /** 平凡基线用的合成分类结果：不起会话，直接喂给同一批断言。 */
 const SYNTHETIC = {
-  NONE: () => /** @type {import('./classifier.mjs').Classification} */ ({
-    observation: 'NONE', observation_kind: 'none', observed_at: null, observed_call: null, calls: [], writes: [],
-  }),
-  WRITE: () => /** @type {import('./classifier.mjs').Classification} */ ({
-    observation: 'WRITE', observation_kind: 'write', observed_at: 1, observed_call: null, calls: [], writes: [{ seq: 1, tool_name: 'Write' }],
-  }),
+  NONE: () =>
+    /** @type {import('./classifier.mjs').Classification} */ ({
+      observation: 'NONE',
+      observation_kind: 'none',
+      observed_at: null,
+      observed_call: null,
+      calls: [],
+      writes: [],
+    }),
+  WRITE: () =>
+    /** @type {import('./classifier.mjs').Classification} */ ({
+      observation: 'WRITE',
+      observation_kind: 'write',
+      observed_at: 1,
+      observed_call: null,
+      calls: [],
+      writes: [{ seq: 1, tool_name: 'Write' }],
+    }),
 };
 
 /**
@@ -48,14 +60,20 @@ export function trivialBaseline(cases, kind, runs) {
     if (runs instanceof Map) return runs.get(id) ?? 0;
     return runs[id] ?? 0;
   };
-  const columns = { positive: { k: 0, n: 0, cases: 0, satisfied_cases: 0 }, forbidden: { k: 0, n: 0, cases: 0, satisfied_cases: 0 } };
+  const columns = {
+    positive: { k: 0, n: 0, cases: 0, satisfied_cases: 0 },
+    forbidden: { k: 0, n: 0, cases: 0, satisfied_cases: 0 },
+  };
   for (const item of cases) {
     const verdict = item.assert(SYNTHETIC[kind](), {});
     const column = columns[item.category];
     const n = nOf(item.id);
     column.cases += 1;
     column.n += n;
-    if (verdict.satisfied) { column.k += n; column.satisfied_cases += 1; }
+    if (verdict.satisfied) {
+      column.k += n;
+      column.satisfied_cases += 1;
+    }
   }
   return columns;
 }
@@ -77,7 +95,11 @@ export function buildReport({ cases, runs, driver, sessions, invalidRuns = [] })
   for (const session of sessions) {
     const evalCase = byCase.get(session.case_id);
     if (!evalCase) continue;
-    const classification = classify({ initial_repo: session.observation.initial_repo, initial_ledger: session.observation.initial_ledger ?? null, events: session.observation.events });
+    const classification = classify({
+      initial_repo: session.observation.initial_repo,
+      initial_ledger: session.observation.initial_ledger ?? null,
+      events: session.observation.events,
+    });
     const options = { payloads: session.observation.payloads };
     const verdict = evalCase.assert(classification, options);
     perCase.get(evalCase.id)?.push({
@@ -87,7 +109,11 @@ export function buildReport({ cases, runs, driver, sessions, invalidRuns = [] })
       observed_at: classification.observed_at,
       satisfied: verdict.satisfied,
       reason: verdict.reason,
-      agentkit_calls: classification.calls.map((call) => ({ seq: call.seq, label: call.label, observable: call.observable })),
+      agentkit_calls: classification.calls.map((call) => ({
+        seq: call.seq,
+        label: call.label,
+        observable: call.observable,
+      })),
       writes: classification.writes,
       // 以下两项信息性，不计分。
       skill_loaded: (session.observation.events ?? []).some((event) => event.tool_name === SKILL_TOOL),
@@ -112,9 +138,17 @@ export function buildReport({ cases, runs, driver, sessions, invalidRuns = [] })
     columns[item.category].n += n;
     validNByCase.set(item.id, n);
     return {
-      id: item.id, category: item.category, title: item.title, expectation: item.expectation, setup: item.setup,
+      id: item.id,
+      category: item.category,
+      title: item.title,
+      expectation: item.expectation,
+      setup: item.setup,
       assert_scope: item.assert_scope ?? 'first_action',
-      k, n, planned_n: runs, invalid: invalidByCase.get(item.id) ?? 0, runs: results,
+      k,
+      n,
+      planned_n: runs,
+      invalid: invalidByCase.get(item.id) ?? 0,
+      runs: results,
     };
   });
 
@@ -168,7 +202,9 @@ export function renderMarkdown(report) {
   lines.push('| # | 类 | 情境 | 断言 | k/n | 计划 n | 无效 |');
   lines.push('| --- | --- | --- | --- | --- | --- | --- |');
   for (const item of report.cases) {
-    lines.push(`| ${item.id} | ${item.category === 'positive' ? '正向' : '禁止'} | ${item.title} | ${item.expectation} | ${item.k}/${item.n} | ${item.planned_n} | ${item.invalid} |`);
+    lines.push(
+      `| ${item.id} | ${item.category === 'positive' ? '正向' : '禁止'} | ${item.title} | ${item.expectation} | ${item.k}/${item.n} | ${item.planned_n} | ${item.invalid} |`,
+    );
   }
   lines.push('');
 
@@ -184,33 +220,48 @@ export function renderMarkdown(report) {
   lines.push('## 平凡基线（按同一 n 换算）', '');
   lines.push('| 基线 | 正向 Σk/Σn | 禁止 Σk/Σn |');
   lines.push('| --- | --- | --- |');
-  lines.push(`| 永远 NONE | ${fraction(report.trivial_baselines.always_none.positive)} | ${fraction(report.trivial_baselines.always_none.forbidden)} |`);
-  lines.push(`| 永远 WRITE | ${fraction(report.trivial_baselines.always_write.positive)} | ${fraction(report.trivial_baselines.always_write.forbidden)} |`);
+  lines.push(
+    `| 永远 NONE | ${fraction(report.trivial_baselines.always_none.positive)} | ${fraction(report.trivial_baselines.always_none.forbidden)} |`,
+  );
+  lines.push(
+    `| 永远 WRITE | ${fraction(report.trivial_baselines.always_write.positive)} | ${fraction(report.trivial_baselines.always_write.forbidden)} |`,
+  );
   lines.push('');
 
   lines.push('## 无效运行（不进 k/n）', '');
   if (report.invalid_runs.length === 0) {
     lines.push('无。', '');
   } else {
-    lines.push('宿主自己标了错误的会话（判据见 `lib/run-validity.mjs`）。它们不是协议行为，重试用尽后从 k/n 里剔除。', '');
+    lines.push(
+      '宿主自己标了错误的会话（判据见 `lib/run-validity.mjs`）。它们不是协议行为，重试用尽后从 k/n 里剔除。',
+      '',
+    );
     lines.push('| # | run | 尝试次数 | 信号 | 原因摘要 |');
     lines.push('| --- | --- | --- | --- | --- |');
     for (const item of report.invalid_runs) {
-      lines.push(`| ${item.case_id} | ${item.run} | ${item.attempts} | \`${item.signal ?? '未知'}\` | ${oneLine(item.reason)} |`);
+      lines.push(
+        `| ${item.case_id} | ${item.run} | ${item.attempts} | \`${item.signal ?? '未知'}\` | ${oneLine(item.reason)} |`,
+      );
     }
     lines.push('');
   }
 
   lines.push('## 逐次明细', '');
   for (const item of report.cases) {
-    lines.push(`### #${item.id} ${item.title}（${item.category === 'positive' ? '正向' : '禁止'}，${item.k}/${item.n}）`, '');
+    lines.push(
+      `### #${item.id} ${item.title}（${item.category === 'positive' ? '正向' : '禁止'}，${item.k}/${item.n}）`,
+      '',
+    );
     lines.push(`- 断言：${item.expectation}`);
     lines.push(`- 前置状态：${item.setup}`);
     // 标了 whole_session 的用例不看「第一个观测量」，下面每行里的观测量只是信息，别当判据读。
-    if (item.assert_scope === 'whole_session') lines.push('- ⚠️ 这条用例的断言看**整条会话**，下面每行的观测量（第一个可观测动作）只作信息性记录，不参与判定');
+    if (item.assert_scope === 'whole_session')
+      lines.push('- ⚠️ 这条用例的断言看**整条会话**，下面每行的观测量（第一个可观测动作）只作信息性记录，不参与判定');
     for (const run of item.runs) {
       const info = `加载 skill：${run.skill_loaded ? '是' : '否'}；主动发起独立验收：${run.initiated_independent_verification ? '是' : '否'}`;
-      lines.push(`- run ${run.run}：观测量 \`${run.observation}\` → ${run.satisfied ? '符合' : '不符合'}；${run.reason}（信息性，不计分：${info}）`);
+      lines.push(
+        `- run ${run.run}：观测量 \`${run.observation}\` → ${run.satisfied ? '符合' : '不符合'}；${run.reason}（信息性，不计分：${info}）`,
+      );
     }
     if (item.invalid) lines.push(`- 另有 ${item.invalid} 次无效运行，未计入 k/n`);
     if (item.runs.length === 0) lines.push('- 没有任何记录');

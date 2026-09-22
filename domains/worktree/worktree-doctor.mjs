@@ -48,7 +48,13 @@ export function createCommands(deps) {
     // SKILL 的「任何 error 都暂停 spawn/adopt」把后续派工钉死。生命周期与 watcher 两个收集器
     // 已经是这个口径，这里补齐；archived 更早一步在调用方 continue，所以只需排除 reclaimed。
     if (record.worktree_state === 'reclaimed') return;
-    if (record.storage_class === 'ephemeral') findings.push({ code: 'EPHEMERAL_WORKTREE', severity: 'warning', worktree_id: record.worktree_id, path: record.path });
+    if (record.storage_class === 'ephemeral')
+      findings.push({
+        code: 'EPHEMERAL_WORKTREE',
+        severity: 'warning',
+        worktree_id: record.worktree_id,
+        path: record.path,
+      });
     if (record.history_operation) {
       findings.push({
         code: 'MANAGED_HISTORY_OPERATION_PENDING',
@@ -58,7 +64,8 @@ export function createCommands(deps) {
         operation: record.history_operation.kind ?? 'unknown',
         state: record.history_operation.state ?? 'unknown',
         token: record.history_operation.token ?? null,
-        detail: '受控历史操作尚未 finalize；用 selector + rebase --continue 恢复（可选参数若提供会校验一致性），或显式 --abort。',
+        detail:
+          '受控历史操作尚未 finalize；用 selector + rebase --continue 恢复（可选参数若提供会校验一致性），或显式 --abort。',
       });
     }
     if (record.review_refresh) {
@@ -70,9 +77,10 @@ export function createCommands(deps) {
         state: record.review_refresh.state ?? 'unknown',
         target_ref: record.review_refresh.target_ref ?? null,
         target_sha: record.review_refresh.target_sha ?? null,
-        detail: record.review_refresh.state === 'aborting'
-          ? `评审刷新正在回滚；运行 refresh-review ${record.task} --abort 收口。`
-          : `评审刷新尚未完成；运行 refresh-review ${record.task} --continue 恢复，或在冲突/暂停 push 状态用 --abort 放弃。`,
+        detail:
+          record.review_refresh.state === 'aborting'
+            ? `评审刷新正在回滚；运行 refresh-review ${record.task} --abort 收口。`
+            : `评审刷新尚未完成；运行 refresh-review ${record.task} --continue 恢复，或在冲突/暂停 push 状态用 --abort 放弃。`,
       });
     }
     if (record.stack_parent) {
@@ -111,11 +119,7 @@ export function createCommands(deps) {
         }
       }
     }
-    if (
-      loaded.profile.default_base &&
-      record.base_ref &&
-      record.base_ref !== loaded.profile.default_base
-    ) {
+    if (loaded.profile.default_base && record.base_ref && record.base_ref !== loaded.profile.default_base) {
       findings.push({
         code: 'BASE_OVERRIDE',
         severity: 'warning',
@@ -133,7 +137,12 @@ export function createCommands(deps) {
   function collectDoctorRecordLifecycleFindings(loaded, listing, record, findings) {
     const present = listing.rows.some((row) => row.path === canonicalSelectorPath(record.path));
     const liveRow = listing.rows.find((row) => row.path === canonicalSelectorPath(record.path));
-    if (present && record.batch_integration?.state === 'composed' && record.task_status === 'done' && !record.batch_result) {
+    if (
+      present &&
+      record.batch_integration?.state === 'composed' &&
+      record.task_status === 'done' &&
+      !record.batch_result
+    ) {
       findings.push({
         code: 'DONE_BATCH_CANDIDATE_RESULT_UNRECORDED',
         severity: 'warning',
@@ -143,7 +152,11 @@ export function createCommands(deps) {
         detail: `候选已标记 done，但 passed/failed/stale 尚未冻结；运行 batch-result ${record.task} --state <state> --candidate <exact-sha>。`,
       });
     }
-    if (present && record.task_status === 'done' && ['passed', 'failed', 'stale'].includes(record.batch_result?.outcome)) {
+    if (
+      present &&
+      record.task_status === 'done' &&
+      ['passed', 'failed', 'stale'].includes(record.batch_result?.outcome)
+    ) {
       const candidateSha = record.batch_result.candidate_sha;
       findings.push({
         code: 'DONE_EVIDENCE_WORKTREE_RECLAIM_PENDING',
@@ -220,22 +233,33 @@ export function createCommands(deps) {
         last_reclaim_error: record.last_reclaim_error ?? null,
       });
     } else if (!present && record.worktree_state !== 'reclaimed') {
-      findings.push({ code: 'WORKTREE_MISSING', severity: 'warning', worktree_id: record.worktree_id, path: record.path });
+      findings.push({
+        code: 'WORKTREE_MISSING',
+        severity: 'warning',
+        worktree_id: record.worktree_id,
+        path: record.path,
+      });
     }
     if (present && record.worktree_state === 'reclaimed') {
-      const reusedByNewerRecord = listing.records.some((candidate) =>
-        candidate.worktree_id !== record.worktree_id &&
-        candidate.worktree_state !== 'reclaimed' &&
-        canonicalSelectorPath(candidate.path) === canonicalSelectorPath(record.path) &&
-        String(candidate.created_at) > String(record.created_at),
+      const reusedByNewerRecord = listing.records.some(
+        (candidate) =>
+          candidate.worktree_id !== record.worktree_id &&
+          candidate.worktree_state !== 'reclaimed' &&
+          canonicalSelectorPath(candidate.path) === canonicalSelectorPath(record.path) &&
+          String(candidate.created_at) > String(record.created_at),
       );
-      if (!reusedByNewerRecord) findings.push({ code: 'RECLAIMED_PATH_CONFLICT', severity: 'error', worktree_id: record.worktree_id, path: record.path });
+      if (!reusedByNewerRecord)
+        findings.push({
+          code: 'RECLAIMED_PATH_CONFLICT',
+          severity: 'error',
+          worktree_id: record.worktree_id,
+          path: record.path,
+        });
     }
     if (record.worktree_state === 'reclaimed') {
-      const branchExists = Boolean(record.branch) && gitTry(
-        ['show-ref', '--verify', '--quiet', `refs/heads/${record.branch}`],
-        loaded.context.current_worktree,
-      ).ok;
+      const branchExists =
+        Boolean(record.branch) &&
+        gitTry(['show-ref', '--verify', '--quiet', `refs/heads/${record.branch}`], loaded.context.current_worktree).ok;
       if (record.branch_cleanup?.status === 'failed' || branchExists) {
         findings.push({
           code: 'LOCAL_BRANCH_CLEANUP_FAILED',
@@ -244,7 +268,9 @@ export function createCommands(deps) {
           branch: record.branch ?? null,
           status: record.branch_cleanup?.status ?? 'legacy',
           branch_exists: branchExists,
-          detail: record.branch_cleanup?.reason ?? (branchExists ? 'local branch ref still exists' : 'cleanup failure not reconciled'),
+          detail:
+            record.branch_cleanup?.reason ??
+            (branchExists ? 'local branch ref still exists' : 'cleanup failure not reconciled'),
         });
       }
     }
@@ -252,11 +278,13 @@ export function createCommands(deps) {
 
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} record @param {Record<string,any>[]} findings */
   function collectDoctorRecordWatcherFindings(loaded, record, findings) {
-    const reviewLifecycle = ['ready_for_review', 'integrating'].includes(record.task_status)
-      && !['reclaimed', 'archived'].includes(record.worktree_state);
-    const activeWatch = record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
-      ? record.auto_reclaim
-      : null;
+    const reviewLifecycle =
+      ['ready_for_review', 'integrating'].includes(record.task_status) &&
+      !['reclaimed', 'archived'].includes(record.worktree_state);
+    const activeWatch =
+      record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
+        ? record.auto_reclaim
+        : null;
     if (reviewLifecycle && !activeWatch) {
       if (record.review_watch?.policy === 'disabled') {
         findings.push({
@@ -294,11 +322,12 @@ export function createCommands(deps) {
       if (advance) {
         const prediction = advance.prediction?.state ?? 'unknown';
         findings.push({
-          code: prediction === 'conflict'
-            ? 'REBASE_NEEDED'
-            : prediction === 'clean'
-              ? 'TARGET_ADVANCED_REFRESH_CLEAN'
-              : 'TARGET_ADVANCED_PREDICTION_UNKNOWN',
+          code:
+            prediction === 'conflict'
+              ? 'REBASE_NEEDED'
+              : prediction === 'clean'
+                ? 'TARGET_ADVANCED_REFRESH_CLEAN'
+                : 'TARGET_ADVANCED_PREDICTION_UNKNOWN',
           severity: 'warning',
           worktree_id: record.worktree_id,
           path: record.path,
@@ -306,11 +335,12 @@ export function createCommands(deps) {
           target_sha: advance.target_sha,
           recorded_base_sha: advance.recorded_base_sha,
           prediction: advance.prediction,
-          detail: prediction === 'conflict'
-            ? `目标已前进且 merge-tree 预判冲突；预留人工解冲突时间后运行 refresh-review ${record.task}。`
-            : prediction === 'clean'
-              ? `目标已前进且 merge-tree 干跑无冲突；可运行 refresh-review ${record.task}。`
-              : `目标已前进但无法可靠预判；核对后运行 refresh-review ${record.task}。`,
+          detail:
+            prediction === 'conflict'
+              ? `目标已前进且 merge-tree 预判冲突；预留人工解冲突时间后运行 refresh-review ${record.task}。`
+              : prediction === 'clean'
+                ? `目标已前进且 merge-tree 干跑无冲突；可运行 refresh-review ${record.task}。`
+                : `目标已前进但无法可靠预判；核对后运行 refresh-review ${record.task}。`,
         });
       }
       if (!health.healthy) {
@@ -335,9 +365,21 @@ export function createCommands(deps) {
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {ReturnType<typeof buildListing>} listing @param {Map<string,Record<string,any>>} recordsById @param {Record<string,any>[]} findings */
   function collectDoctorRecordFindings(loaded, listing, recordsById, findings) {
     for (const entry of listRecordCacheEntries(loaded.context.common_dir)) {
-      if (entry.error) { findings.push({ code: 'RECORD_CACHE_INVALID', severity: 'error', path: entry.path, detail: entry.error }); continue; }
+      if (entry.error) {
+        findings.push({ code: 'RECORD_CACHE_INVALID', severity: 'error', path: entry.path, detail: entry.error });
+        continue;
+      }
       const record = entry.record;
-      try { readEventChain(loaded.context.common_dir, record.worktree_id); } catch (error) { findings.push({ code: error.code ?? 'EVENT_CHAIN_INVALID', severity: 'error', worktree_id: record.worktree_id, detail: error.message }); }
+      try {
+        readEventChain(loaded.context.common_dir, record.worktree_id);
+      } catch (error) {
+        findings.push({
+          code: error.code ?? 'EVENT_CHAIN_INVALID',
+          severity: 'error',
+          worktree_id: record.worktree_id,
+          detail: error.message,
+        });
+      }
       // archived 是"已经确认安全、停止刷屏"的历史 record：event chain / record cache 完整性仍然
       // 检查（上面两步），但命名 DoD 与全部生命周期/元数据/watcher finding 一律不再生成——
       // 这些都是"这条 worktree 还要不要处理"的提示，archive 已经回答过这个问题。
@@ -361,7 +403,6 @@ export function createCommands(deps) {
       collectDoctorRecordWatcherFindings(loaded, record, findings);
     }
   }
-
 
   /** @param {ReturnType<typeof buildListing>} listing @param {Record<string,any>[]} findings */
   function collectDoctorSupersessionFindings(listing, findings) {
@@ -426,7 +467,8 @@ export function createCommands(deps) {
           worktree_ids: ordered.map((record) => record.worktree_id),
           tasks: ordered.map((record) => record.task),
           undeclared_worktree_ids: undeclared.map((record) => record.worktree_id),
-          detail: '同一 Agent 会话存在多棵未回收 worktree，且后建树未声明 parallel/supersedes 关系；复查是否应复用或回收。',
+          detail:
+            '同一 Agent 会话存在多棵未回收 worktree，且后建树未声明 parallel/supersedes 关系；复查是否应复用或回收。',
         });
       }
     }
@@ -435,45 +477,84 @@ export function createCommands(deps) {
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>[]} findings */
   function collectDoctorRuntimeFindings(loaded, findings) {
     const locks = traceLayout(loaded.context.common_dir).locks;
-    if (existsSync(locks)) for (const name of readdirSync(locks)) if (name.endsWith('.lock')) {
-      const id = name.slice(0, -5); const finding = inspectRecordLock(loaded.context.common_dir, id);
-      if (finding.state === 'stale' || finding.state === 'malformed') findings.push({ code: `LOCK_${finding.state.toUpperCase()}`, severity: 'error', worktree_id: id, detail: finding });
-    }
+    if (existsSync(locks))
+      for (const name of readdirSync(locks))
+        if (name.endsWith('.lock')) {
+          const id = name.slice(0, -5);
+          const finding = inspectRecordLock(loaded.context.common_dir, id);
+          if (finding.state === 'stale' || finding.state === 'malformed')
+            findings.push({
+              code: `LOCK_${finding.state.toUpperCase()}`,
+              severity: 'error',
+              worktree_id: id,
+              detail: finding,
+            });
+        }
     if (loaded.context.current_worktree !== loaded.context.primary_worktree) {
       const local = join(loaded.context.current_worktree, PROFILE_FILENAME);
-      if (existsSync(local) && existsSync(loaded.profile_path) && readFileSync(local, 'utf8') !== readFileSync(loaded.profile_path, 'utf8')) findings.push({ code: 'PROFILE_DRIFT', severity: 'warning', path: local, authoritative: loaded.profile_path });
+      if (
+        existsSync(local) &&
+        existsSync(loaded.profile_path) &&
+        readFileSync(local, 'utf8') !== readFileSync(loaded.profile_path, 'utf8')
+      )
+        findings.push({ code: 'PROFILE_DRIFT', severity: 'warning', path: local, authoritative: loaded.profile_path });
     }
     const learning = learningRoot(loaded.context.common_dir);
     const reflectionById = new Map();
     const reflectionDir = join(learning, 'reflections');
-    if (existsSync(reflectionDir)) for (const name of readdirSync(reflectionDir).filter((item) => item.endsWith('.json'))) {
-      const path = join(reflectionDir, name);
-      try {
-        const value = JSON.parse(readFileSync(path, 'utf8'));
-        const clone = { ...value }; delete clone.reflection_digest;
-        if (contentDigest(Buffer.from(JSON.stringify(canonicalJson(clone)))) !== value.reflection_digest) throw new Error('reflection digest mismatch');
-        const eventRef = value.evidence_refs?.find((item) => item.type === 'event');
-        const match = /^([^:]+):(.+)$/u.exec(eventRef?.id ?? '');
-        if (!match) throw new Error('event ref invalid');
-        const event = readEventChain(loaded.context.common_dir, match[1]).find((item) => item.event_id === match[2]);
-        if (!event || contentDigest(Buffer.from(JSON.stringify(canonicalJson(event)))) !== eventRef.digest) throw new Error('event evidence digest mismatch');
-        reflectionById.set(value.reflection_id, value);
-      } catch (error) {
-        findings.push({ code: 'LEARNING_REFLECTION_INVALID', severity: 'error', path, detail: error instanceof Error ? error.message : String(error) });
+    if (existsSync(reflectionDir))
+      for (const name of readdirSync(reflectionDir).filter((item) => item.endsWith('.json'))) {
+        const path = join(reflectionDir, name);
+        try {
+          const value = JSON.parse(readFileSync(path, 'utf8'));
+          const clone = { ...value };
+          delete clone.reflection_digest;
+          if (contentDigest(Buffer.from(JSON.stringify(canonicalJson(clone)))) !== value.reflection_digest)
+            throw new Error('reflection digest mismatch');
+          const eventRef = value.evidence_refs?.find((item) => item.type === 'event');
+          const match = /^([^:]+):(.+)$/u.exec(eventRef?.id ?? '');
+          if (!match) throw new Error('event ref invalid');
+          const event = readEventChain(loaded.context.common_dir, match[1]).find((item) => item.event_id === match[2]);
+          if (!event || contentDigest(Buffer.from(JSON.stringify(canonicalJson(event)))) !== eventRef.digest)
+            throw new Error('event evidence digest mismatch');
+          reflectionById.set(value.reflection_id, value);
+        } catch (error) {
+          findings.push({
+            code: 'LEARNING_REFLECTION_INVALID',
+            severity: 'error',
+            path,
+            detail: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
-    }
     const proposalDir = join(learning, 'proposals');
-    if (existsSync(proposalDir)) for (const name of readdirSync(proposalDir).filter((item) => item.endsWith('.json'))) {
-      const path = join(proposalDir, name);
-      try {
-        const value = JSON.parse(readFileSync(path, 'utf8'));
-        const clone = { ...value }; delete clone.proposal_digest;
-        if (value.lifecycle !== 'proposed' || contentDigest(Buffer.from(JSON.stringify(canonicalJson(clone)))) !== value.proposal_digest) throw new Error('proposal digest/lifecycle invalid');
-        if (!(value.source_reflections ?? []).every((item) => reflectionById.get(item.reflection_id)?.reflection_digest === item.reflection_digest)) throw new Error('proposal reflection binding invalid');
-      } catch (error) {
-        findings.push({ code: 'LEARNING_PROPOSAL_INVALID', severity: 'error', path, detail: error instanceof Error ? error.message : String(error) });
+    if (existsSync(proposalDir))
+      for (const name of readdirSync(proposalDir).filter((item) => item.endsWith('.json'))) {
+        const path = join(proposalDir, name);
+        try {
+          const value = JSON.parse(readFileSync(path, 'utf8'));
+          const clone = { ...value };
+          delete clone.proposal_digest;
+          if (
+            value.lifecycle !== 'proposed' ||
+            contentDigest(Buffer.from(JSON.stringify(canonicalJson(clone)))) !== value.proposal_digest
+          )
+            throw new Error('proposal digest/lifecycle invalid');
+          if (
+            !(value.source_reflections ?? []).every(
+              (item) => reflectionById.get(item.reflection_id)?.reflection_digest === item.reflection_digest,
+            )
+          )
+            throw new Error('proposal reflection binding invalid');
+        } catch (error) {
+          findings.push({
+            code: 'LEARNING_PROPOSAL_INVALID',
+            severity: 'error',
+            path,
+            detail: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
-    }
   }
 
   /** 默认分支只接受可证明的来源：`profile` 是仓库自己登记的治理边界，`remote_head` /
@@ -600,7 +681,7 @@ export function createCommands(deps) {
   }
 
   function cmdDoctor(args) {
-  rejectUnknownFlags(args.flags, ['json', 'verbose', 'config']);
+    rejectUnknownFlags(args.flags, ['json', 'verbose', 'config']);
     const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
     const findings = [];
     const listing = buildListing(true, loaded);
@@ -614,10 +695,13 @@ export function createCommands(deps) {
       }
     }
     collectDoctorRecordFindings(loaded, listing, recordsById, findings);
-    const expectsDurableWatch = listing.rows.some((row) => row.record
-      && ['ready_for_review', 'integrating'].includes(row.record.task_status)
-      && (row.record.review_watch?.policy === 'auto'
-        || (row.record.auto_reclaim && !['disarmed', 'reclaimed'].includes(row.record.auto_reclaim.state))));
+    const expectsDurableWatch = listing.rows.some(
+      (row) =>
+        row.record &&
+        ['ready_for_review', 'integrating'].includes(row.record.task_status) &&
+        (row.record.review_watch?.policy === 'auto' ||
+          (row.record.auto_reclaim && !['disarmed', 'reclaimed'].includes(row.record.auto_reclaim.state))),
+    );
     if (expectsDurableWatch) {
       const service = watchServiceStatus(loaded);
       if (service.supported && (!service.installed || !service.loaded || !service.program_available)) {
@@ -634,29 +718,36 @@ export function createCommands(deps) {
     collectDoctorRuntimeFindings(loaded, findings);
     const notices = [];
     collectDoctorOrphanBranchNotices(loaded, listing, notices);
-    if (args.flags.get('json')) { console.log(JSON.stringify({ findings, notices }, null, 2)); return; }
+    if (args.flags.get('json')) {
+      console.log(JSON.stringify({ findings, notices }, null, 2));
+      return;
+    }
     // JSON 输出永远是完整 findings，机器消费不受展示折叠影响；下面的折叠只发生在给人看的文本模式。
     log(`doctor findings=${findings.length}`);
     if (args.flags.get('verbose')) {
-      for (const finding of findings) console.log(`  [${finding.severity}] ${finding.code} ${finding.path ?? finding.worktree_id ?? ''}`);
+      for (const finding of findings)
+        console.log(`  [${finding.severity}] ${finding.code} ${finding.path ?? finding.worktree_id ?? ''}`);
       printDoctorNotices(notices);
       return;
     }
     const missingIds = missingWorktreeIds(listing);
     const foldedIds = new Set();
     for (const finding of findings) {
-      const foldable = finding.severity === 'warning'
-        && FOLDABLE_MISSING_CODES.has(finding.code)
-        && finding.worktree_id
-        && missingIds.has(finding.worktree_id);
-      if (foldable) { foldedIds.add(finding.worktree_id); continue; }
+      const foldable =
+        finding.severity === 'warning' &&
+        FOLDABLE_MISSING_CODES.has(finding.code) &&
+        finding.worktree_id &&
+        missingIds.has(finding.worktree_id);
+      if (foldable) {
+        foldedIds.add(finding.worktree_id);
+        continue;
+      }
       console.log(`  [${finding.severity}] ${finding.code} ${finding.path ?? finding.worktree_id ?? ''}`);
     }
-    if (foldedIds.size > 0) console.log(`  [summary] missing_worktrees=${foldedIds.size} (run doctor --verbose to expand)`);
+    if (foldedIds.size > 0)
+      console.log(`  [summary] missing_worktrees=${foldedIds.size} (run doctor --verbose to expand)`);
     printDoctorNotices(notices);
   }
-
-
 
   return {
     cmdDoctor,

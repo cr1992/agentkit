@@ -7,7 +7,10 @@ import test from 'node:test';
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SCHEMA_DIR = join(ROOT, 'schemas');
 const SKILLS = ['orchestrate-subagents', 'manage-worktrees', 'verify-agent-output', 'run-agent-verify-loop'];
-const names = () => readdirSync(SCHEMA_DIR).filter((name) => name.endsWith('.json')).sort();
+const names = () =>
+  readdirSync(SCHEMA_DIR)
+    .filter((name) => name.endsWith('.json'))
+    .sort();
 const schema = (name) => JSON.parse(readFileSync(join(SCHEMA_DIR, name), 'utf8'));
 
 // 收敛前这里比较四个 Skill 各自携带的副本是否一致；收敛后只有一份 canonical 文件，
@@ -45,7 +48,19 @@ test('所有公开 schema 均声明 draft 2020-12 且可由标准 JSON 解析', 
 
 test('Task Contract v1 保留全部必填字段', () => {
   const required = [...schema('task-contract-v1.schema.json').required].sort();
-  for (const field of ['schema_version', 'contract_id', 'objective', 'scope', 'acceptance', 'permissions', 'environment', 'skill_set', 'stop_conditions', 'extensions', 'contract_digest']) {
+  for (const field of [
+    'schema_version',
+    'contract_id',
+    'objective',
+    'scope',
+    'acceptance',
+    'permissions',
+    'environment',
+    'skill_set',
+    'stop_conditions',
+    'extensions',
+    'contract_digest',
+  ]) {
     assert.equal(required.includes(field), true, field);
   }
 });

@@ -28,28 +28,41 @@ const ENTRY = {
 // 执行 capabilities，且缺席的 Skill 不会让其他 Skill 或聚合命令崩溃。
 const PACKAGE_PARTS = ['package.json', 'bin', 'core', 'schemas'];
 // 运行时住在 domains/<域>/，随对应 Skill 一起安装；缺席的 Skill 连它的 domain 一起不装。
-const DOMAIN_OF = { 'orchestrate-subagents': 'orchestrate', 'manage-worktrees': 'worktree', 'verify-agent-output': 'verify', 'run-agent-verify-loop': 'loop' };
+const DOMAIN_OF = {
+  'orchestrate-subagents': 'orchestrate',
+  'manage-worktrees': 'worktree',
+  'verify-agent-output': 'verify',
+  'run-agent-verify-loop': 'loop',
+};
 
 test('真实 npm tarball 安装后，临时 PATH 覆盖四个 Skill 的 15 种 shell 组合', () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'skill-tarball-matrix-'));
   const cache = join(sandbox, 'npm-cache');
   try {
     const packed = spawnSync('npm', ['pack', '--pack-destination', sandbox, '--json'], {
-      cwd: ROOT, encoding: 'utf8', env: { ...process.env, NPM_CONFIG_CACHE: cache },
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, NPM_CONFIG_CACHE: cache },
     });
     assert.equal(packed.status, 0, packed.stderr);
     const tarball = join(sandbox, JSON.parse(packed.stdout)[0].filename);
     const prefix = join(sandbox, 'prefix');
-    const installed = spawnSync('npm', ['install', '-g', '--prefix', prefix, '--no-audit', '--no-fund', '--offline', tarball], {
-      cwd: sandbox, encoding: 'utf8', env: { ...process.env, NPM_CONFIG_CACHE: cache },
-    });
+    const installed = spawnSync(
+      'npm',
+      ['install', '-g', '--prefix', prefix, '--no-audit', '--no-fund', '--offline', tarball],
+      {
+        cwd: sandbox,
+        encoding: 'utf8',
+        env: { ...process.env, NPM_CONFIG_CACHE: cache },
+      },
+    );
     assert.equal(installed.status, 0, installed.stderr);
     const npmRoot = spawnSync('npm', ['root', '--global', '--prefix', prefix], { cwd: sandbox, encoding: 'utf8' });
     assert.equal(npmRoot.status, 0, npmRoot.stderr);
     const packageRoot = join(npmRoot.stdout.trim(), '@cr1992', 'agentkit');
     const env = { ...process.env, PATH: `${join(prefix, 'bin')}${delimiter}${process.env.PATH}` };
 
-    for (let mask = 1; mask < (1 << SKILLS.length); mask += 1) {
+    for (let mask = 1; mask < 1 << SKILLS.length; mask += 1) {
       const present = SKILLS.filter((_, index) => mask & (1 << index));
       const shellRoot = join(sandbox, `shell-combo-${mask}`);
       for (const skill of present) {
@@ -63,27 +76,39 @@ test('真实 npm tarball 安装后，临时 PATH 覆盖四个 Skill 的 15 种 s
       assert.equal(doctor.status, 0, `${present.join('+')} / doctor: ${doctor.stderr}`);
       assert.equal(JSON.parse(doctor.stdout).checks.manifest.healthy, true);
     }
-  } finally { rmSync(sandbox, { recursive: true, force: true }); }
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
 });
 
 test('人为裁剪 engine 时在场域仍可只读诊断，安装级 doctor 对不完整 manifest fail closed', () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'skill-install-matrix-'));
   try {
-    for (let mask = 1; mask < (1 << SKILLS.length); mask += 1) {
+    for (let mask = 1; mask < 1 << SKILLS.length; mask += 1) {
       const install = join(sandbox, `combo-${mask}`);
       const present = SKILLS.filter((_, index) => mask & (1 << index));
       for (const part of PACKAGE_PARTS) cpSync(join(ROOT, part), join(install, part), { recursive: true });
       for (const skill of present) {
         cpSync(join(ROOT, skill), join(install, skill), { recursive: true });
-        cpSync(join(ROOT, 'domains', DOMAIN_OF[skill]), join(install, 'domains', DOMAIN_OF[skill]), { recursive: true });
+        cpSync(join(ROOT, 'domains', DOMAIN_OF[skill]), join(install, 'domains', DOMAIN_OF[skill]), {
+          recursive: true,
+        });
       }
 
       const cli = join(install, 'bin', 'agentkit.mjs');
       for (const skill of present) {
         const [relative, ...args] = ENTRY[skill];
-        const direct = execFileSync(process.execPath, [join(install, skill, relative), ...args], { cwd: install, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        const direct = execFileSync(process.execPath, [join(install, skill, relative), ...args], {
+          cwd: install,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
         assert.equal(JSON.parse(direct).skill, skill, `${present.join('+')} / ${skill} 直调`);
-        const viaCli = execFileSync(process.execPath, [cli, ...CLI_ENTRY[skill]], { cwd: install, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        const viaCli = execFileSync(process.execPath, [cli, ...CLI_ENTRY[skill]], {
+          cwd: install,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
         assert.equal(JSON.parse(viaCli).skill, skill, `${present.join('+')} / ${skill} 经 CLI`);
       }
 
@@ -94,7 +119,10 @@ test('人为裁剪 engine 时在场域仍可只读诊断，安装级 doctor 对�
         assert.equal(absent.stdout, '', '缺席提示不得写 stdout');
         assert.match(absent.stderr, /未随本安装分发/u);
       }
-      const aggregate = spawnSync(process.execPath, [cli, 'capabilities', '--json'], { cwd: install, encoding: 'utf8' });
+      const aggregate = spawnSync(process.execPath, [cli, 'capabilities', '--json'], {
+        cwd: install,
+        encoding: 'utf8',
+      });
       assert.equal(aggregate.status, 0, `${present.join('+')} / 聚合 capabilities`);
       assert.deepEqual(Object.keys(JSON.parse(aggregate.stdout).skills).sort(), [...present].sort());
       const doctor = spawnSync(process.execPath, [cli, 'doctor', '--json'], { cwd: install, encoding: 'utf8' });
@@ -104,7 +132,9 @@ test('人为裁剪 engine 时在场域仍可只读诊断，安装级 doctor 对�
       assert.equal(health.checks.manifest.healthy, false);
       for (const skill of SKILLS) assert.equal(health.skills[skill].installed, present.includes(skill));
     }
-  } finally { rmSync(sandbox, { recursive: true, force: true }); }
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
 });
 
 // 开发者 home 路径不得进入可分发内容。用户名在运行时从 homedir() 推导，而不是写死：
@@ -131,13 +161,17 @@ test('Skill 目录只剩薄壳：scripts/ 下全是固定转发 stub，不含任
         .split('\n')
         .map((line) => line.trim())
         .filter((line) => line && !line.startsWith('//') && !line.startsWith('#!'));
-      assert.deepEqual(statements, [
-        "import { forwardLegacyEntry } from '../../core/legacy-entry.mjs';",
-        `import { runCli } from '${target}';`,
-        `export * from '${target}';`,
-        'const status = forwardLegacyEntry(import.meta.url, runCli);',
-        'if (status !== undefined) process.exitCode = status;',
-      ], `${skill}/scripts/${name} 不是纯转发 stub`);
+      assert.deepEqual(
+        statements,
+        [
+          "import { forwardLegacyEntry } from '../../core/legacy-entry.mjs';",
+          `import { runCli } from '${target}';`,
+          `export * from '${target}';`,
+          'const status = forwardLegacyEntry(import.meta.url, runCli);',
+          'if (status !== undefined) process.exitCode = status;',
+        ],
+        `${skill}/scripts/${name} 不是纯转发 stub`,
+      );
       assert.ok(existsSync(join(ROOT, 'domains', domain, name)), `${target} 不存在`);
     }
   }
@@ -155,7 +189,10 @@ test('全部兼容 stub 可安全 import，且共享 runner 不再派生第二�
     'for (const path of paths) await import(pathToFileURL(path).href);',
     "process.stdout.write('imports-ok\\n');",
   ].join('\n');
-  const result = spawnSync(process.execPath, ['--input-type=module', '--eval', program, ...entries], { cwd: ROOT, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, ['--input-type=module', '--eval', program, ...entries], {
+    cwd: ROOT,
+    encoding: 'utf8',
+  });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.equal(result.stdout, 'imports-ok\n');
   assert.doesNotMatch(readFileSync(join(ROOT, 'core', 'legacy-entry.mjs'), 'utf8'), /node:child_process/u);
@@ -165,11 +202,16 @@ test('可分发 Skill 不含本机绝对路径、凭证样式或跨 sibling runt
   const findings = [];
   const visit = (path) => {
     const stat = statSync(path);
-    if (stat.isDirectory()) { for (const name of readdirSync(path)) if (name !== '.DS_Store') visit(join(path, name)); return; }
+    if (stat.isDirectory()) {
+      for (const name of readdirSync(path)) if (name !== '.DS_Store') visit(join(path, name));
+      return;
+    }
     const text = readFileSync(path, 'utf8');
     if (HOME_LEAK && HOME_LEAK.test(text)) findings.push(`${path}:absolute-path`);
     if (/\b(?:ghp|glpat|sk)-[A-Za-z0-9_-]{20,}\b/u.test(text)) findings.push(`${path}:credential-pattern`);
-    for (const sibling of SKILLS) if (!path.includes(`/${sibling}/`) && text.includes(`../${sibling}/`)) findings.push(`${path}:sibling-import:${sibling}`);
+    for (const sibling of SKILLS)
+      if (!path.includes(`/${sibling}/`) && text.includes(`../${sibling}/`))
+        findings.push(`${path}:sibling-import:${sibling}`);
   };
   for (const skill of SKILLS) visit(join(ROOT, skill));
   assert.deepEqual(findings, []);

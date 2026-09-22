@@ -16,5 +16,12 @@ const DOMAIN_ROOT = dirname(fileURLToPath(import.meta.url));
 // 台账与 contract-tool 都要冻结同一个域摘要，而台账已经 import contract-tool（反向会成环），
 // 所以摘要住在这个无依赖的元数据模块里，两边各自 import。
 export function skillContentDigest(root = SKILL_ROOT) {
-  return distributionDigest(skillDistributionRoots({ packageRoot: PACKAGE_ROOT, skillRoot: root, domainRoot: DOMAIN_ROOT, docsRoot: join(PACKAGE_ROOT, 'docs', 'orchestrate') }));
+  return distributionDigest(
+    skillDistributionRoots({
+      packageRoot: PACKAGE_ROOT,
+      skillRoot: root,
+      domainRoot: DOMAIN_ROOT,
+      docsRoot: join(PACKAGE_ROOT, 'docs', 'orchestrate'),
+    }),
+  );
 }

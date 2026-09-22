@@ -10,11 +10,7 @@
 // 到 `stream.jsonl` 里）。所以结果目录整体按敏感材料对待，见 README「已知盲区」。
 
 /** 认定为「认证材料」的环境变量键。取值一旦出现在报告文本里就替换掉。 */
-export const SECRET_ENV_KEYS = Object.freeze([
-  'CLAUDE_CODE_OAUTH_TOKEN',
-  'ANTHROPIC_API_KEY',
-  'ANTHROPIC_AUTH_TOKEN',
-]);
+export const SECRET_ENV_KEYS = Object.freeze(['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']);
 
 /**
  * 太短的取值不替换：一个长度为 1、2 的变量值（例如某人把 ANTHROPIC_API_KEY 设成 `x`

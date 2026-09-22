@@ -1,14 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
@@ -99,12 +91,7 @@ test('真实多进程并发 append 不丢 event 且 chain 不分叉', async (t) 
   const eventsPerWorker = 12;
   await Promise.all(
     Array.from({ length: workerCount }, (_, index) =>
-      runWorker([
-        fixture.context.common_dir,
-        worktreeId,
-        String(eventsPerWorker),
-        `worker-${index}`,
-      ]),
+      runWorker([fixture.context.common_dir, worktreeId, String(eventsPerWorker), `worker-${index}`]),
     ),
   );
 
@@ -145,7 +132,10 @@ test('同主机死亡 PID 的 stale lock 被接管并写审计 event', (t) => {
     mutate: (current) => ({ ...current, task_status: 'active' }),
   });
   const chain = readEventChain(fixture.context.common_dir, worktreeId);
-  assert.deepEqual(chain.slice(-2).map((event) => event.event_type), ['stale_lock_recovered', 'resumed']);
+  assert.deepEqual(
+    chain.slice(-2).map((event) => event.event_type),
+    ['stale_lock_recovered', 'resumed'],
+  );
   assert.equal(inspectRecordLock(fixture.context.common_dir, worktreeId).state, 'absent');
 });
 
@@ -235,8 +225,8 @@ test('event 文件名乱序不影响 previous_event_id 权威顺序', (t) => {
   const files = readdirSync(dir).map((name) => join(dir, name));
   renameSync(files[0], join(dir, `9999-${randomUUID()}.json`));
   renameSync(files[1], join(dir, `0000-${randomUUID()}.json`));
-  assert.deepEqual(readEventChain(fixture.context.common_dir, worktreeId).map((event) => event.event_type), [
-    'created',
-    'updated',
-  ]);
+  assert.deepEqual(
+    readEventChain(fixture.context.common_dir, worktreeId).map((event) => event.event_type),
+    ['created', 'updated'],
+  );
 });

@@ -21,7 +21,9 @@ function fixture() {
     trigger: 'unexpected_outcome',
     classification: 'skill_gap',
     observation: 'Bearer hidden%token|suffix:secret at /Users/example/project cannot record lightweight feedback',
-    evidence_refs: [{ type: 'diagnostic', id: 'lightweight-snapshot.json', digest: digestBytes(readFileSync(snapshot)) }],
+    evidence_refs: [
+      { type: 'diagnostic', id: 'lightweight-snapshot.json', digest: digestBytes(readFileSync(snapshot)) },
+    ],
     impact: 'medium',
     confidence: 'high',
     recommended_disposition: 'continue',
@@ -44,7 +46,11 @@ test('Lightweight reflection and proposal are ledger-independent and append-only
       proposed_change: 'Allow ledger-independent lightweight reflections',
       affected_scope: ['lightweight'],
       counterexamples: ['ordinary successful run'],
-      validation_plan: { replay_cases: ['lightweight feedback'], regression_suites: ['orchestration reflection'], independent_review: 'required' },
+      validation_plan: {
+        replay_cases: ['lightweight feedback'],
+        regression_suites: ['orchestration reflection'],
+        independent_review: 'required',
+      },
     });
     const proposal = JSON.parse(readFileSync(join(f.root, proposed.ref), 'utf8'));
     assert.equal(proposal.lifecycle, 'proposed');
@@ -57,8 +63,18 @@ test('Lightweight reflection and proposal are ledger-independent and append-only
 test('Lightweight reflection verifies evidence digests and confidence', () => {
   const f = fixture();
   try {
-    assert.throws(() => recordStandalone(f.root, { ...f.input, evidence_refs: [{ ...f.input.evidence_refs[0], digest: `sha256:${'d'.repeat(64)}` }] }), /digest 不匹配/);
-    assert.throws(() => recordStandalone(f.root, { ...f.input, evidence_refs: [], confidence: 'high' }), /只能是 low confidence/);
+    assert.throws(
+      () =>
+        recordStandalone(f.root, {
+          ...f.input,
+          evidence_refs: [{ ...f.input.evidence_refs[0], digest: `sha256:${'d'.repeat(64)}` }],
+        }),
+      /digest 不匹配/,
+    );
+    assert.throws(
+      () => recordStandalone(f.root, { ...f.input, evidence_refs: [], confidence: 'high' }),
+      /只能是 low confidence/,
+    );
     assert.throws(() => recordStandalone(f.root, { ...f.input, unexpected: true }), /未知字段/);
   } finally {
     rmSync(f.root, { recursive: true, force: true });
@@ -72,7 +88,14 @@ test('Lightweight reflection rejects evidence symlinks that escape the state roo
     const outsideFile = join(outside, 'outside.json');
     writeFileSync(outsideFile, '{}');
     symlinkSync(outsideFile, join(f.root, 'escaped.json'));
-    assert.throws(() => recordStandalone(f.root, { ...f.input, evidence_refs: [{ type: 'diagnostic', id: 'escaped.json', digest: digestBytes(readFileSync(outsideFile)) }] }), /越出 state 目录/);
+    assert.throws(
+      () =>
+        recordStandalone(f.root, {
+          ...f.input,
+          evidence_refs: [{ type: 'diagnostic', id: 'escaped.json', digest: digestBytes(readFileSync(outsideFile)) }],
+        }),
+      /越出 state 目录/,
+    );
   } finally {
     rmSync(f.root, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
@@ -88,7 +111,9 @@ test('Reflection CLI executes through a symlinked installation path', () => {
     mkdirSync(linkedDir, { recursive: true });
     symlinkSync(fileURLToPath(new URL('./orchestration-reflection.mjs', import.meta.url)), linkedScript);
     writeFileSync(inputPath, JSON.stringify(f.input));
-    const result = spawnSync(process.execPath, [linkedScript, 'record', '--state-root', f.root, '--input', inputPath], { encoding: 'utf8' });
+    const result = spawnSync(process.execPath, [linkedScript, 'record', '--state-root', f.root, '--input', inputPath], {
+      encoding: 'utf8',
+    });
     assert.equal(result.status, 0, result.stderr);
     assert.ok(JSON.parse(result.stdout).reflection_id);
   } finally {

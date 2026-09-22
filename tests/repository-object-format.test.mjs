@@ -60,8 +60,23 @@ test('SHA-256 仓库上 Artifact 身份如实报告 object_format 并通过独�
   t.after(fixture.cleanup);
   assert.equal(git(fixture.repo, ['rev-parse', '--show-object-format']), 'sha256', '本机 git 不支持 sha256 仓库');
 
-  manager(fixture.repo, ['spawn', 'sha256-artifact', '--agent', 'codex', '--agent-id', 'sha256-thread', '--purpose', 'freeze sha256 artifact'], fixture.worktreeRoot);
-  const tracked = JSON.parse(manager(fixture.repo, ['list', '--json'], fixture.worktreeRoot)).worktrees.find((row) => row.kind === 'TRACKED');
+  manager(
+    fixture.repo,
+    [
+      'spawn',
+      'sha256-artifact',
+      '--agent',
+      'codex',
+      '--agent-id',
+      'sha256-thread',
+      '--purpose',
+      'freeze sha256 artifact',
+    ],
+    fixture.worktreeRoot,
+  );
+  const tracked = JSON.parse(manager(fixture.repo, ['list', '--json'], fixture.worktreeRoot)).worktrees.find(
+    (row) => row.kind === 'TRACKED',
+  );
   writeFileSync(join(tracked.path, 'artifact.txt'), 'frozen\n');
   git(tracked.path, ['add', 'artifact.txt']);
   git(tracked.path, ['commit', '-m', 'feat: frozen artifact']);
@@ -87,20 +102,32 @@ test('SHA-256 仓库上 Artifact 身份如实报告 object_format 并通过独�
   // sha256 仓库上的 sha1 形状 SHA 必须被长度门禁拦住，而不是当成"另一种合法 id"放行。
   const truncatedPath = join(fixture.sandbox, 'truncated.json');
   writeFileSync(truncatedPath, JSON.stringify({ ...artifact, artifact_sha: artifact.artifact_sha.slice(0, 40) }));
-  assert.throws(() => manager(fixture.repo, ['verify-artifact', truncatedPath, '--json'], fixture.worktreeRoot), /Artifact/u);
+  assert.throws(
+    () => manager(fixture.repo, ['verify-artifact', truncatedPath, '--json'], fixture.worktreeRoot),
+    /Artifact/u,
+  );
 
   // object_format 自报为 sha1 的 Artifact 在 sha256 仓库上同样拒绝。
   const mismatchPath = join(fixture.sandbox, 'mismatch.json');
   writeFileSync(mismatchPath, JSON.stringify({ ...artifact, object_format: 'sha1' }));
-  assert.throws(() => manager(fixture.repo, ['verify-artifact', mismatchPath, '--json'], fixture.worktreeRoot), /Artifact/u);
+  assert.throws(
+    () => manager(fixture.repo, ['verify-artifact', mismatchPath, '--json'], fixture.worktreeRoot),
+    /Artifact/u,
+  );
 });
 
 test('SHA-1 仓库上 Artifact 身份保持 40 位口径', (t) => {
   const fixture = makeRepo('sha1');
   t.after(fixture.cleanup);
 
-  manager(fixture.repo, ['spawn', 'sha1-artifact', '--agent', 'codex', '--agent-id', 'sha1-thread', '--purpose', 'freeze sha1 artifact'], fixture.worktreeRoot);
-  const tracked = JSON.parse(manager(fixture.repo, ['list', '--json'], fixture.worktreeRoot)).worktrees.find((row) => row.kind === 'TRACKED');
+  manager(
+    fixture.repo,
+    ['spawn', 'sha1-artifact', '--agent', 'codex', '--agent-id', 'sha1-thread', '--purpose', 'freeze sha1 artifact'],
+    fixture.worktreeRoot,
+  );
+  const tracked = JSON.parse(manager(fixture.repo, ['list', '--json'], fixture.worktreeRoot)).worktrees.find(
+    (row) => row.kind === 'TRACKED',
+  );
   writeFileSync(join(tracked.path, 'artifact.txt'), 'frozen\n');
   git(tracked.path, ['add', 'artifact.txt']);
   git(tracked.path, ['commit', '-m', 'feat: frozen artifact']);
@@ -111,5 +138,8 @@ test('SHA-1 仓库上 Artifact 身份保持 40 位口径', (t) => {
 
   const artifactPath = join(fixture.sandbox, 'artifact-ref.json');
   writeFileSync(artifactPath, JSON.stringify(artifact));
-  assert.equal(JSON.parse(manager(fixture.repo, ['verify-artifact', artifactPath, '--json'], fixture.worktreeRoot)).valid, true);
+  assert.equal(
+    JSON.parse(manager(fixture.repo, ['verify-artifact', artifactPath, '--json'], fixture.worktreeRoot)).valid,
+    true,
+  );
 });

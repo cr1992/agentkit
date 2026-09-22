@@ -39,7 +39,19 @@ export function createCommands(deps) {
   } = deps;
 
   function appendReclaimEvent(commonDir, record, type, update, details = {}) {
-    return appendTraceEvent({ commonDir, worktreeId: record.worktree_id, eventType: type, actor: record.agent, details, mutate(current) { const next = structuredClone(current); update(next); next.updated_at = new Date().toISOString(); return next; } }).record;
+    return appendTraceEvent({
+      commonDir,
+      worktreeId: record.worktree_id,
+      eventType: type,
+      actor: record.agent,
+      details,
+      mutate(current) {
+        const next = structuredClone(current);
+        update(next);
+        next.updated_at = new Date().toISOString();
+        return next;
+      },
+    }).record;
   }
 
   /**
@@ -91,7 +103,8 @@ export function createCommands(deps) {
   function prepareEvidenceArchiveReclaim(loaded, candidate, candidateInput, reasonInput) {
     const batch = candidate.batch_integration;
     const result = candidate.batch_result;
-    if (!batch || batch.state !== 'composed') die('reclaim --archive-evidence 只接受已合成的 batch integration candidate。', 2);
+    if (!batch || batch.state !== 'composed')
+      die('reclaim --archive-evidence 只接受已合成的 batch integration candidate。', 2);
     if (!result || !['passed', 'failed', 'stale'].includes(result.outcome)) {
       die('候选尚未通过 batch-result 冻结 passed/failed/stale，拒绝归档回收。', 2);
     }
@@ -100,22 +113,30 @@ export function createCommands(deps) {
     const reason = oneLine(reasonInput, '--reason', 500);
     const snapshot = liveGitSnapshot(candidate);
     const liveHead = snapshot.head ?? candidate.last_head ?? candidate.reclaim_summary?.source_sha ?? null;
-    if (!liveHead || liveHead.toLowerCase() !== sourceSha) die(`--archive-evidence 与候选 HEAD 不一致：expected ${liveHead ?? 'unknown'}`, 2);
-    if (result.candidate_sha !== sourceSha) die(`--archive-evidence 与 batch_result.candidate_sha 不一致：expected ${result.candidate_sha}`, 2);
+    if (!liveHead || liveHead.toLowerCase() !== sourceSha)
+      die(`--archive-evidence 与候选 HEAD 不一致：expected ${liveHead ?? 'unknown'}`, 2);
+    if (result.candidate_sha !== sourceSha)
+      die(`--archive-evidence 与 batch_result.candidate_sha 不一致：expected ${result.candidate_sha}`, 2);
     const preflight = reclaimPreflight(loaded, candidate, sourceSha);
     if (preflight.reason) die(`证据候选尚未达到归档前置条件：${preflight.reason}`, 2);
 
     const archiveRef = evidenceArchiveRef(candidate);
-    if (candidate.evidence_archive && (
-      candidate.evidence_archive.source_sha !== sourceSha ||
-      candidate.evidence_archive.archive_ref !== archiveRef ||
-      candidate.evidence_archive.batch_result_digest !== result.result_digest ||
-      candidate.evidence_archive.reason !== reason
-    )) die('该候选已经登记不同的证据归档，拒绝改写。', 2);
+    if (
+      candidate.evidence_archive &&
+      (candidate.evidence_archive.source_sha !== sourceSha ||
+        candidate.evidence_archive.archive_ref !== archiveRef ||
+        candidate.evidence_archive.batch_result_digest !== result.result_digest ||
+        candidate.evidence_archive.reason !== reason)
+    )
+      die('该候选已经登记不同的证据归档，拒绝改写。', 2);
     const existing = gitTry(['rev-parse', '--verify', archiveRef], loaded.context.current_worktree);
-    if (existing.ok && existing.out.toLowerCase() !== sourceSha) die(`归档 ref 已指向其他提交：${archiveRef} -> ${existing.out}`, 2);
+    if (existing.ok && existing.out.toLowerCase() !== sourceSha)
+      die(`归档 ref 已指向其他提交：${archiveRef} -> ${existing.out}`, 2);
     if (!existing.ok) {
-      const archived = gitTry(['update-ref', archiveRef, sourceSha, '0'.repeat(sourceSha.length)], loaded.context.current_worktree);
+      const archived = gitTry(
+        ['update-ref', archiveRef, sourceSha, '0'.repeat(sourceSha.length)],
+        loaded.context.current_worktree,
+      );
       if (!archived.ok) die(commandFailureReason(archived, `无法创建归档 ref ${archiveRef}`));
     }
     const verified = gitTry(['rev-parse', '--verify', archiveRef], loaded.context.current_worktree);
@@ -134,9 +155,15 @@ export function createCommands(deps) {
     };
     let record = candidate;
     if (!record.evidence_archive) {
-      record = appendReclaimEvent(loaded.context.common_dir, record, 'batch_evidence_head_archived', (next) => {
-        next.evidence_archive = { ...evidence, archived_at: new Date().toISOString() };
-      }, evidence);
+      record = appendReclaimEvent(
+        loaded.context.common_dir,
+        record,
+        'batch_evidence_head_archived',
+        (next) => {
+          next.evidence_archive = { ...evidence, archived_at: new Date().toISOString() };
+        },
+        evidence,
+      );
     }
     return { record, sourceSha, evidence };
   }
@@ -188,10 +215,10 @@ export function createCommands(deps) {
       if (discardSha.toLowerCase() !== sourceSha.toLowerCase()) {
         die(`--discard SHA 与旧树 HEAD 不一致：expected ${sourceSha}`, 2);
       }
-      if (record.superseded_recovery && (
-        record.superseded_recovery.mode !== 'discard' ||
-        record.superseded_recovery.source_sha !== sourceSha
-      )) {
+      if (
+        record.superseded_recovery &&
+        (record.superseded_recovery.mode !== 'discard' || record.superseded_recovery.source_sha !== sourceSha)
+      ) {
         die('该旧树已经登记不同的恢复策略，拒绝改写。', 2);
       }
       evidence = {
@@ -201,17 +228,24 @@ export function createCommands(deps) {
         replacement_task: replacement.task,
       };
       if (!record.superseded_recovery) {
-        record = appendReclaimEvent(loaded.context.common_dir, record, 'superseded_head_discard_authorized', (next) => {
-          next.superseded_recovery = { mode: 'discard', ...evidence, authorized_at: new Date().toISOString() };
-        }, evidence);
+        record = appendReclaimEvent(
+          loaded.context.common_dir,
+          record,
+          'superseded_head_discard_authorized',
+          (next) => {
+            next.superseded_recovery = { mode: 'discard', ...evidence, authorized_at: new Date().toISOString() };
+          },
+          evidence,
+        );
       }
     } else {
       const archiveRef = supersededArchiveRef(record);
-      if (record.superseded_recovery && (
-        record.superseded_recovery.mode !== 'archive_ref' ||
-        record.superseded_recovery.source_sha !== sourceSha ||
-        record.superseded_recovery.archive_ref !== archiveRef
-      )) {
+      if (
+        record.superseded_recovery &&
+        (record.superseded_recovery.mode !== 'archive_ref' ||
+          record.superseded_recovery.source_sha !== sourceSha ||
+          record.superseded_recovery.archive_ref !== archiveRef)
+      ) {
         die('该旧树已经登记不同的恢复策略，拒绝改写。', 2);
       }
       const existing = gitTry(['rev-parse', '--verify', archiveRef], loaded.context.current_worktree);
@@ -219,7 +253,10 @@ export function createCommands(deps) {
         die(`归档 ref 已指向其他提交：${archiveRef} -> ${existing.out}`, 2);
       }
       if (!existing.ok) {
-        const archived = gitTry(['update-ref', archiveRef, sourceSha, '0'.repeat(sourceSha.length)], loaded.context.current_worktree);
+        const archived = gitTry(
+          ['update-ref', archiveRef, sourceSha, '0'.repeat(sourceSha.length)],
+          loaded.context.current_worktree,
+        );
         if (!archived.ok) die(commandFailureReason(archived, `无法创建归档 ref ${archiveRef}`));
       }
       const verified = gitTry(['rev-parse', '--verify', archiveRef], loaded.context.current_worktree);
@@ -232,9 +269,15 @@ export function createCommands(deps) {
         replacement_task: replacement.task,
       };
       if (!record.superseded_recovery) {
-        record = appendReclaimEvent(loaded.context.common_dir, record, 'superseded_head_archived', (next) => {
-          next.superseded_recovery = { mode: 'archive_ref', ...evidence, archived_at: new Date().toISOString() };
-        }, evidence);
+        record = appendReclaimEvent(
+          loaded.context.common_dir,
+          record,
+          'superseded_head_archived',
+          (next) => {
+            next.superseded_recovery = { mode: 'archive_ref', ...evidence, archived_at: new Date().toISOString() };
+          },
+          evidence,
+        );
       }
     }
     return { record, sourceSha, evidence };
@@ -243,25 +286,31 @@ export function createCommands(deps) {
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} record @param {string} pushed */
   function reclaimPreflight(loaded, record, pushed) {
     const stash = gitTry(['stash', 'list'], loaded.context.current_worktree);
-    const live = parseWorktrees(loaded.context.current_worktree).find((worktree) => worktree.path === canonicalSelectorPath(record.path));
+    const live = parseWorktrees(loaded.context.current_worktree).find(
+      (worktree) => worktree.path === canonicalSelectorPath(record.path),
+    );
     const dangling = live ? inspectDanglingSubmodulePointers(live.path) : { reason: null };
     const status = live ? gitTry(['status', '--porcelain'], live.path) : { ok: true, out: '' };
     const operation = live ? gitOperationState(live.path) : null;
-    const commit = record.branch && gitTry(['show-ref', '--verify', '--quiet', `refs/heads/${record.branch}`], loaded.context.current_worktree).ok
-      ? record.branch
-      : record.last_head;
-    const merged = commit ? gitTry(['merge-base', '--is-ancestor', commit, pushed], loaded.context.current_worktree).ok : false;
+    const commit =
+      record.branch &&
+      gitTry(['show-ref', '--verify', '--quiet', `refs/heads/${record.branch}`], loaded.context.current_worktree).ok
+        ? record.branch
+        : record.last_head;
+    const merged = commit
+      ? gitTry(['merge-base', '--is-ancestor', commit, pushed], loaded.context.current_worktree).ok
+      : false;
     const reason = dangling.reason
       ? dangling.reason
       : stash.ok && stash.out
-      ? 'repository has stash entries'
-      : operation
-        ? `git operation in progress: ${operation}`
-      : !status.ok || status.out
-        ? 'worktree dirty/unreadable'
-        : !merged
-          ? 'branch/head not merged into pushed sha'
-          : null;
+        ? 'repository has stash entries'
+        : operation
+          ? `git operation in progress: ${operation}`
+          : !status.ok || status.out
+            ? 'worktree dirty/unreadable'
+            : !merged
+              ? 'branch/head not merged into pushed sha'
+              : null;
     return { reason, live };
   }
 
@@ -272,13 +321,26 @@ export function createCommands(deps) {
    * @param {string} pushed
    */
   function protectingRefsForPushed(loaded, record, pushed) {
-    const refs = gitTry([
-      'for-each-ref', '--format=%(refname)', '--contains', pushed,
-      'refs/heads', 'refs/remotes', 'refs/tags', 'refs/worktree-archive',
-    ], loaded.context.current_worktree);
+    const refs = gitTry(
+      [
+        'for-each-ref',
+        '--format=%(refname)',
+        '--contains',
+        pushed,
+        'refs/heads',
+        'refs/remotes',
+        'refs/tags',
+        'refs/worktree-archive',
+      ],
+      loaded.context.current_worktree,
+    );
     if (!refs.ok) die(commandFailureReason(refs, '无法枚举保护 --pushed SHA 的 refs。'));
     const ownBranch = record.branch ? `refs/heads/${record.branch}` : null;
-    return refs.out.split('\n').filter(Boolean).filter((ref) => ref !== ownBranch).sort();
+    return refs.out
+      .split('\n')
+      .filter(Boolean)
+      .filter((ref) => ref !== ownBranch)
+      .sort();
   }
 
   /**
@@ -303,9 +365,8 @@ export function createCommands(deps) {
       repositoryGitCwd(loaded),
     );
     if (checked.ok) return { state: 'exists', reason: null };
-    const status = checked.error && typeof checked.error === 'object' && 'status' in checked.error
-      ? checked.error.status
-      : null;
+    const status =
+      checked.error && typeof checked.error === 'object' && 'status' in checked.error ? checked.error.status : null;
     if (status === 1) return { state: 'absent', reason: null };
     return {
       state: 'error',
@@ -377,10 +438,16 @@ export function createCommands(deps) {
       return { record, branch_cleanup: record.branch_cleanup, changed: false };
     }
     const cleanup = attemptLocalBranchCleanup(loaded, record, pushed);
-    const updated = appendReclaimEvent(loaded.context.common_dir, record, 'branch_cleanup_retried', (next) => {
-      next.branch_cleanup = cleanup;
-      if (next.reclaim_summary) next.reclaim_summary.branch_cleanup = cleanup;
-    }, { pushed, branch_cleanup: cleanup });
+    const updated = appendReclaimEvent(
+      loaded.context.common_dir,
+      record,
+      'branch_cleanup_retried',
+      (next) => {
+        next.branch_cleanup = cleanup;
+        if (next.reclaim_summary) next.reclaim_summary.branch_cleanup = cleanup;
+      },
+      { pushed, branch_cleanup: cleanup },
+    );
     return { record: updated, branch_cleanup: cleanup, changed: true };
   }
 
@@ -393,18 +460,22 @@ export function createCommands(deps) {
     const branchHead = record.branch
       ? gitTry(['rev-parse', '--verify', record.branch], loaded.context.current_worktree)
       : { ok: false, out: '' };
-    const endSha = branchHead.ok
-      ? branchHead.out
-      : record.last_head ?? record.reclaim_summary?.source_sha ?? null;
+    const endSha = branchHead.ok ? branchHead.out : (record.last_head ?? record.reclaim_summary?.source_sha ?? null);
     const completedAt = record.reclaimed_at ?? new Date().toISOString();
-    const updated = appendReclaimEvent(loaded.context.common_dir, record, 'reclaim_terminal_reconciled', (next) => {
-      if (next.task_status !== 'abandoned') next.task_status = 'done';
-      const epoch = next.ownership_epochs?.at(-1);
-      if (epoch && !epoch.ended_at && endSha) {
-        epoch.end_sha = endSha;
-        epoch.ended_at = completedAt;
-      }
-    }, { task_status: needsStatus ? 'done' : record.task_status, end_sha: endSha });
+    const updated = appendReclaimEvent(
+      loaded.context.common_dir,
+      record,
+      'reclaim_terminal_reconciled',
+      (next) => {
+        if (next.task_status !== 'abandoned') next.task_status = 'done';
+        const epoch = next.ownership_epochs?.at(-1);
+        if (epoch && !epoch.ended_at && endSha) {
+          epoch.end_sha = endSha;
+          epoch.ended_at = completedAt;
+        }
+      },
+      { task_status: needsStatus ? 'done' : record.task_status, end_sha: endSha },
+    );
     return { record: updated, changed: true };
   }
 
@@ -415,9 +486,13 @@ export function createCommands(deps) {
    * @param {string} worktreePath
    */
   function registeredSubmodulePaths(worktreePath) {
-    const config = gitTry(['config', '-f', '.gitmodules', '--get-regexp', String.raw`^submodule\..*\.path$`], worktreePath);
+    const config = gitTry(
+      ['config', '-f', '.gitmodules', '--get-regexp', String.raw`^submodule\..*\.path$`],
+      worktreePath,
+    );
     if (!config.ok || !config.out) return [];
-    return config.out.split('\n')
+    return config.out
+      .split('\n')
       .map((line) => line.trim())
       .filter(Boolean)
       .map((line) => line.split(/\s+/).slice(1).join(' '))
@@ -467,7 +542,8 @@ export function createCommands(deps) {
   function listSubmoduleEntries(worktreePath) {
     const status = gitTry(['submodule', 'status'], worktreePath);
     if (!status.ok || !status.out) return [];
-    return status.out.split('\n')
+    return status.out
+      .split('\n')
       .map((line) => line.trimEnd())
       .filter(Boolean)
       .map((line) => ({ initialized: line[0] !== '-', path: line.trim().split(/\s+/)[1] }))
@@ -486,7 +562,9 @@ export function createCommands(deps) {
       const entries = readdirSync(submoduleDir);
       if (entries.length > 0) return { reason: `uninitialized submodule workdir is not empty: ${submodulePath}` };
     } catch (error) {
-      return { reason: `failed to inspect submodule workdir: ${submodulePath}: ${error instanceof Error ? error.message : String(error)}` };
+      return {
+        reason: `failed to inspect submodule workdir: ${submodulePath}: ${error instanceof Error ? error.message : String(error)}`,
+      };
     }
     return { reason: null };
   }
@@ -527,7 +605,9 @@ export function createCommands(deps) {
       try {
         rmSync(modulesDir, { recursive: true, force: true });
       } catch (error) {
-        return { reason: `failed to remove submodule metadata: ${error instanceof Error ? error.message : String(error)}` };
+        return {
+          reason: `failed to remove submodule metadata: ${error instanceof Error ? error.message : String(error)}`,
+        };
       }
     }
     for (const entry of entries) {
@@ -552,12 +632,14 @@ export function createCommands(deps) {
       };
     }
     const repositoryCwd = repositoryGitCwd(loaded);
-    const registeredAtStart = parseWorktrees(repositoryCwd)
-      .find((worktree) => worktree.path === canonicalSelectorPath(record.path));
+    const registeredAtStart = parseWorktrees(repositoryCwd).find(
+      (worktree) => worktree.path === canonicalSelectorPath(record.path),
+    );
     if (!registeredAtStart && existsSync(record.path)) {
       return {
         reclaimed: false,
-        reason: 'physical directory remains without Git worktree registration; refusing to mark reclaimed before manual recovery',
+        reason:
+          'physical directory remains without Git worktree registration; refusing to mark reclaimed before manual recovery',
         record,
       };
     }
@@ -565,18 +647,34 @@ export function createCommands(deps) {
       const preflight = reclaimPreflight(loaded, record, pushed);
       if (preflight.reason) {
         if (options.recordBlocked ?? true) {
-          record = appendReclaimEvent(loaded.context.common_dir, record, 'reclaim_blocked', () => {}, { reason: preflight.reason, pushed, evidence: options.evidence ?? null });
+          record = appendReclaimEvent(loaded.context.common_dir, record, 'reclaim_blocked', () => {}, {
+            reason: preflight.reason,
+            pushed,
+            evidence: options.evidence ?? null,
+          });
         }
         return { reclaimed: false, reason: preflight.reason, record };
       }
       const finalHead = preflight.live?.head ?? record.last_head;
-      record = appendReclaimEvent(loaded.context.common_dir, record, 'final_snapshot', (next) => {
-        next.last_head = finalHead;
-        next.last_seen_at = new Date().toISOString();
-      }, { pushed, evidence: options.evidence ?? null });
-      record = appendReclaimEvent(loaded.context.common_dir, record, 'reclaim_ready', (next) => {
-        next.worktree_state = 'reclaim_ready';
-      }, { pushed, evidence: options.evidence ?? null });
+      record = appendReclaimEvent(
+        loaded.context.common_dir,
+        record,
+        'final_snapshot',
+        (next) => {
+          next.last_head = finalHead;
+          next.last_seen_at = new Date().toISOString();
+        },
+        { pushed, evidence: options.evidence ?? null },
+      );
+      record = appendReclaimEvent(
+        loaded.context.common_dir,
+        record,
+        'reclaim_ready',
+        (next) => {
+          next.worktree_state = 'reclaim_ready';
+        },
+        { pushed, evidence: options.evidence ?? null },
+      );
     }
 
     const live = parseWorktrees(repositoryCwd).find((worktree) => worktree.path === canonicalSelectorPath(record.path));
@@ -586,20 +684,34 @@ export function createCommands(deps) {
       const removed = gitTry(['worktree', 'remove', live.path], repositoryCwd);
       if (!removed.ok) {
         const detail = commandFailureReason(removed, 'git worktree remove refused');
-        const stillRegistered = parseWorktrees(repositoryCwd)
-          .some((worktree) => worktree.path === canonicalSelectorPath(record.path));
-        const residue = !stillRegistered && existsSync(record.path)
-          ? '; Git registration was removed but the physical directory remains'
-          : '';
+        const stillRegistered = parseWorktrees(repositoryCwd).some(
+          (worktree) => worktree.path === canonicalSelectorPath(record.path),
+        );
+        const residue =
+          !stillRegistered && existsSync(record.path)
+            ? '; Git registration was removed but the physical directory remains'
+            : '';
         const reason = `${detail}${residue}`;
-        record = appendReclaimEvent(loaded.context.common_dir, record, 'reclaim_failed', (next) => {
-          next.last_reclaim_error = {
+        record = appendReclaimEvent(
+          loaded.context.common_dir,
+          record,
+          'reclaim_failed',
+          (next) => {
+            next.last_reclaim_error = {
+              reason,
+              attempted_at: new Date().toISOString(),
+              registration_present: stillRegistered,
+              physical_directory_present: existsSync(record.path),
+            };
+          },
+          {
+            pushed,
+            evidence: options.evidence ?? null,
             reason,
-            attempted_at: new Date().toISOString(),
             registration_present: stillRegistered,
             physical_directory_present: existsSync(record.path),
-          };
-        }, { pushed, evidence: options.evidence ?? null, reason, registration_present: stillRegistered, physical_directory_present: existsSync(record.path) });
+          },
+        );
         return { reclaimed: false, reason, record };
       }
       if (existsSync(record.path)) {
@@ -612,38 +724,50 @@ export function createCommands(deps) {
     }
     gitTry(['worktree', 'prune'], repositoryCwd);
     const branchCleanup = attemptLocalBranchCleanup(loaded, record, pushed);
-    record = appendReclaimEvent(loaded.context.common_dir, record, 'reclaimed', (next) => {
-      const completedAt = new Date().toISOString();
-      const finalEpoch = next.ownership_epochs?.at(-1);
-      if (finalEpoch && !finalEpoch.ended_at) {
-        finalEpoch.end_sha = next.last_head;
-        finalEpoch.ended_at = completedAt;
-      }
-      if (next.task_status !== 'abandoned') next.task_status = 'done';
-      next.worktree_state = 'reclaimed';
-      next.reclaimed_at = completedAt;
-      next.branch_cleanup = branchCleanup;
-      next.reclaim_summary = {
-        worktree_id: next.worktree_id,
-        task: next.task,
-        change_ref: next.auto_reclaim?.change_ref ?? null,
-        source_sha: next.auto_reclaim?.head_sha ?? next.last_head ?? null,
-        target_ref: options.evidence?.archive_ref ?? next.auto_reclaim?.target_ref ?? next.base_ref ?? null,
-        target_sha: pushed,
-        completed_at: completedAt,
-        branch_cleanup: branchCleanup,
-        reclaim_evidence: options.evidence ?? { kind: 'pushed', target_sha: pushed },
-      };
-      if (next.auto_reclaim) {
-        next.auto_reclaim.state = 'reclaimed';
-        next.auto_reclaim.completed_at = next.reclaimed_at;
-      }
-    }, { pushed, evidence: options.evidence ?? null, branch_cleanup: branchCleanup });
+    record = appendReclaimEvent(
+      loaded.context.common_dir,
+      record,
+      'reclaimed',
+      (next) => {
+        const completedAt = new Date().toISOString();
+        const finalEpoch = next.ownership_epochs?.at(-1);
+        if (finalEpoch && !finalEpoch.ended_at) {
+          finalEpoch.end_sha = next.last_head;
+          finalEpoch.ended_at = completedAt;
+        }
+        if (next.task_status !== 'abandoned') next.task_status = 'done';
+        next.worktree_state = 'reclaimed';
+        next.reclaimed_at = completedAt;
+        next.branch_cleanup = branchCleanup;
+        next.reclaim_summary = {
+          worktree_id: next.worktree_id,
+          task: next.task,
+          change_ref: next.auto_reclaim?.change_ref ?? null,
+          source_sha: next.auto_reclaim?.head_sha ?? next.last_head ?? null,
+          target_ref: options.evidence?.archive_ref ?? next.auto_reclaim?.target_ref ?? next.base_ref ?? null,
+          target_sha: pushed,
+          completed_at: completedAt,
+          branch_cleanup: branchCleanup,
+          reclaim_evidence: options.evidence ?? { kind: 'pushed', target_sha: pushed },
+        };
+        if (next.auto_reclaim) {
+          next.auto_reclaim.state = 'reclaimed';
+          next.auto_reclaim.completed_at = next.reclaimed_at;
+        }
+      },
+      { pushed, evidence: options.evidence ?? null, branch_cleanup: branchCleanup },
+    );
     if (record.auto_reclaim) {
       const notification = deliverReclaimNotification(record);
-      record = appendReclaimEvent(loaded.context.common_dir, record, 'reclaim_notification', (next) => {
-        next.reclaim_notification = { ...notification, recorded_at: new Date().toISOString() };
-      }, notification);
+      record = appendReclaimEvent(
+        loaded.context.common_dir,
+        record,
+        'reclaim_notification',
+        (next) => {
+          next.reclaim_notification = { ...notification, recorded_at: new Date().toISOString() };
+        },
+        notification,
+      );
     }
     return {
       reclaimed: true,
@@ -657,7 +781,16 @@ export function createCommands(deps) {
   /** @param {string} commonDir @param {Record<string,any>} record @param {string} token @param {string} eventType @param {string} targetSha */
 
   function cmdReclaim(args) {
-    rejectUnknownFlags(args.flags, ['pushed', 'superseded-by', 'replacement-id', 'discard', 'archive-evidence', 'reason', 'id', 'config']);
+    rejectUnknownFlags(args.flags, [
+      'pushed',
+      'superseded-by',
+      'replacement-id',
+      'discard',
+      'archive-evidence',
+      'reason',
+      'id',
+      'config',
+    ]);
     const pushed = flag(args.flags, 'pushed');
     const supersededBy = flag(args.flags, 'superseded-by');
     const discardSha = flag(args.flags, 'discard');
@@ -688,7 +821,10 @@ export function createCommands(deps) {
       evidenceSha = resolvableCommitOid(loaded.context.current_worktree, pushed, '--pushed');
       const protectingRefs = protectingRefsForPushed(loaded, record, evidenceSha);
       if (protectingRefs.length === 0) {
-        die('--pushed SHA 只由待删除候选分支保护；请先推送/合入到其他持久 ref，或对已冻结批次结果使用 --archive-evidence。', 2);
+        die(
+          '--pushed SHA 只由待删除候选分支保护；请先推送/合入到其他持久 ref，或对已冻结批次结果使用 --archive-evidence。',
+          2,
+        );
       }
       evidence = { kind: 'pushed', target_sha: evidenceSha, protecting_refs: protectingRefs };
     }
@@ -699,20 +835,23 @@ export function createCommands(deps) {
       return;
     }
     if (result.branch_cleanup?.status === 'failed') {
-      log(`目录已回收 ${result.record.worktree_id.slice(0, 8)}；本地分支 ${result.record.branch} 清理待重试: ${result.branch_cleanup.reason}`);
+      log(
+        `目录已回收 ${result.record.worktree_id.slice(0, 8)}；本地分支 ${result.record.branch} 清理待重试: ${result.branch_cleanup.reason}`,
+      );
       process.exitCode = 1;
       return;
     }
     const recovery = result.record.evidence_archive?.archive_ref
       ? `，证据归档=${result.record.evidence_archive.archive_ref}`
       : result.record.superseded_recovery?.mode === 'archive_ref'
-      ? `，归档=${result.record.superseded_recovery.archive_ref}`
-      : result.record.superseded_recovery?.mode === 'discard'
-        ? '，旧 HEAD 已按精确 SHA 授权丢弃'
-        : '';
-    log(`已回收 ${result.record.worktree_id.slice(0, 8)} ${result.record.branch ?? '(detached)'}；branch=${result.branch_cleanup?.status ?? 'legacy'}${recovery}，审计历史保留。`);
+        ? `，归档=${result.record.superseded_recovery.archive_ref}`
+        : result.record.superseded_recovery?.mode === 'discard'
+          ? '，旧 HEAD 已按精确 SHA 授权丢弃'
+          : '';
+    log(
+      `已回收 ${result.record.worktree_id.slice(0, 8)} ${result.record.branch ?? '(detached)'}；branch=${result.branch_cleanup?.status ?? 'legacy'}${recovery}，审计历史保留。`,
+    );
   }
-
 
   return {
     appendReclaimEvent,

@@ -32,10 +32,11 @@ export function createCommands(deps) {
 
   function stackParentForRef(records, ref, baseSha) {
     const normalized = ref.replace(/^refs\/heads\//u, '');
-    const candidates = records.filter((record) =>
-      record.worktree_state !== 'reclaimed' &&
-      record.branch &&
-      (record.branch === normalized || normalized.endsWith(`/${record.branch}`)),
+    const candidates = records.filter(
+      (record) =>
+        record.worktree_state !== 'reclaimed' &&
+        record.branch &&
+        (record.branch === normalized || normalized.endsWith(`/${record.branch}`)),
     );
     if (candidates.length > 1) die(`base ref ${ref} 同时匹配多个 tracked parent；请先清理歧义。`, 2);
     const parent = candidates[0];
@@ -127,46 +128,58 @@ export function createCommands(deps) {
     const record = selectRecord(records, args.positionals[0] ?? null, flag(args.flags, 'id'));
     assertHistoryOperationIdle(record, 'retarget');
     const snapshot = historyChangeSnapshot(record, 'retarget');
-    if (snapshot.head !== expectedHead) die(`retarget HEAD CAS 失败：expected=${expectedHead}, actual=${snapshot.head}`, 2);
+    if (snapshot.head !== expectedHead)
+      die(`retarget HEAD CAS 失败：expected=${expectedHead}, actual=${snapshot.head}`, 2);
     const base = resolveManagedBase(records, baseRef, record.path);
     assertStackParentAcyclic(records, record, base.parent, 'retarget');
     if (!isAncestor(record.path, base.sha, snapshot.head)) {
       die(`retarget 不改写历史，但 ${base.sha} 不是 live HEAD 的祖先；请改用 rebase --onto ${baseRef}。`, 2);
     }
-    const oldWatch = record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
-      ? structuredClone(record.auto_reclaim)
-      : null;
-    const updated = updateRecord(record, 'base_retargeted', (next) => {
-      const live = liveGitSnapshot(next);
-      if (live.head !== expectedHead) throw new WorktreeTraceError('RETARGET_HEAD_CHANGED', `retarget 期间 HEAD 已变为 ${live.head}`);
-      const watcherToken = disarmHistoryWatcher(next, 'base_retargeted');
-      next.base_ref = base.ref;
-      next.base_sha = base.sha;
-      next.base_reason = reason;
-      next.stack_parent = base.parent;
-      next.last_head = live.head;
-      next.last_seen_at = new Date().toISOString();
-      if (next.change_request) {
-        const targetBranch = base.ref.includes('/') ? base.ref.slice(base.ref.indexOf('/') + 1) : base.ref;
-        next.change_request.target_branch = targetBranch;
-        next.change_request.target_ref = base.ref;
-        next.change_request.target_sync = 'record_only';
-        next.change_request.retargeted_at = new Date().toISOString();
-      }
-      if (watcherToken) next.task_status = 'active';
-    }, {
-      old_base_ref: record.base_ref,
-      old_base_sha: record.base_sha,
-      new_base_ref: base.ref,
-      new_base_sha: base.sha,
-      stack_parent_worktree_id: base.parent?.worktree_id ?? null,
-      reason,
-      expected_head: expectedHead,
-    }, loaded.context.common_dir);
+    const oldWatch =
+      record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
+        ? structuredClone(record.auto_reclaim)
+        : null;
+    const updated = updateRecord(
+      record,
+      'base_retargeted',
+      (next) => {
+        const live = liveGitSnapshot(next);
+        if (live.head !== expectedHead)
+          throw new WorktreeTraceError('RETARGET_HEAD_CHANGED', `retarget 期间 HEAD 已变为 ${live.head}`);
+        const watcherToken = disarmHistoryWatcher(next, 'base_retargeted');
+        next.base_ref = base.ref;
+        next.base_sha = base.sha;
+        next.base_reason = reason;
+        next.stack_parent = base.parent;
+        next.last_head = live.head;
+        next.last_seen_at = new Date().toISOString();
+        if (next.change_request) {
+          const targetBranch = base.ref.includes('/') ? base.ref.slice(base.ref.indexOf('/') + 1) : base.ref;
+          next.change_request.target_branch = targetBranch;
+          next.change_request.target_ref = base.ref;
+          next.change_request.target_sync = 'record_only';
+          next.change_request.retargeted_at = new Date().toISOString();
+        }
+        if (watcherToken) next.task_status = 'active';
+      },
+      {
+        old_base_ref: record.base_ref,
+        old_base_sha: record.base_sha,
+        new_base_ref: base.ref,
+        new_base_sha: base.sha,
+        stack_parent_worktree_id: base.parent?.worktree_id ?? null,
+        reason,
+        expected_head: expectedHead,
+      },
+      loaded.context.common_dir,
+    );
     if (oldWatch?.token) removeWatcherHeartbeat(loaded.context.common_dir, record.worktree_id, oldWatch.token);
-    log(`已 retarget ${record.task}: ${record.base_ref}@${String(record.base_sha).slice(0, 12)} -> ${base.ref}@${base.sha.slice(0, 12)}`);
+    log(
+      `已 retarget ${record.task}: ${record.base_ref}@${String(record.base_sha).slice(0, 12)} -> ${base.ref}@${base.sha.slice(0, 12)}`,
+    );
     if (oldWatch) log('旧 watcher 已失效；确认远端 MR 目标后重新 touch ready_for_review 以武装新 target。');
-    if (updated.change_request?.target_sync === 'record_only') log('MR target 仅更新本地记录；portable core 未调用远端 provider。');
+    if (updated.change_request?.target_sync === 'record_only')
+      log('MR target 仅更新本地记录；portable core 未调用远端 provider。');
   }
 
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} record @param {Record<string,any>} operation */
@@ -175,54 +188,67 @@ export function createCommands(deps) {
     if (!live.present || live.dirty !== false || !live.head) die('rebase 完成后的 worktree 状态不可冻结。', 2);
     if (!isAncestor(record.path, operation.onto_sha, live.head)) die('rebase 后 onto SHA 不是 live HEAD 的祖先。', 2);
     const newCommits = revisionList(record.path, operation.onto_sha, live.head);
-    return updateRecord(record, 'history_rebase_completed', (next) => {
-      if (next.history_operation?.token !== operation.token) {
-        throw new WorktreeTraceError('REBASE_OPERATION_CHANGED', 'rebase finalize 时 operation token 已变化。');
-      }
-      const epoch = next.ownership_epochs?.at(-1);
-      if (epoch && !epoch.ended_at) {
-        epoch.ended_at = new Date().toISOString();
-        epoch.end_sha = operation.old_head;
-      }
-      next.ownership_epochs ??= [];
-      next.ownership_epochs.push({ agent: next.agent, started_at: new Date().toISOString(), start_sha: operation.onto_sha, end_sha: null, ended_at: null, source: 'managed_rebase' });
-      next.history_rewrites ??= [];
-      next.history_rewrites.push({
-        kind: 'rebase',
+    return updateRecord(
+      record,
+      'history_rebase_completed',
+      (next) => {
+        if (next.history_operation?.token !== operation.token) {
+          throw new WorktreeTraceError('REBASE_OPERATION_CHANGED', 'rebase finalize 时 operation token 已变化。');
+        }
+        const epoch = next.ownership_epochs?.at(-1);
+        if (epoch && !epoch.ended_at) {
+          epoch.ended_at = new Date().toISOString();
+          epoch.end_sha = operation.old_head;
+        }
+        next.ownership_epochs ??= [];
+        next.ownership_epochs.push({
+          agent: next.agent,
+          started_at: new Date().toISOString(),
+          start_sha: operation.onto_sha,
+          end_sha: null,
+          ended_at: null,
+          source: 'managed_rebase',
+        });
+        next.history_rewrites ??= [];
+        next.history_rewrites.push({
+          kind: 'rebase',
+          token: operation.token,
+          old_base_ref: operation.old_base_ref,
+          old_base_sha: operation.old_base_sha,
+          old_head: operation.old_head,
+          old_commits: operation.old_commits,
+          new_base_ref: operation.onto_ref,
+          new_base_sha: operation.onto_sha,
+          new_head: live.head,
+          new_commits: newCommits,
+          reason: operation.reason,
+          completed_at: new Date().toISOString(),
+        });
+        next.base_ref = operation.onto_ref;
+        next.base_sha = operation.onto_sha;
+        next.base_reason = operation.reason;
+        next.stack_parent = operation.stack_parent;
+        next.last_head = live.head;
+        next.last_seen_at = new Date().toISOString();
+        next.history_operation = null;
+        if (next.task_status === 'ready_for_review') next.task_status = 'active';
+        if (next.change_request) {
+          next.change_request.source_head_stale = true;
+          next.change_request.rewritten_head_sha = live.head;
+          next.change_request.rewritten_at = new Date().toISOString();
+        }
+      },
+      {
         token: operation.token,
-        old_base_ref: operation.old_base_ref,
-        old_base_sha: operation.old_base_sha,
         old_head: operation.old_head,
-        old_commits: operation.old_commits,
-        new_base_ref: operation.onto_ref,
-        new_base_sha: operation.onto_sha,
         new_head: live.head,
-        new_commits: newCommits,
-        reason: operation.reason,
-        completed_at: new Date().toISOString(),
-      });
-      next.base_ref = operation.onto_ref;
-      next.base_sha = operation.onto_sha;
-      next.base_reason = operation.reason;
-      next.stack_parent = operation.stack_parent;
-      next.last_head = live.head;
-      next.last_seen_at = new Date().toISOString();
-      next.history_operation = null;
-      if (next.task_status === 'ready_for_review') next.task_status = 'active';
-      if (next.change_request) {
-        next.change_request.source_head_stale = true;
-        next.change_request.rewritten_head_sha = live.head;
-        next.change_request.rewritten_at = new Date().toISOString();
-      }
-    }, {
-      token: operation.token,
-      old_head: operation.old_head,
-      new_head: live.head,
-      old_base_sha: operation.old_base_sha,
-      new_base_sha: operation.onto_sha,
-      old_commit_count: operation.old_commits.length,
-      new_commit_count: newCommits.length,
-    }, loaded.context.common_dir);
+        old_base_sha: operation.old_base_sha,
+        new_base_sha: operation.onto_sha,
+        old_commit_count: operation.old_commits.length,
+        new_commit_count: newCommits.length,
+      },
+      loaded.context.common_dir,
+    );
   }
 
   /**
@@ -244,13 +270,21 @@ export function createCommands(deps) {
         if (!aborted.ok) die(`git rebase --abort 失败: ${commandFailureReason(aborted, 'unknown error')}`);
       }
       const live = liveGitSnapshot(record);
-      if (live.head !== pending.old_head || live.dirty !== false) die('rebase abort 后未恢复到原始 clean HEAD，保留 pending 供 doctor。', 2);
-      updateRecord(record, 'history_rebase_aborted', (next) => {
-        if (next.history_operation?.token !== pending.token) throw new WorktreeTraceError('REBASE_OPERATION_CHANGED', 'abort 时 operation token 已变化。');
-        next.history_operation = null;
-        next.last_head = live.head;
-        next.last_seen_at = new Date().toISOString();
-      }, { token: pending.token, restored_head: live.head }, loaded.context.common_dir);
+      if (live.head !== pending.old_head || live.dirty !== false)
+        die('rebase abort 后未恢复到原始 clean HEAD，保留 pending 供 doctor。', 2);
+      updateRecord(
+        record,
+        'history_rebase_aborted',
+        (next) => {
+          if (next.history_operation?.token !== pending.token)
+            throw new WorktreeTraceError('REBASE_OPERATION_CHANGED', 'abort 时 operation token 已变化。');
+          next.history_operation = null;
+          next.last_head = live.head;
+          next.last_seen_at = new Date().toISOString();
+        },
+        { token: pending.token, restored_head: live.head },
+        loaded.context.common_dir,
+      );
       log(`已 abort managed rebase，HEAD 恢复为 ${live.head.slice(0, 12)}；watcher 保持关闭。`);
       return;
     }
@@ -281,11 +315,18 @@ export function createCommands(deps) {
         });
         operationState = gitOperationState(record.path);
         if (!continued.ok || operationState?.startsWith('rebase')) {
-          updateRecord(record, 'history_rebase_conflicted', (next) => {
-            if (next.history_operation?.token !== pending.token) throw new WorktreeTraceError('REBASE_OPERATION_CHANGED', 'continue 时 operation token 已变化。');
-            next.history_operation.state = 'conflicted';
-            next.history_operation.last_error = commandFailureReason(continued, 'rebase conflict remains');
-          }, { token: pending.token, git_state: operationState ?? 'unknown', phase: 'continue' }, loaded.context.common_dir);
+          updateRecord(
+            record,
+            'history_rebase_conflicted',
+            (next) => {
+              if (next.history_operation?.token !== pending.token)
+                throw new WorktreeTraceError('REBASE_OPERATION_CHANGED', 'continue 时 operation token 已变化。');
+              next.history_operation.state = 'conflicted';
+              next.history_operation.last_error = commandFailureReason(continued, 'rebase conflict remains');
+            },
+            { token: pending.token, git_state: operationState ?? 'unknown', phase: 'continue' },
+            loaded.context.common_dir,
+          );
           die('managed rebase --continue 未完成；继续解决冲突后重跑相同 manager 命令，或使用 rebase --abort。');
         }
       } else if (operationState?.startsWith('rebase')) {
@@ -294,18 +335,25 @@ export function createCommands(deps) {
       const live = liveGitSnapshot(record);
       if (live.head !== pending.old_head && live.head && isAncestor(record.path, pending.onto_sha, live.head)) {
         const completed = finalizeManagedRebase(loaded, record, pending);
-        log(`已恢复并 finalize rebase ${record.task}: ${pending.old_head.slice(0, 12)} -> ${completed.last_head.slice(0, 12)}`);
+        log(
+          `已恢复并 finalize rebase ${record.task}: ${pending.old_head.slice(0, 12)} -> ${completed.last_head.slice(0, 12)}`,
+        );
         return;
       }
-      if (live.head !== pending.old_head) die('managed rebase pending，但 live HEAD 既不是 old_head 也不是可验证的新链。', 2);
+      if (live.head !== pending.old_head)
+        die('managed rebase pending，但 live HEAD 既不是 old_head 也不是可验证的新链。', 2);
     }
 
     if (!ontoRef || !reason || !expectedHead) {
-      die('新建 managed rebase 需要 --onto、--expected-head 与 --reason；恢复 pending 操作只需 selector + --continue。', 2);
+      die(
+        '新建 managed rebase 需要 --onto、--expected-head 与 --reason；恢复 pending 操作只需 selector + --continue。',
+        2,
+      );
     }
 
     const snapshot = historyChangeSnapshot(record, 'rebase');
-    if (snapshot.head !== expectedHead) die(`rebase HEAD CAS 失败：expected=${expectedHead}, actual=${snapshot.head}`, 2);
+    if (snapshot.head !== expectedHead)
+      die(`rebase HEAD CAS 失败：expected=${expectedHead}, actual=${snapshot.head}`, 2);
     if (!record.base_sha || !isAncestor(record.path, record.base_sha, snapshot.head)) {
       die('record.base_sha 不是 live HEAD 的祖先；历史已在 manager 外改写，拒绝继续。', 2);
     }
@@ -328,45 +376,74 @@ export function createCommands(deps) {
         reason,
         prepared_at: new Date().toISOString(),
       };
-      const oldWatch = record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
-        ? structuredClone(record.auto_reclaim)
-        : null;
-      record = updateRecord(record, 'history_rebase_prepared', (next) => {
-        const live = liveGitSnapshot(next);
-        if (live.head !== expectedHead || live.dirty !== false) throw new WorktreeTraceError('REBASE_PREPARE_DRIFT', 'rebase prepare 前 Git 状态已变化。');
-        disarmHistoryWatcher(next, 'history_rebase_prepared');
-        next.history_operation = operation;
-        next.last_head = live.head;
-        next.last_seen_at = new Date().toISOString();
-      }, { ...operation, old_commits: operation.old_commits.length }, loaded.context.common_dir);
+      const oldWatch =
+        record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
+          ? structuredClone(record.auto_reclaim)
+          : null;
+      record = updateRecord(
+        record,
+        'history_rebase_prepared',
+        (next) => {
+          const live = liveGitSnapshot(next);
+          if (live.head !== expectedHead || live.dirty !== false)
+            throw new WorktreeTraceError('REBASE_PREPARE_DRIFT', 'rebase prepare 前 Git 状态已变化。');
+          disarmHistoryWatcher(next, 'history_rebase_prepared');
+          next.history_operation = operation;
+          next.last_head = live.head;
+          next.last_seen_at = new Date().toISOString();
+        },
+        { ...operation, old_commits: operation.old_commits.length },
+        loaded.context.common_dir,
+      );
       if (oldWatch?.token) removeWatcherHeartbeat(loaded.context.common_dir, record.worktree_id, oldWatch.token);
     }
 
-    const rebased = gitTry(['rebase', '--onto', operation.onto_sha, operation.old_base_sha, record.branch], record.path, { timeoutMs: SUBMIT_PUSH_TIMEOUT_MS });
+    const rebased = gitTry(
+      ['rebase', '--onto', operation.onto_sha, operation.old_base_sha, record.branch],
+      record.path,
+      { timeoutMs: SUBMIT_PUSH_TIMEOUT_MS },
+    );
     if (!rebased.ok) {
       const state = gitOperationState(record.path);
       if (state?.startsWith('rebase')) {
-        updateRecord(record, 'history_rebase_conflicted', (next) => {
-          if (next.history_operation?.token !== operation.token) throw new WorktreeTraceError('REBASE_OPERATION_CHANGED', 'conflict 记录时 token 已变化。');
-          next.history_operation.state = 'conflicted';
-          next.history_operation.last_error = commandFailureReason(rebased, 'rebase conflict');
-        }, { token: operation.token, git_state: state }, loaded.context.common_dir);
-        die('managed rebase 发生冲突；解决文件并 git add 后，用相同 manager 命令加 --continue，或使用 rebase --abort。');
+        updateRecord(
+          record,
+          'history_rebase_conflicted',
+          (next) => {
+            if (next.history_operation?.token !== operation.token)
+              throw new WorktreeTraceError('REBASE_OPERATION_CHANGED', 'conflict 记录时 token 已变化。');
+            next.history_operation.state = 'conflicted';
+            next.history_operation.last_error = commandFailureReason(rebased, 'rebase conflict');
+          },
+          { token: operation.token, git_state: state },
+          loaded.context.common_dir,
+        );
+        die(
+          'managed rebase 发生冲突；解决文件并 git add 后，用相同 manager 命令加 --continue，或使用 rebase --abort。',
+        );
       }
       const live = liveGitSnapshot(record);
       if (live.head === operation.old_head && live.dirty === false) {
-        updateRecord(record, 'history_rebase_failed', (next) => {
-          if (next.history_operation?.token !== operation.token) throw new WorktreeTraceError('REBASE_OPERATION_CHANGED', 'failure 记录时 token 已变化。');
-          next.history_operation = null;
-        }, { token: operation.token, reason: commandFailureReason(rebased, 'rebase failed before applying changes') }, loaded.context.common_dir);
+        updateRecord(
+          record,
+          'history_rebase_failed',
+          (next) => {
+            if (next.history_operation?.token !== operation.token)
+              throw new WorktreeTraceError('REBASE_OPERATION_CHANGED', 'failure 记录时 token 已变化。');
+            next.history_operation = null;
+          },
+          { token: operation.token, reason: commandFailureReason(rebased, 'rebase failed before applying changes') },
+          loaded.context.common_dir,
+        );
       }
       die(`managed rebase 失败: ${commandFailureReason(rebased, 'unknown error')}`);
     }
     const completed = finalizeManagedRebase(loaded, record, operation);
-    log(`已 rebase ${record.task}: ${operation.old_head.slice(0, 12)} -> ${completed.last_head.slice(0, 12)}，base=${operation.onto_ref}@${operation.onto_sha.slice(0, 12)}`);
+    log(
+      `已 rebase ${record.task}: ${operation.old_head.slice(0, 12)} -> ${completed.last_head.slice(0, 12)}，base=${operation.onto_ref}@${operation.onto_sha.slice(0, 12)}`,
+    );
     log('旧 Artifact/MR head/watcher 已失效；push 新 HEAD 后重新登记评审边界。');
   }
-
 
   return {
     stackParentForRef,

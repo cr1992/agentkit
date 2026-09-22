@@ -65,7 +65,16 @@ export const MISSING_AUTH_MESSAGE = [
 ].join('\n');
 
 /** 本脚本自己吃掉的选项；其余一律原样透传给 run.mjs。 */
-const RUNNER_VALUE_OPTIONS = new Set(['engine', 'image', 'claude-version', 'out', 'repo', 'memory', 'pids-limit', 'shards']);
+const RUNNER_VALUE_OPTIONS = new Set([
+  'engine',
+  'image',
+  'claude-version',
+  'out',
+  'repo',
+  'memory',
+  'pids-limit',
+  'shards',
+]);
 const RUNNER_FLAGS = new Set(['selftest', 'no-build']);
 
 /**
@@ -92,10 +101,19 @@ export function parseRunnerArgs(argv) {
   const passthrough = [];
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
-    if (token === '--') { passthrough.push(...argv.slice(i + 1)); break; }
-    if (!token.startsWith('--')) { passthrough.push(token); continue; }
+    if (token === '--') {
+      passthrough.push(...argv.slice(i + 1));
+      break;
+    }
+    if (!token.startsWith('--')) {
+      passthrough.push(token);
+      continue;
+    }
     const key = token.slice(2);
-    if (RUNNER_FLAGS.has(key)) { options[key] = true; continue; }
+    if (RUNNER_FLAGS.has(key)) {
+      options[key] = true;
+      continue;
+    }
     if (RUNNER_VALUE_OPTIONS.has(key)) {
       const value = argv[i + 1];
       if (value === undefined || value.startsWith('--')) throw new Error(`--${key} 需要取值`);
@@ -106,15 +124,20 @@ export function parseRunnerArgs(argv) {
     // 不认识的一律透传：run.mjs 会对真正的笔误报「未知选项」，这里不重复一份选项表。
     passthrough.push(token);
     const value = argv[i + 1];
-    if (value !== undefined && !value.startsWith('--')) { passthrough.push(value); i += 1; }
+    if (value !== undefined && !value.startsWith('--')) {
+      passthrough.push(value);
+      i += 1;
+    }
   }
-  if (!ENGINES.includes(String(options.engine))) throw new Error(`--engine 只能是 ${ENGINES.join(' / ')}，收到 ${options.engine}`);
+  if (!ENGINES.includes(String(options.engine)))
+    throw new Error(`--engine 只能是 ${ENGINES.join(' / ')}，收到 ${options.engine}`);
   if (!options.out) throw new Error('--out <宿主结果目录> 必填：它是唯一以读写方式挂进容器的宿主目录');
   const shards = Number(options.shards);
   if (!Number.isInteger(shards) || shards < 1) throw new Error(`--shards 必须是正整数，收到 ${options.shards}`);
   // 分片由运行器自己派：它要给每一片建独立结果目录、起独立容器、最后合并。
   // 手动再透传一个 --shard 会让 run.mjs 取到后一个，两层分片叠在一起，结果没人看得懂。
-  if (shards > 1 && passthrough.includes('--shard')) throw new Error('--shards 与手动透传的 --shard 不能同时用：分片由运行器派发');
+  if (shards > 1 && passthrough.includes('--shard'))
+    throw new Error('--shards 与手动透传的 --shard 不能同时用：分片由运行器派发');
   return { options, passthrough };
 }
 
@@ -149,23 +172,39 @@ export function buildImageArgs(options = {}) {
  * }} options
  * @returns {string[]}
  */
-export function buildRunArgs({ image = DEFAULT_IMAGE, repoDir, outDir, memory = DEFAULT_MEMORY, pidsLimit = DEFAULT_PIDS_LIMIT, authEnvKeys = [], script }) {
+export function buildRunArgs({
+  image = DEFAULT_IMAGE,
+  repoDir,
+  outDir,
+  memory = DEFAULT_MEMORY,
+  pidsLimit = DEFAULT_PIDS_LIMIT,
+  authEnvKeys = [],
+  script,
+}) {
   if (!repoDir) throw new Error('buildRunArgs 需要 repoDir');
   if (!outDir) throw new Error('buildRunArgs 需要 outDir');
   if (!script) throw new Error('buildRunArgs 需要 script');
   const args = [
-    'run', '--rm',
+    'run',
+    '--rm',
     // 容器进程不需要任何 Linux capability；也不允许通过 setuid 程序提权。
-    '--cap-drop', 'ALL',
-    '--security-opt', 'no-new-privileges',
+    '--cap-drop',
+    'ALL',
+    '--security-opt',
+    'no-new-privileges',
     // 被测会话在 bypassPermissions 下能跑任意命令：给 fork 炸弹和内存吃尽一个上限。
-    '--pids-limit', String(pidsLimit),
-    '--memory', String(memory),
+    '--pids-limit',
+    String(pidsLimit),
+    '--memory',
+    String(memory),
     // 仓库只读：会话改不到宿主的 checkout。容器内先拷到 /work/repo 再跑（见 script）。
-    '-v', `${repoDir}:/src:ro`,
+    '-v',
+    `${repoDir}:/src:ro`,
     // 唯一以读写方式挂进来的宿主目录。fixture 仓、state root、会话 HOME 全落在它下面。
-    '-v', `${outDir}:/out`,
-    '-w', '/work',
+    '-v',
+    `${outDir}:/out`,
+    '-w',
+    '/work',
   ];
   // 不带取值：由引擎从调用者环境继承。token 因此不出现在 argv、ps 输出和留档里。
   for (const key of authEnvKeys) args.push('-e', key);
@@ -205,7 +244,8 @@ export function buildEvalScript(passthrough = []) {
   // 这三个由运行器自己定死：--driver / --out 再传一遍会让 run.mjs 取到后一个，
   // 评测结果会安静地写到别处或换成回放驱动器。宁可当场报错。
   for (const reserved of ['--driver', '--out']) {
-    if (passthrough.includes(reserved)) throw new Error(`${reserved} 由容器运行器固定，不能透传（结果目录用运行器的 --out）`);
+    if (passthrough.includes(reserved))
+      throw new Error(`${reserved} 由容器运行器固定，不能透传（结果目录用运行器的 --out）`);
   }
   const forwarded = passthrough.map(shellQuote).join(' ');
   return [
@@ -267,14 +307,22 @@ export function shellQuote(value) {
  * @returns {Promise<Array<{ index: number, status: number }>>}
  */
 function runEngineParallel(engine, jobs) {
-  return Promise.all(jobs.map(({ index, args }) => new Promise((done) => {
-    const child = spawn(engine, args, { stdio: 'inherit', env: process.env });
-    child.on('error', (error) => { process.stderr.write(`[容器] 分片 ${index} 起不来：${error.message}\n`); done({ index, status: 2 }); });
-    child.on('close', (code, signal) => {
-      process.stderr.write(`[容器] 分片 ${index} 结束：退出码 ${code ?? `信号 ${signal}`}\n`);
-      done({ index, status: code === null ? 2 : code });
-    });
-  })));
+  return Promise.all(
+    jobs.map(
+      ({ index, args }) =>
+        new Promise((done) => {
+          const child = spawn(engine, args, { stdio: 'inherit', env: process.env });
+          child.on('error', (error) => {
+            process.stderr.write(`[容器] 分片 ${index} 起不来：${error.message}\n`);
+            done({ index, status: 2 });
+          });
+          child.on('close', (code, signal) => {
+            process.stderr.write(`[容器] 分片 ${index} 结束：退出码 ${code ?? `信号 ${signal}`}\n`);
+            done({ index, status: code === null ? 2 : code });
+          });
+        }),
+    ),
+  );
 }
 
 /** @param {string} engine @param {string[]} args @param {{ capture?: boolean }} [options] */
@@ -291,11 +339,17 @@ function runEngine(engine, args, options = {}) {
 
 /** 镜像的 Id / RepoDigests：写进结果，和宿主版本、模型 ID、skill digest 并列。 */
 function inspectImage(engine, image) {
-  const result = runEngine(engine, ['image', 'inspect', image, '--format', '{{.Id}}\t{{json .RepoDigests}}'], { capture: true });
+  const result = runEngine(engine, ['image', 'inspect', image, '--format', '{{.Id}}\t{{json .RepoDigests}}'], {
+    capture: true,
+  });
   if (result.status !== 0) return { image_id: null, repo_digests: [] };
   const [id, digests] = String(result.stdout).trim().split('\t');
   let parsed = [];
-  try { parsed = JSON.parse(digests ?? '[]') ?? []; } catch { parsed = []; }
+  try {
+    parsed = JSON.parse(digests ?? '[]') ?? [];
+  } catch {
+    parsed = [];
+  }
   return { image_id: id || null, repo_digests: parsed };
 }
 
@@ -304,8 +358,21 @@ function inspectImage(engine, image) {
  * 这次 run 只 cat 一个文件：不挂任何宿主目录、不传任何环境变量、连网都断掉。
  */
 function imageClaudeVersion(engine, image) {
-  const args = ['run', '--rm', '--network', 'none', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-    '--entrypoint', '/bin/bash', image, '-lc', 'cat /home/node/claude-code-version.txt'];
+  const args = [
+    'run',
+    '--rm',
+    '--network',
+    'none',
+    '--cap-drop',
+    'ALL',
+    '--security-opt',
+    'no-new-privileges',
+    '--entrypoint',
+    '/bin/bash',
+    image,
+    '-lc',
+    'cat /home/node/claude-code-version.txt',
+  ];
   const result = runEngine(engine, args, { capture: true });
   return result.status === 0 ? String(result.stdout).trim() : null;
 }
@@ -367,7 +434,9 @@ export async function main(argv) {
   };
   writeFileSync(resolve(outDir, 'container.json'), `${JSON.stringify(record, null, 2)}\n`);
   process.stderr.write(`[容器] 镜像 ${image} id=${inspected.image_id ?? '未知'} claude=${claudeVersion ?? '未知'}\n`);
-  process.stderr.write(`[容器] 认证变量（只传键名，取值由引擎继承）：${authEnvKeys.length ? authEnvKeys.join(', ') : '（自检模式，不需要）'}\n`);
+  process.stderr.write(
+    `[容器] 认证变量（只传键名，取值由引擎继承）：${authEnvKeys.length ? authEnvKeys.join(', ') : '（自检模式，不需要）'}\n`,
+  );
 
   if (shards === 1) {
     const run = runEngine(engine, jobs[0].args);
@@ -375,14 +444,19 @@ export async function main(argv) {
   }
 
   process.stderr.write(`[容器] 分 ${shards} 片并行，各片结果写 ${outDir}/shard-<i>\n`);
-  const results = await runEngineParallel(engine, jobs.map((job) => ({ index: job.index, args: job.args })));
+  const results = await runEngineParallel(
+    engine,
+    jobs.map((job) => ({ index: job.index, args: job.args })),
+  );
   const worst = Math.max(...results.map((item) => item.status));
 
   // 合并只在**每一片都产出了 report.json** 时进行。缺一片就宁可不合：
   // 一份少了几条用例的合并报告和一份完整报告长得一模一样，那才是真正危险的失败模式。
   const missing = jobs.filter((job) => !existsSync(join(job.outDir, 'report.json')));
   if (missing.length) {
-    process.stderr.write(`[容器] 分片 ${missing.map((job) => job.index).join('、')} 没有产出 report.json，不做合并；各片留档仍在 ${outDir}/shard-<i>\n`);
+    process.stderr.write(
+      `[容器] 分片 ${missing.map((job) => job.index).join('、')} 没有产出 report.json，不做合并；各片留档仍在 ${outDir}/shard-<i>\n`,
+    );
     return worst === 0 ? 1 : worst;
   }
   const mergeCode = await mergeReportsMain(['--out', outDir, ...jobs.map((job) => job.outDir)]);
@@ -408,11 +482,18 @@ export function buildShardJobs({ shards, selftest, passthrough, image, repoDir, 
     }),
   });
   if (shards === 1) return [one(1, outDir, [])];
-  return Array.from({ length: shards }, (_, i) => one(i + 1, join(outDir, `shard-${i + 1}`), ['--shard', `${i + 1}/${shards}`]));
+  return Array.from({ length: shards }, (_, i) =>
+    one(i + 1, join(outDir, `shard-${i + 1}`), ['--shard', `${i + 1}/${shards}`]),
+  );
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(process.argv.slice(2))
-    .then((code) => { process.exitCode = code; })
-    .catch((error) => { process.stderr.write(`${error.message}\n`); process.exitCode = 2; });
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((error) => {
+      process.stderr.write(`${error.message}\n`);
+      process.exitCode = 2;
+    });
 }

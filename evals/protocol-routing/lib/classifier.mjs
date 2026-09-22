@@ -88,7 +88,8 @@ export function normalizeCall(argv) {
   // 也不该因为 `status` 的存在被整条放掉。
   if (SUBVERB_VERBS.has(verb)) return { ...base, label, observable: true, reason: '暴露路由去向' };
   if (READONLY_PAIRS.has(`${domain} ${verb}`)) return deny(`只读组合 ${domain} ${verb}`);
-  if (PROCESS_PRELUDE_PAIRS.has(`${domain} ${verb}`)) return deny(`流程前置步骤 ${domain} ${verb}（有副作用，但不暴露路由去向）`);
+  if (PROCESS_PRELUDE_PAIRS.has(`${domain} ${verb}`))
+    return deny(`流程前置步骤 ${domain} ${verb}（有副作用，但不暴露路由去向）`);
 
   return { ...base, label, observable: true, reason: '暴露路由去向' };
 }
@@ -103,10 +104,15 @@ function keyParamsOf(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     if (!argv[i].startsWith('--')) continue;
     const eq = argv[i].indexOf('=');
-    if (eq > 0) { out[argv[i].slice(2, eq)] = argv[i].slice(eq + 1); continue; }
+    if (eq > 0) {
+      out[argv[i].slice(2, eq)] = argv[i].slice(eq + 1);
+      continue;
+    }
     const next = argv[i + 1];
-    if (next !== undefined && !next.startsWith('-')) { out[argv[i].slice(2)] = next; i += 1; }
-    else out[argv[i].slice(2)] = true;
+    if (next !== undefined && !next.startsWith('-')) {
+      out[argv[i].slice(2)] = next;
+      i += 1;
+    } else out[argv[i].slice(2)] = true;
   }
   return out;
 }
@@ -134,8 +140,11 @@ export function callPayload(call, flag, options = {}) {
   const raw = call.key_params[flag];
   if (typeof raw !== 'string') return { resolved: false };
   if (options.payloads && Object.hasOwn(options.payloads, raw)) return { resolved: true, value: options.payloads[raw] };
-  try { return { resolved: true, value: (options.resolve ?? readPayload)(raw) }; }
-  catch { return { resolved: false }; }
+  try {
+    return { resolved: true, value: (options.resolve ?? readPayload)(raw) };
+  } catch {
+    return { resolved: false };
+  }
 }
 
 /**
@@ -151,7 +160,8 @@ export function declaresIndependentEvidence(call, options = {}) {
 }
 
 /** fixture 仓摘要相等判定：`git status --porcelain` 与 `HEAD` 全等才算没变。 */
-const sameRepo = (/** @type {any} */ a, /** @type {any} */ b) => (a?.status ?? null) === (b?.status ?? null) && (a?.head ?? null) === (b?.head ?? null);
+const sameRepo = (/** @type {any} */ a, /** @type {any} */ b) =>
+  (a?.status ?? null) === (b?.status ?? null) && (a?.head ?? null) === (b?.head ?? null);
 
 /**
  * @typedef {import('./ledger-probe.mjs').LedgerSnapshot} LedgerSnapshot
@@ -190,7 +200,14 @@ export function classify(session) {
   /** @type {Array<{ seq: number, tool_name: string }>} */
   const writes = [];
   /** @type {Classification} */
-  const result = { observation: 'NONE', observation_kind: 'none', observed_at: null, observed_call: null, calls, writes };
+  const result = {
+    observation: 'NONE',
+    observation_kind: 'none',
+    observed_at: null,
+    observed_call: null,
+    calls,
+    writes,
+  };
 
   for (const event of session.events) {
     const command = typeof event.tool_input?.command === 'string' ? event.tool_input.command : '';

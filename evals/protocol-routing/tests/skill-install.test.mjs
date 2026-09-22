@@ -23,13 +23,21 @@ function fakeInstaller(calls, { names = SKILL_NAMES, body = '# fake SKILL\n' } =
       writeFileSync(join(configDir, 'skills', name, 'SKILL.md'), body);
     }
     // 退出码故意非零：真实安装器就是这样（`--agent '*'` 下有 agent 不支持全局安装）。
-    return { exit_code: 1, stdout: '[{"skill":"x","status":"failed"}]', stderr: 'Eve does not support global skill installation' };
+    return {
+      exit_code: 1,
+      stdout: '[{"skill":"x","status":"failed"}]',
+      stderr: 'Eve does not support global skill installation',
+    };
   };
 }
 
 const withTemp = (fn) => {
   const base = mkdtempSync(join(tmpdir(), 'protocol-routing-skill-test-'));
-  try { return fn(base); } finally { rmSync(base, { recursive: true, force: true }); }
+  try {
+    return fn(base);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
 };
 
 test('每轮装一次：缓存已完整时不起任何子进程，也不看安装器', () => {
@@ -45,7 +53,9 @@ test('每轮装一次：缓存已完整时不起任何子进程，也不看安�
     // 第二次：安装器换成哨兵——一旦被调用就抛。这条就是「断网也能起会话」的机械证据。
     const second = prepareSkillCache({
       cacheDir,
-      install: () => { throw new Error('缓存已完整时不该再调用安装器'); },
+      install: () => {
+        throw new Error('缓存已完整时不该再调用安装器');
+      },
     });
     assert.equal(second.reused, true);
     assert.equal(second.skills_dir, first.skills_dir);
@@ -71,7 +81,8 @@ test('装不上就抛，且报错点名缺了哪几个 skill、带上安装器 s
       (error) => {
         const message = /** @type {Error} */ (error).message;
         assert.match(message, /skill 安装不完整/u);
-        for (const name of SKILL_NAMES.filter((name) => name !== 'manage-worktrees')) assert.ok(message.includes(name), name);
+        for (const name of SKILL_NAMES.filter((name) => name !== 'manage-worktrees'))
+          assert.ok(message.includes(name), name);
         assert.match(message, /Eve does not support global skill installation/u);
         return true;
       },
@@ -81,7 +92,10 @@ test('装不上就抛，且报错点名缺了哪几个 skill、带上安装器 s
 
 test('会话侧只从缓存复制：不触网、不起子进程，每个会话拿到自己的一份拷贝', () => {
   withTemp((base) => {
-    const cache = prepareSkillCache({ cacheDir: join(base, 'skill-cache'), install: fakeInstaller([], { body: '# from cache\n' }) });
+    const cache = prepareSkillCache({
+      cacheDir: join(base, 'skill-cache'),
+      install: fakeInstaller([], { body: '# from cache\n' }),
+    });
 
     // 模拟断网：把 npm registry 指到一个不可达地址，再起两个会话。
     // 复制路径一个子进程都不起，所以这两句只是把意图写进测试；真正的机械保证是
@@ -105,14 +119,19 @@ test('会话侧只从缓存复制：不触网、不起子进程，每个会话�
         assert.equal(result.installer?.exit_code, 1);
       }
     } finally {
-      if (saved.registry === undefined) delete process.env.npm_config_registry; else process.env.npm_config_registry = saved.registry;
-      if (saved.offline === undefined) delete process.env.npm_config_offline; else process.env.npm_config_offline = saved.offline;
+      if (saved.registry === undefined) delete process.env.npm_config_registry;
+      else process.env.npm_config_registry = saved.registry;
+      if (saved.offline === undefined) delete process.env.npm_config_offline;
+      else process.env.npm_config_offline = saved.offline;
     }
 
     // 每个会话是**自己的一份拷贝**：改一个不影响另一个，也不影响缓存。
     const victim = join(base, 'session-a', 'home', '.claude', 'skills', 'manage-worktrees', 'SKILL.md');
     writeFileSync(victim, '# tampered\n');
-    assert.equal(readFileSync(join(base, 'session-b', 'home', '.claude', 'skills', 'manage-worktrees', 'SKILL.md'), 'utf8'), '# from cache\n');
+    assert.equal(
+      readFileSync(join(base, 'session-b', 'home', '.claude', 'skills', 'manage-worktrees', 'SKILL.md'), 'utf8'),
+      '# from cache\n',
+    );
     assert.equal(readFileSync(join(cache.skills_dir, 'manage-worktrees', 'SKILL.md'), 'utf8'), '# from cache\n');
   });
 });
@@ -129,7 +148,10 @@ test('会话侧复制会覆盖掉上一次留下的残余，缺缓存时明确�
     assert.equal(existsSync(join(configDir, 'skills', 'verify-agent-output', 'STALE.md')), false);
     assert.equal(existsSync(join(configDir, 'skills', 'verify-agent-output', 'SKILL.md')), true);
 
-    assert.throws(() => installSkills({ configDir, home, cache: /** @type {any} */ (null) }), /需要 prepareSkillCache/u);
+    assert.throws(
+      () => installSkills({ configDir, home, cache: /** @type {any} */ (null) }),
+      /需要 prepareSkillCache/u,
+    );
     assert.throws(
       () => installSkills({ configDir, home, cache: /** @type {any} */ ({ skills_dir: join(base, 'nowhere') }) }),
       /skill 缓存不完整/u,

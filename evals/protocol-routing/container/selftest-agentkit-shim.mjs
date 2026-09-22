@@ -27,7 +27,8 @@ try {
   });
 
   const resolved = execFileSync('sh', ['-c', 'command -v agentkit'], { env, encoding: 'utf8' }).trim();
-  if (resolved !== shim.path) throw new Error(`会话环境里 command -v agentkit 解析到 ${resolved}，期望垫片 ${shim.path}`);
+  if (resolved !== shim.path)
+    throw new Error(`会话环境里 command -v agentkit 解析到 ${resolved}，期望垫片 ${shim.path}`);
   if (!env.PATH.startsWith(`${shim.dir}${delimiter}`)) throw new Error('垫片目录不在会话 PATH 最前');
 
   const version = execFileSync('sh', ['-c', 'agentkit --version'], { env, encoding: 'utf8' }).trim();

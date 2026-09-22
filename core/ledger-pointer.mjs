@@ -40,7 +40,9 @@ export function isLedgerId(value) {
 /** @param {unknown} value @param {string} label */
 export function assertLedgerId(value, label = 'ledger id') {
   if (!isLedgerId(value)) {
-    throw new LedgerPointerError(`${label} 无效：当前值 ${JSON.stringify(value ?? null)}；要求非空字符串且只含字母、数字、点、下划线与连字符（${LEDGER_ID_PATTERN.source}）`);
+    throw new LedgerPointerError(
+      `${label} 无效：当前值 ${JSON.stringify(value ?? null)}；要求非空字符串且只含字母、数字、点、下划线与连字符（${LEDGER_ID_PATTERN.source}）`,
+    );
   }
   return String(value);
 }
@@ -57,12 +59,18 @@ export function resolveGitCommonDir(from) {
   try {
     if (!statSync(start).isDirectory()) return { common_dir: null, reason: `路径不是目录：${start}` };
   } catch (error) {
-    return { common_dir: null, reason: `无法读取路径 ${start}：${error instanceof Error ? error.message : String(error)}` };
+    return {
+      common_dir: null,
+      reason: `无法读取路径 ${start}：${error instanceof Error ? error.message : String(error)}`,
+    };
   }
   const result = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: start, encoding: 'utf8' });
   if (result.error) return { common_dir: null, reason: `在 ${start} 执行 git 失败：${result.error.message}` };
   if (result.status !== 0) {
-    return { common_dir: null, reason: `${start} 不在 git 仓库内：git rev-parse --git-common-dir 退出码 ${result.status}` };
+    return {
+      common_dir: null,
+      reason: `${start} 不在 git 仓库内：git rev-parse --git-common-dir 退出码 ${result.status}`,
+    };
   }
   const output = String(result.stdout ?? '').trim();
   if (!output) return { common_dir: null, reason: `git rev-parse --git-common-dir 在 ${start} 返回空值` };
@@ -95,25 +103,37 @@ export function validateLedgerPointer(value, label = 'ledger pointer') {
   const keys = Object.keys(value);
   const unknown = keys.filter((key) => !LEDGER_POINTER_FIELDS.includes(key));
   if (unknown.length) {
-    throw new LedgerPointerError(`${label} 含未知字段：${unknown.join('、')}；字段集合固定为 ${LEDGER_POINTER_FIELDS.join('、')}`);
+    throw new LedgerPointerError(
+      `${label} 含未知字段：${unknown.join('、')}；字段集合固定为 ${LEDGER_POINTER_FIELDS.join('、')}`,
+    );
   }
   const missing = LEDGER_POINTER_FIELDS.filter((key) => !keys.includes(key));
   if (missing.length) throw new LedgerPointerError(`${label} 缺少字段：${missing.join('、')}`);
   const pointer = /** @type {Record<string, unknown>} */ (value);
   if (pointer.schema_version !== LEDGER_POINTER_SCHEMA_VERSION) {
-    throw new LedgerPointerError(`${label}.schema_version 当前值 ${JSON.stringify(pointer.schema_version)}，要求 ${LEDGER_POINTER_SCHEMA_VERSION}`);
+    throw new LedgerPointerError(
+      `${label}.schema_version 当前值 ${JSON.stringify(pointer.schema_version)}，要求 ${LEDGER_POINTER_SCHEMA_VERSION}`,
+    );
   }
   assertLedgerId(pointer.ledger_id, `${label}.ledger_id`);
   if (typeof pointer.state_root !== 'string' || !pointer.state_root || !isAbsolute(pointer.state_root)) {
-    throw new LedgerPointerError(`${label}.state_root 当前值 ${JSON.stringify(pointer.state_root ?? null)}；要求非空绝对路径`);
+    throw new LedgerPointerError(
+      `${label}.state_root 当前值 ${JSON.stringify(pointer.state_root ?? null)}；要求非空绝对路径`,
+    );
   }
   if (typeof pointer.contract_digest !== 'string' || !DIGEST_PATTERN.test(pointer.contract_digest)) {
-    throw new LedgerPointerError(`${label}.contract_digest 当前值 ${JSON.stringify(pointer.contract_digest ?? null)}；要求形如 sha256:<64 位十六进制>`);
+    throw new LedgerPointerError(
+      `${label}.contract_digest 当前值 ${JSON.stringify(pointer.contract_digest ?? null)}；要求形如 sha256:<64 位十六进制>`,
+    );
   }
   if (typeof pointer.created_at !== 'string' || Number.isNaN(Date.parse(pointer.created_at))) {
-    throw new LedgerPointerError(`${label}.created_at 当前值 ${JSON.stringify(pointer.created_at ?? null)}；要求可解析的 ISO 8601 时间戳`);
+    throw new LedgerPointerError(
+      `${label}.created_at 当前值 ${JSON.stringify(pointer.created_at ?? null)}；要求可解析的 ISO 8601 时间戳`,
+    );
   }
-  return /** @type {{ schema_version: number, ledger_id: string, state_root: string, contract_digest: string, created_at: string }} */ (value);
+  return /** @type {{ schema_version: number, ledger_id: string, state_root: string, contract_digest: string, created_at: string }} */ (
+    value
+  );
 }
 
 /**
@@ -136,7 +156,9 @@ export function writeLedgerPointer({ commonDir, ledgerId, stateRoot, contractDig
   try {
     const previous = validateLedgerPointer(JSON.parse(readFileSync(path, 'utf8')), `既有指针 ${path}`);
     if (previous.state_root !== pointer.state_root) replaced = previous.state_root;
-  } catch { /* 不存在或已损坏：直接覆盖，损坏的那份本来就会被 doctor 标为 malformed。 */ }
+  } catch {
+    /* 不存在或已损坏：直接覆盖，损坏的那份本来就会被 doctor 标为 malformed。 */
+  }
   atomicWriteJson(path, pointer);
   return { path, pointer, replaced };
 }
@@ -168,9 +190,19 @@ export function listLedgerPointers(commonDir) {
       const path = join(directory, name);
       const ledgerId = basename(name, '.json');
       try {
-        return { path, ledger_id: ledgerId, pointer: validateLedgerPointer(JSON.parse(readFileSync(path, 'utf8')), `指针 ${path}`), error: null };
+        return {
+          path,
+          ledger_id: ledgerId,
+          pointer: validateLedgerPointer(JSON.parse(readFileSync(path, 'utf8')), `指针 ${path}`),
+          error: null,
+        };
       } catch (error) {
-        return { path, ledger_id: ledgerId, pointer: null, error: error instanceof Error ? error.message : String(error) };
+        return {
+          path,
+          ledger_id: ledgerId,
+          pointer: null,
+          error: error instanceof Error ? error.message : String(error),
+        };
       }
     });
 }
@@ -184,13 +216,21 @@ export function listLedgerPointers(commonDir) {
 export function recordLedgerPointer({ repository, ledgerId, stateRoot, contractDigest, createdAt }) {
   const skip = (reason) => ({ written: false, path: null, git_common_dir: null, reason });
   if (typeof repository !== 'string' || !repository || repository === 'none') {
-    return skip(`contract.environment.repository 当前值 ${JSON.stringify(repository ?? null)}：没有指向 git 仓库，跳过仓级指针；后续命令需要手传 --ledger <ledger 目录>`);
+    return skip(
+      `contract.environment.repository 当前值 ${JSON.stringify(repository ?? null)}：没有指向 git 仓库，跳过仓级指针；后续命令需要手传 --ledger <ledger 目录>`,
+    );
   }
   const found = resolveGitCommonDir(repository);
   if (!found.common_dir) {
     return skip(`${found.reason}；跳过仓级指针，后续命令需要手传 --ledger <ledger 目录>`);
   }
-  const { path, replaced } = writeLedgerPointer({ commonDir: found.common_dir, ledgerId, stateRoot, contractDigest, createdAt });
+  const { path, replaced } = writeLedgerPointer({
+    commonDir: found.common_dir,
+    ledgerId,
+    stateRoot,
+    contractDigest,
+    createdAt,
+  });
   return { written: true, path, git_common_dir: found.common_dir, replaced, reason: null };
 }
 
@@ -200,7 +240,9 @@ export function recordLedgerPointer({ repository, ledgerId, stateRoot, contractD
 export function removeLedgerPointer({ repository, ledgerId }) {
   const skip = (reason) => ({ removed: false, path: null, git_common_dir: null, reason });
   if (typeof repository !== 'string' || !repository || repository === 'none') {
-    return skip(`contract.environment.repository 当前值 ${JSON.stringify(repository ?? null)}：init 时就没有写仓级指针，无需删除`);
+    return skip(
+      `contract.environment.repository 当前值 ${JSON.stringify(repository ?? null)}：init 时就没有写仓级指针，无需删除`,
+    );
   }
   const found = resolveGitCommonDir(repository);
   if (!found.common_dir) return skip(`${found.reason}；无法定位仓级指针目录，跳过删除`);

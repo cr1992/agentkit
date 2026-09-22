@@ -17,10 +17,7 @@ function pushOptionText(value, label, max) {
   }
   const normalized = value.trim();
   if (!normalized || normalized.length > max || /[\u0000\r\n]/.test(normalized)) {
-    throw new GitlabSubmitError(
-      'GITLAB_PUSH_OPTION_INVALID',
-      `${label} 必须是 1-${max} 字符且不能含 NUL/换行。`,
-    );
+    throw new GitlabSubmitError('GITLAB_PUSH_OPTION_INVALID', `${label} 必须是 1-${max} 字符且不能含 NUL/换行。`);
   }
   return normalized;
 }

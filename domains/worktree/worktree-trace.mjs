@@ -349,16 +349,7 @@ function writeRecordCache(commonDir, worktreeId, snapshot, tail, count) {
  * @param {Record<string, unknown>} details
  * @param {string|null} previousEventId
  */
-function appendEventFile(
-  commonDir,
-  repositoryId,
-  worktreeId,
-  eventType,
-  actor,
-  snapshot,
-  details,
-  previousEventId,
-) {
+function appendEventFile(commonDir, repositoryId, worktreeId, eventType, actor, snapshot, details, previousEventId) {
   const dir = eventDirectory(commonDir, worktreeId);
   mkdirSync(dir, { recursive: true });
   const eventId = randomUUID();
