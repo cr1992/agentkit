@@ -36,7 +36,7 @@ Profile 可声明：
 - `worktree_root`：仓库级集中 worktree 根；CLI `--root` 和 `WORKTREE_ROOT` 优先级更高。显式值不可写时 fail-closed；只有零配置默认 root 才允许 manager 使用安全降级根。
 - `task_naming`、`branch_template`、`path_template`：可见命名约定。
 - collision scan adapter：将仓库自己的任务认领信息并入 dirty/recent-commit 扫描。
-- change-request provider：当前 bundled adapter 支持 GitLab push-options；未配置时走仓库自己的 PR/MR 流程。
+- change-request provider：当前 bundled adapter 支持 GitLab push-options 和 GitHub（经 `gh` CLI）；未配置时走仓库自己的 PR/MR 流程。
 - `post_integrate_steps`：声明"合成之后需要重新生成"的动作（见下）。
 - 无秘密的 prerequisite/doctor 提示。
 
@@ -80,7 +80,7 @@ golden 基准、代码生成产物、依赖锁文件这类东西被多个分支�
 - worktree 创建、接管、状态机、event/record trace、审计和保守回收。
 - 通用 dirty/recent-commit collision scan。
 - semantic naming DoD 与 fail-closed 校验。
-- provider 协议和 GitLab push-options adapter。
+- provider 协议、GitLab push-options 与 GitHub（`gh`）adapter。
 
 留在目标仓库：
 
@@ -113,7 +113,7 @@ bundled scan 保留一个可选 `kiro_tasks` adapter，用来读取 Profile `glo
 
 `ctx` 只携带已解析好的提交值（remote、源/目标分支、head SHA、标题、描述、Profile 的 `change_request` 段、record 路径）和注入的 `gitTry` / `runFileCapture`。适配器不 spawn 进程、不读环境变量、不碰 token，一切外部调用都经由注入的函数完成。
 
-新增适配器：在 `domains/worktree/` 放一个 `worktree-provider-<平台>.mjs` 实现上述契约，再到 `worktree-provider-registry.mjs` 的 provider 列表里登记一行。provider 名清单和 Profile 校验都从注册表派生，无需改动通用层。`manual` 是登记在册但没有 submit 能力的一项，用于走仓库自己的人工 change request 流程。当前 bundled 的可提交适配器只有 GitLab push-options。
+新增适配器：在 `domains/worktree/` 放一个 `worktree-provider-<平台>.mjs` 实现上述契约，再到 `worktree-provider-registry.mjs` 的 provider 列表里登记一行。provider 名清单和 Profile 校验都从注册表派生，无需改动通用层。`manual` 是登记在册但没有 submit 能力的一项，用于走仓库自己的人工 change request 流程。当前 bundled 的可提交适配器有 GitLab push-options 与 GitHub。GitHub adapter 经 `gh` CLI 建 PR：`precheck` 先探测 `gh --version` 与 `gh auth status`，缺 `gh` 或未登录时返回可照抄的降级指引（改用 `provider=manual` 手工建 PR 后 `worktree watch --change-ref <url>`）；`submit` 在源分支未完整位于 remote 时先 push，再 `gh pr create`；`remove_source_branch` 对 GitHub 无效（源分支删除由仓库 `delete_branch_on_merge` 决定），只做一次提示。
 
 ## 同步和分发
 

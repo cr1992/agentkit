@@ -477,42 +477,54 @@ export function createCommands(deps) {
 
     const submittedAt = new Date().toISOString();
     const changeRef = result.change_ref;
-    record = appendTraceEvent({
-      commonDir: loaded.context.common_dir,
-      worktreeId: record.worktree_id,
-      eventType: 'change_submitted',
-      actor: record.agent,
-      details: {
-        provider: adapter.name,
-        change_ref: changeRef,
-        source_branch: record.branch,
-        target_branch: targetBranch,
-        head_sha: snapshot.head,
-        title,
-      },
-      mutate(current) {
-        if (!['active', 'ready_for_review'].includes(current.task_status)) {
-          throw new WorktreeTraceError('SUBMIT_STATE_CHANGED', `submit 期间 task_status 变为 ${current.task_status}`);
-        }
-        const next = structuredClone(current);
-        next.task_status = 'ready_for_review';
-        next.last_seen_at = submittedAt;
-        next.last_head = snapshot.head;
-        next.change_request = {
+    // change request 已在远端建成；若写 trace 时 record 状态已被并发改动而抛
+    // SUBMIT_STATE_CHANGED，重跑 submit 会因同一 head 已有 change request 再次失败。
+    // 此处平台中立：只要 submit 结果带回可用 url，就在失败文案里附一条可照抄的恢复命令。
+    try {
+      record = appendTraceEvent({
+        commonDir: loaded.context.common_dir,
+        worktreeId: record.worktree_id,
+        eventType: 'change_submitted',
+        actor: record.agent,
+        details: {
           provider: adapter.name,
-          state: 'submitted',
           change_ref: changeRef,
-          url: result.url,
           source_branch: record.branch,
           target_branch: targetBranch,
           head_sha: snapshot.head,
           title,
-          submitted_at: submittedAt,
-        };
-        next.updated_at = submittedAt;
-        return next;
-      },
-    }).record;
+        },
+        mutate(current) {
+          if (!['active', 'ready_for_review'].includes(current.task_status)) {
+            throw new WorktreeTraceError('SUBMIT_STATE_CHANGED', `submit 期间 task_status 变为 ${current.task_status}`);
+          }
+          const next = structuredClone(current);
+          next.task_status = 'ready_for_review';
+          next.last_seen_at = submittedAt;
+          next.last_head = snapshot.head;
+          next.change_request = {
+            provider: adapter.name,
+            state: 'submitted',
+            change_ref: changeRef,
+            url: result.url,
+            source_branch: record.branch,
+            target_branch: targetBranch,
+            head_sha: snapshot.head,
+            title,
+            submitted_at: submittedAt,
+          };
+          next.updated_at = submittedAt;
+          return next;
+        },
+      }).record;
+    } catch (error) {
+      if (error instanceof WorktreeTraceError && error.code === 'SUBMIT_STATE_CHANGED' && result.url) {
+        die(
+          `${error.message}\nchange request 已在远端创建但 trace 未记录（record 在 submit 期间状态已变化）。请照抄以下命令补登记并 arm watcher：\n  agentkit worktree watch ${record.worktree_id} --change-ref ${result.url}`,
+        );
+      }
+      throw error;
+    }
 
     const intervalMs = parseWatchInterval(flag(args.flags, 'interval-ms'));
     const notifyMode = parseNotifyMode(flag(args.flags, 'notify'));
