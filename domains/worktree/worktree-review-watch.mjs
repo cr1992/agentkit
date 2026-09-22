@@ -9,8 +9,7 @@ export function createCommands(deps) {
     randomUUID,
     predictReviewRefresh,
     loadRepositoryProfile,
-    gitlabSubmitPushArgs,
-    parseGitlabMergeRequestUrl,
+    resolveChangeRequestProvider,
     WorktreeTraceError,
     appendTraceEvent,
     managerScript,
@@ -402,9 +401,12 @@ export function createCommands(deps) {
       'config',
     ]);
     const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
-    const provider = loaded.profile.change_request;
-    if (provider.provider !== 'gitlab') {
-      die('当前 Profile 未启用 GitLab change_request provider；请配置 provider=gitlab 或继续人工创建 MR。');
+    const changeRequest = loaded.profile.change_request;
+    const adapter = resolveChangeRequestProvider(changeRequest.provider);
+    if (!adapter || typeof adapter.submit !== 'function') {
+      die(
+        '当前 Profile 的 change_request provider 不支持自动提交；请配置一个具备提交能力的 provider，或继续人工创建 change request。',
+      );
     }
     let record = selectRecord(
       loadRecords(loaded.context.common_dir),
@@ -433,10 +435,10 @@ export function createCommands(deps) {
       die(`非法 source branch: ${record.branch}`);
     }
 
-    const remote = oneLine(flag(args.flags, 'remote') ?? provider.remote, 'remote', 120);
+    const remote = oneLine(flag(args.flags, 'remote') ?? changeRequest.remote, 'remote', 120);
     if (!gitTry(['remote', 'get-url', remote], record.path).ok) die(`Git remote 不存在: ${remote}`);
     const targetBranch = resolveSubmitTargetBranch(
-      flag(args.flags, 'target') ?? provider.target_branch,
+      flag(args.flags, 'target') ?? changeRequest.target_branch,
       remote,
       record.base_ref ?? null,
     );
@@ -447,47 +449,41 @@ export function createCommands(deps) {
     const refreshed = refreshTargetRef(targetRef, record.path);
     if (!refreshed.ok) die(`目标 ref 不存在或 fetch 失败: ${targetRef}`);
 
-    const upstreamHead = gitTry(['rev-parse', '@{upstream}^{commit}'], record.path);
-    const remoteHead = gitTry(['ls-remote', '--heads', remote, `refs/heads/${record.branch}`], record.path, {
-      timeoutMs: FETCH_TIMEOUT_MS,
-    });
-    const remoteHeadSha = remoteHead.ok && remoteHead.out ? remoteHead.out.split(/\s+/)[0] : null;
-    if ((upstreamHead.ok && upstreamHead.out === snapshot.head) || remoteHeadSha === snapshot.head) {
-      die(
-        '当前 HEAD 已完整存在于 remote；GitLab 只在实际 push 时处理 MR push-options。请使用 API/UI 创建 MR 后运行 watch，工具不会为触发 push-option 改写历史或 force push。',
-      );
-    }
-
     const title = flag(args.flags, 'title')
       ? oneLine(flag(args.flags, 'title'), 'title', 240)
       : oneLine(git(['show', '-s', '--format=%s', snapshot.head], record.path), 'title', 240);
     const description = flag(args.flags, 'description')
       ? oneLine(flag(args.flags, 'description'), 'description', 1000)
       : null;
-    const pushArgs = gitlabSubmitPushArgs({
+
+    const submitContext = {
       remote,
       sourceBranch: record.branch,
       targetBranch,
+      headSha: snapshot.head,
       title,
       description,
-      removeSourceBranch: provider.remove_source_branch,
-    });
-    const pushed = runFileCapture('git', pushArgs, { cwd: record.path, timeoutMs: SUBMIT_PUSH_TIMEOUT_MS });
-    if (!pushed.ok) {
-      const detail = pushed.out || pushed.error?.message || `exit=${pushed.status}`;
-      die(`GitLab MR push 失败；trace/watcher 未更新。\n${detail}`);
-    }
+      changeRequest,
+      cwd: record.path,
+      gitTry,
+      runFileCapture,
+      fetchTimeoutMs: FETCH_TIMEOUT_MS,
+      submitPushTimeoutMs: SUBMIT_PUSH_TIMEOUT_MS,
+    };
+    const precheckReason = adapter.precheck ? adapter.precheck(submitContext) : null;
+    if (precheckReason !== null) die(precheckReason);
+    const result = adapter.submit(submitContext);
+    if (!result.ok) die(result.message);
 
     const submittedAt = new Date().toISOString();
-    const mergeRequestUrl = parseGitlabMergeRequestUrl(pushed.out);
-    const changeRef = mergeRequestUrl ?? `GitLab MR ${record.branch} -> ${targetBranch}`;
+    const changeRef = result.change_ref;
     record = appendTraceEvent({
       commonDir: loaded.context.common_dir,
       worktreeId: record.worktree_id,
       eventType: 'change_submitted',
       actor: record.agent,
       details: {
-        provider: 'gitlab',
+        provider: adapter.name,
         change_ref: changeRef,
         source_branch: record.branch,
         target_branch: targetBranch,
@@ -503,10 +499,10 @@ export function createCommands(deps) {
         next.last_seen_at = submittedAt;
         next.last_head = snapshot.head;
         next.change_request = {
-          provider: 'gitlab',
+          provider: adapter.name,
           state: 'submitted',
           change_ref: changeRef,
-          url: mergeRequestUrl,
+          url: result.url,
           source_branch: record.branch,
           target_branch: targetBranch,
           head_sha: snapshot.head,
@@ -532,13 +528,13 @@ export function createCommands(deps) {
         previousHealth: null,
         armedBy: 'explicit',
       });
-      log(`GitLab MR 已提交: ${changeRef}`);
+      log(result.message);
       log(
         `auto-reclaim watcher 已启动 pid=${started.pid} id=${record.worktree_id.slice(0, 8)} head=${snapshot.head.slice(0, 12)} target=${targetRef}`,
       );
     } catch (error) {
       console.error(
-        `${PREFIX} MR 已成功 push 且 trace 已标记 ready_for_review，但 watcher 启动失败；请运行 watch/resume-all 恢复。`,
+        `${PREFIX} change request 已成功 push 且 trace 已标记 ready_for_review，但 watcher 启动失败；请运行 watch/resume-all 恢复。`,
       );
       throw error;
     }

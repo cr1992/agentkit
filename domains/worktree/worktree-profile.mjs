@@ -17,6 +17,8 @@ import {
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
+import { CHANGE_REQUEST_PROVIDER_NAMES } from './worktree-provider-registry.mjs';
+
 export const PROFILE_FILENAME = '.worktree-trace.json';
 export const PROFILE_SCHEMA_VERSION = 1;
 
@@ -210,7 +212,7 @@ export function validateProfile(raw) {
     changeRequest.provider ?? DEFAULT_PROFILE.change_request.provider,
     'profile.change_request.provider',
   );
-  if (!['manual', 'gitlab'].includes(changeRequestProvider)) {
+  if (!CHANGE_REQUEST_PROVIDER_NAMES.includes(changeRequestProvider)) {
     throw new WorktreeProfileError(
       'PROFILE_UNKNOWN_CHANGE_REQUEST_PROVIDER',
       `profile.change_request.provider 未知: ${changeRequestProvider}`,

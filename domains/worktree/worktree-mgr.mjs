@@ -25,7 +25,7 @@ import { LEDGER_ID_PATTERN, isLedgerId } from '../../core/ledger-pointer.mjs';
 import * as core from './worktree-core.mjs';
 import * as mergePreview from './worktree-merge-preview.mjs';
 import * as profile from './worktree-profile.mjs';
-import * as provider from './worktree-provider-gitlab.mjs';
+import * as providerRegistry from './worktree-provider-registry.mjs';
 import * as trace from './worktree-trace.mjs';
 import { createCommands as createArchiveCommands } from './worktree-archive.mjs';
 import { createCommands as createArtifactCommands } from './worktree-artifact.mjs';
@@ -61,7 +61,7 @@ export {
 
 const { PREFIX, die, parseArgs, rejectUnknownFlags, worktreeSkillDigest } = core;
 const { WorktreeProfileError } = profile;
-const { GitlabSubmitError } = provider;
+const { ChangeRequestSubmitError } = providerRegistry;
 const { WorktreeTraceError } = trace;
 const managerScript = fileURLToPath(import.meta.url);
 
@@ -94,7 +94,7 @@ const dependencies = {
   isLedgerId,
   ...mergePreview,
   ...profile,
-  ...provider,
+  ...providerRegistry,
   ...trace,
   ...core,
 };
@@ -314,7 +314,7 @@ export function runCli(argv = process.argv.slice(2)) {
     if (
       error instanceof WorktreeProfileError ||
       error instanceof WorktreeTraceError ||
-      error instanceof GitlabSubmitError
+      error instanceof ChangeRequestSubmitError
     ) {
       die(`${error.code}: ${error.message}`);
     }
