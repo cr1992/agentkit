@@ -1,0 +1,54 @@
+{
+  "_note": "Machine-independent presets only. run.mjs generates everything that is tied to a machine at runtime: the three digests, absolute paths (environment.repository, runtime.executable_paths.node), the repository identity, and the artifact_ref SHAs. Never hardcode those here — a frozen envelope from another machine will not validate on yours.",
+
+  "repo_files": {
+    "test.mjs": "import assert from 'node:assert/strict';\nimport { sum } from './sum.mjs';\n\n// L0 smoke/final check: `node test.mjs` exits 0 only when sum() adds correctly.\nassert.equal(sum(2, 3), 5);\nassert.equal(sum(10, 20), 30);\nconsole.log('ok');\n",
+    "sum_base": "export function sum() {\n  throw new Error('not implemented');\n}\n",
+    "sum_buggy": "export function sum(a, b) {\n  return a - b; // BUG: subtraction instead of addition\n}\n",
+    "sum_fixed": "export function sum(a, b) {\n  return a + b;\n}\n"
+  },
+
+  "contract_patch": {
+    "objective": "The sum(a, b) helper must return the arithmetic sum of its two arguments.",
+    "scope": {
+      "include": ["sum.mjs", "test.mjs"],
+      "exclude": []
+    },
+    "acceptance": [
+      {
+        "contract_item_id": "sum-correct",
+        "requirement": "Running `node test.mjs` at the frozen commit exits 0 (sum() returns a + b for the asserted inputs)."
+      }
+    ]
+  },
+
+  "profile_patch": {
+    "l0_checks": [
+      {
+        "check_id": "unit-tests",
+        "argv": ["node", "test.mjs"],
+        "cwd_rel": ".",
+        "stage": "both",
+        "timeout_ms": 30000,
+        "expected_exit_codes": [0]
+      }
+    ],
+    "l1_review": [
+      {
+        "contract_item_id": "sum-correct",
+        "lenses": ["functional"]
+      }
+    ]
+  },
+
+  "review_fixed": {
+    "_note": "Stand-in for the Review Result an isolated reviewer agent would produce. Only the fixed commit reaches L1; the buggy commit fails L0 first, so its L1 never runs and no second review is needed.",
+    "verdict": "no_defect_found",
+    "findings": [],
+    "forensics": [
+      "Ran `node test.mjs` against the frozen fixed commit and observed exit code 0.",
+      "Read sum.mjs and confirmed it returns a + b, satisfying acceptance item sum-correct.",
+      "This forensics text is a preset stand-in; agentkit does not review code itself."
+    ]
+  }
+}
