@@ -42,7 +42,8 @@
     "orchestrate-subagents/",
     "manage-worktrees/",
     "verify-agent-output/",
-    "run-agent-verify-loop/"
+    "run-agent-verify-loop/",
+    "examples/"
   ],
   "dependencies": {}
 }
