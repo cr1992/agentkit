@@ -697,7 +697,8 @@ export function createCommands(deps) {
     );
     if (lastReclaim) {
       console.log(
-        `  [LAST_RECLAIM] ${lastReclaim.completed_at ?? '?'} task=${lastReclaim.task} change=${lastReclaim.change_ref ?? '-'} target=${lastReclaim.target_sha?.slice(0, 12) ?? '-'} branch=${lastReclaim.branch_cleanup?.status ?? 'legacy'}`,
+        `  [LAST_RECLAIM] ${lastReclaim.completed_at ?? '?'} task=${lastReclaim.task} change=${lastReclaim.change_ref ?? '-'} ` +
+          `target=${lastReclaim.target_sha?.slice(0, 12) ?? '-'} branch=${lastReclaim.branch_cleanup?.status ?? 'legacy'}`,
       );
     }
     for (const row of listing.rows) {

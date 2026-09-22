@@ -445,7 +445,8 @@ function renderStatusText(report) {
     lines.push(`${title}：${entries.length} 个`);
     for (const entry of entries) {
       lines.push(
-        `  [${entry.ledger_id}] 阶段=${PHASE_LABELS[entry.phase] ?? entry.phase} revision=${entry.revision} 节点 pending/active/terminal=${entry.summary.pending}/${entry.summary.active}/${entry.summary.terminal}`,
+        `  [${entry.ledger_id}] 阶段=${PHASE_LABELS[entry.phase] ?? entry.phase} revision=${entry.revision} ` +
+          `节点 pending/active/terminal=${entry.summary.pending}/${entry.summary.active}/${entry.summary.terminal}`,
       );
       lines.push(`    ledger: ${entry.ledger_dir}`);
       lines.push(

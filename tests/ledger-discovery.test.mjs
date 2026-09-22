@@ -429,7 +429,17 @@ test('悬空与终态指针被 doctor --repository 报告、由 reclaim-pointers
     assert.equal(terminalClose.pointer.removed, true);
     writeFileSync(
       terminal.pointer.path,
-      `${JSON.stringify({ schema_version: 1, ledger_id: 'terminal', state_root: terminal.state_root, contract_digest: terminal.contract.contract_digest, created_at: new Date().toISOString() }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          schema_version: 1,
+          ledger_id: 'terminal',
+          state_root: terminal.state_root,
+          contract_digest: terminal.contract.contract_digest,
+          created_at: new Date().toISOString()
+        },
+        null,
+        2
+      )}\n`,
     );
 
     const doctor = ledgerJson(fixture.repo, ['doctor', '--repository', fixture.repo]);

@@ -248,7 +248,17 @@ export function createCommands(deps) {
   /**
    * @param {ReturnType<typeof loadRepositoryProfile>} loaded
    * @param {Record<string,any>} initialRecord
-   * @param {{targetRef:string,targetSha?:string|null,headSha:string,intervalMs:number,changeRef:string|null,notifyMode:string,explicitConfig:string|null,previousHealth:string|null,armedBy?:string}} options
+   * @param {{
+   *   targetRef:string,
+   *   targetSha?:string|null,
+   *   headSha:string,
+   *   intervalMs:number,
+   *   changeRef:string|null,
+   *   notifyMode:string,
+   *   explicitConfig:string|null,
+   *   previousHealth:string|null,
+   *   armedBy?:string
+   * }} options
    */
   function startWatcher(loaded, initialRecord, options) {
     let record = initialRecord;

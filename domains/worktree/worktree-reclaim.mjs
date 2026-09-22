@@ -617,7 +617,12 @@ export function createCommands(deps) {
     return { reason: null };
   }
 
-  /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} initialRecord @param {string} pushed @param {{recordBlocked?:boolean,evidence?:Record<string,any>}} [options] */
+  /**
+   * @param {ReturnType<typeof loadRepositoryProfile>} loaded
+   * @param {Record<string,any>} initialRecord
+   * @param {string} pushed
+   * @param {{recordBlocked?:boolean,evidence?:Record<string,any>}} [options]
+   */
   function reclaimRecord(loaded, initialRecord, pushed, options = {}) {
     let record = initialRecord;
     if (record.worktree_state === 'reclaimed') {

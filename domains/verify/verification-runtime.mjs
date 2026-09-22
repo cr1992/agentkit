@@ -1041,7 +1041,8 @@ const CLI_USAGE = {
   preflight: '用法: preflight --contract <json> --profile <json> --artifact <json> [--network-isolated]',
   init: '用法: init --contract <json> --profile <json> --artifact <json> --workdir <git-root> --isolation-assurance host_reported|user_relayed [--state-root <dir>] [--run-id <id>]',
   'prepare-run':
-    '用法: prepare-run --contract <json> --profile <json> --artifact <json> --workdir <git-root> --isolation-assurance host_reported|user_relayed [--state-root <dir>] [--run-id <id>] [--network-isolated] [--verbose]',
+    '用法: prepare-run --contract <json> --profile <json> --artifact <json> --workdir <git-root> --isolation-assurance host_reported|user_relayed ' +
+      '[--state-root <dir>] [--run-id <id>] [--network-isolated] [--verbose]',
   'run-smoke': '用法: run-smoke --run <run-dir> [--expected-revision <n>] [--verbose]',
   'review-input': '用法: review-input --run <run-dir>',
   'review-bundle': '用法: review-bundle --run <run-dir> [--out <path>]',

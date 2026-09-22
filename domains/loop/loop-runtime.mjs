@@ -1181,7 +1181,8 @@ function parseCli(argv) {
   const spec = CLI_SPEC[command];
   if (!spec)
     throw new LoopValidationError(
-      '命令必须是 capabilities/adopt-root/init/record-artifact/run-embedded-l0/record-embedded-review/record-evidence/record-verification-abort/next/resume/stop/human-gate/record-reflection/convergence-report/propose-improvement/status/inspect/validate/doctor',
+      '命令必须是 capabilities/adopt-root/init/record-artifact/run-embedded-l0/record-embedded-review/record-evidence/record-verification-abort/' +
+        'next/resume/stop/human-gate/record-reflection/convergence-report/propose-improvement/status/inspect/validate/doctor',
     );
   const options = {};
   const flags = new Set();
@@ -1830,7 +1831,8 @@ export function main(argv = process.argv.slice(2)) {
       return doctor(options);
     default:
       throw new LoopValidationError(
-        '命令必须是 capabilities/adopt-root/init/record-artifact/run-embedded-l0/record-embedded-review/record-evidence/record-verification-abort/next/resume/stop/human-gate/record-reflection/convergence-report/propose-improvement/status/inspect/validate/doctor',
+        '命令必须是 capabilities/adopt-root/init/record-artifact/run-embedded-l0/record-embedded-review/record-evidence/record-verification-abort/' +
+          'next/resume/stop/human-gate/record-reflection/convergence-report/propose-improvement/status/inspect/validate/doctor',
       );
   }
 }

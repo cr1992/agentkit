@@ -276,7 +276,13 @@ export function createCommands(deps) {
     die(`refresh-review abort 前 upstream lease 已变化：expected=${refresh.upstream_sha}, actual=${remoteHead}。`, 2);
   }
 
-  /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {Record<string,any>} record @param {Record<string,any>} refresh @param {boolean} pendingRebase @param {string|null} explicitConfig */
+  /**
+   * @param {ReturnType<typeof loadRepositoryProfile>} loaded
+   * @param {Record<string,any>} record
+   * @param {Record<string,any>} refresh
+   * @param {boolean} pendingRebase
+   * @param {string|null} explicitConfig
+   */
   function restoreReviewRefreshHead(loaded, record, refresh, pendingRebase, explicitConfig) {
     if (pendingRebase) {
       const aborted = runManagedRebaseChild(record, ['--abort'], explicitConfig ? loaded.profile_path : null);

@@ -362,7 +362,12 @@ export function createCommands(deps) {
     }
   }
 
-  /** @param {ReturnType<typeof loadRepositoryProfile>} loaded @param {ReturnType<typeof buildListing>} listing @param {Map<string,Record<string,any>>} recordsById @param {Record<string,any>[]} findings */
+  /**
+   * @param {ReturnType<typeof loadRepositoryProfile>} loaded
+   * @param {ReturnType<typeof buildListing>} listing
+   * @param {Map<string,Record<string,any>>} recordsById
+   * @param {Record<string,any>[]} findings
+   */
   function collectDoctorRecordFindings(loaded, listing, recordsById, findings) {
     for (const entry of listRecordCacheEntries(loaded.context.common_dir)) {
       if (entry.error) {
