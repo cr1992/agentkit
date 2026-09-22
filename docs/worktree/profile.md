@@ -102,6 +102,19 @@ bundled scan 保留一个可选 `kiro_tasks` adapter，用来读取 Profile `glo
 3. 解析失败时报可诊断错误，不假装 `CLEAR`。
 4. 不把平台或业务名写进 portable collision 算法。
 
+## 新增一个 change-request adapter
+
+`agentkit worktree submit` 按 Profile 的 `change_request.provider` 名分发到对应适配器。适配器契约（见 `domains/worktree/worktree-provider-contract.mjs`）只有四个成员：
+
+- `name`：provider 名，与 Profile `change_request.provider` 取值一致。
+- `precheck(ctx)`：平台特有的前置检查；返回拒绝原因字符串，或 `null` 表示通过。没有该需求时可为 `null`。
+- `submit(ctx)`：执行提交，返回 `{ ok, change_ref, url, detail, message }`。通用层据此写 `change_submitted` trace、arm watcher 并回显 `message`。
+- `SubmitError`：该适配器的错误类，继承 `ChangeRequestSubmitError` 并带稳定 `code`。
+
+`ctx` 只携带已解析好的提交值（remote、源/目标分支、head SHA、标题、描述、Profile 的 `change_request` 段、record 路径）和注入的 `gitTry` / `runFileCapture`。适配器不 spawn 进程、不读环境变量、不碰 token，一切外部调用都经由注入的函数完成。
+
+新增适配器：在 `domains/worktree/` 放一个 `worktree-provider-<平台>.mjs` 实现上述契约，再到 `worktree-provider-registry.mjs` 的 provider 列表里登记一行。provider 名清单和 Profile 校验都从注册表派生，无需改动通用层。`manual` 是登记在册但没有 submit 能力的一项，用于走仓库自己的人工 change request 流程。当前 bundled 的可提交适配器只有 GitLab push-options。
+
 ## 同步和分发
 
 本目录中的 `scripts/` 是安装后执行的 portable runtime。项目如果 vendoring 一份副本用于 CI 或 clone 后即用，应记录 upstream 版本并做确定性 diff/check；项目专用 wrapper 不参与同步。
