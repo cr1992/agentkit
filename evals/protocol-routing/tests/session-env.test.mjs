@@ -47,11 +47,23 @@ const OVERRIDES = {
 
 test('会话环境走白名单：运行者的凭据一个都不传下去', () => {
   const env = buildSessionEnv(PARENT, OVERRIDES);
-  for (const leaked of ['GH_TOKEN', 'GITHUB_TOKEN', 'NPM_TOKEN', 'GITLAB_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'GOOGLE_APPLICATION_CREDENTIALS', 'SSH_AUTH_SOCK', 'OPENAI_API_KEY']) {
+  for (const leaked of [
+    'GH_TOKEN',
+    'GITHUB_TOKEN',
+    'NPM_TOKEN',
+    'GITLAB_TOKEN',
+    'AWS_SECRET_ACCESS_KEY',
+    'GOOGLE_APPLICATION_CREDENTIALS',
+    'SSH_AUTH_SOCK',
+    'OPENAI_API_KEY',
+  ]) {
     assert.ok(!Object.hasOwn(env, leaked), `被测会话的环境里不该出现 ${leaked}`);
   }
   // 取值也不该以别的键名溜进去。
-  assert.ok(!Object.values(env).some((value) => /gh-secret|npm-secret|glpat-secret|aws-secret|sk-openai/u.test(value)), '凭据取值不得出现在会话环境里');
+  assert.ok(
+    !Object.values(env).some((value) => /gh-secret|npm-secret|glpat-secret|aws-secret|sk-openai/u.test(value)),
+    '凭据取值不得出现在会话环境里',
+  );
 });
 
 test('白名单放行宿主跑起来必需的项与 Claude Code 自己的认证项', () => {
@@ -70,24 +82,38 @@ test('白名单放行宿主跑起来必需的项与 Claude Code 自己的认证�
 });
 
 test('白名单的键集合是完整常量：改动必须是显式的', () => {
-  assert.deepEqual([...INHERITED_ENV_KEYS], [
-    'PATH',
-    'TERM',
-    'TMPDIR', 'TMP', 'TEMP',
-    'LANG', 'LANGUAGE',
-    'NODE_EXTRA_CA_CERTS',
-    'NODE_OPTIONS',
-    'SSL_CERT_FILE', 'SSL_CERT_DIR',
-    'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY',
-    'http_proxy', 'https_proxy', 'no_proxy',
-    'ANTHROPIC_API_KEY',
-    'CLAUDE_CODE_OAUTH_TOKEN',
-    'ANTHROPIC_AUTH_TOKEN',
-    'ANTHROPIC_BASE_URL',
-  ]);
+  assert.deepEqual(
+    [...INHERITED_ENV_KEYS],
+    [
+      'PATH',
+      'TERM',
+      'TMPDIR',
+      'TMP',
+      'TEMP',
+      'LANG',
+      'LANGUAGE',
+      'NODE_EXTRA_CA_CERTS',
+      'NODE_OPTIONS',
+      'SSL_CERT_FILE',
+      'SSL_CERT_DIR',
+      'HTTP_PROXY',
+      'HTTPS_PROXY',
+      'NO_PROXY',
+      'http_proxy',
+      'https_proxy',
+      'no_proxy',
+      'ANTHROPIC_API_KEY',
+      'CLAUDE_CODE_OAUTH_TOKEN',
+      'ANTHROPIC_AUTH_TOKEN',
+      'ANTHROPIC_BASE_URL',
+    ],
+  );
   assert.deepEqual([...INHERITED_ENV_PREFIXES], ['LC_']);
   // CLAUDE_CODE_* 只放行这一个键，不是整类前缀：别的 CLAUDE_CODE_* 会改变宿主行为。
-  assert.deepEqual(INHERITED_ENV_KEYS.filter((key) => key.startsWith('CLAUDE_CODE_')), ['CLAUDE_CODE_OAUTH_TOKEN']);
+  assert.deepEqual(
+    INHERITED_ENV_KEYS.filter((key) => key.startsWith('CLAUDE_CODE_')),
+    ['CLAUDE_CODE_OAUTH_TOKEN'],
+  );
   assert.ok(!INHERITED_ENV_PREFIXES.some((prefix) => 'CLAUDE_CODE_X'.startsWith(prefix)));
 });
 
@@ -99,7 +125,10 @@ test('隔离用的覆盖项优先级最高，会盖掉父环境的同名变量',
   assert.equal(env.PROTOCOL_ROUTING_REPO, '/session/repo');
   assert.equal(env.PROTOCOL_ROUTING_PROBE, '/session/probe.jsonl');
   // 除了白名单命中的和覆盖项，不该多出任何东西。
-  const expected = new Set([...Object.keys(PARENT).filter((key) => INHERITED_ENV_KEYS.includes(key) || key.startsWith('LC_')), ...Object.keys(OVERRIDES)]);
+  const expected = new Set([
+    ...Object.keys(PARENT).filter((key) => INHERITED_ENV_KEYS.includes(key) || key.startsWith('LC_')),
+    ...Object.keys(OVERRIDES),
+  ]);
   assert.deepEqual(Object.keys(env).sort(), [...expected].sort());
 });
 

@@ -23,7 +23,10 @@ export function parseArgs(argv) {
   const options = { out: '', quiet: false, inputs: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
-    if (token === '--quiet') { options.quiet = true; continue; }
+    if (token === '--quiet') {
+      options.quiet = true;
+      continue;
+    }
     if (token === '--out') {
       const value = argv[i + 1];
       if (value === undefined || value.startsWith('--')) throw new Error('--out 需要取值');
@@ -65,7 +68,12 @@ export async function main(argv) {
   writeFileSync(join(outDir, 'report.md'), markdown);
   if (!options.quiet) process.stdout.write(markdown);
   if (merged.session_failures.length) {
-    if (!options.quiet) process.stderr.write(redactSecrets(`\n${merged.session_failures.length} 个会话没有跑出记录：\n- ${merged.session_failures.join('\n- ')}\n`));
+    if (!options.quiet)
+      process.stderr.write(
+        redactSecrets(
+          `\n${merged.session_failures.length} 个会话没有跑出记录：\n- ${merged.session_failures.join('\n- ')}\n`,
+        ),
+      );
     return 1;
   }
   return 0;
@@ -73,6 +81,11 @@ export async function main(argv) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(process.argv.slice(2))
-    .then((code) => { process.exitCode = code; })
-    .catch((error) => { process.stderr.write(`${error.message}\n`); process.exitCode = 2; });
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((error) => {
+      process.stderr.write(`${error.message}\n`);
+      process.exitCode = 2;
+    });
 }

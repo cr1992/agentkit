@@ -81,8 +81,14 @@ test('watch-service install/status/uninstall 以固定 launchctl argv 管理且�
     runFileCapture(command, args) {
       calls.push([command, ...args]);
       if (args[0] === 'print') return { ok: loaded, out: loaded ? 'loaded' : 'not loaded' };
-      if (args[0] === 'bootout') { loaded = false; return { ok: true, out: '' }; }
-      if (args[0] === 'bootstrap') { loaded = true; return { ok: true, out: '' }; }
+      if (args[0] === 'bootout') {
+        loaded = false;
+        return { ok: true, out: '' };
+      }
+      if (args[0] === 'bootstrap') {
+        loaded = true;
+        return { ok: true, out: '' };
+      }
       if (args[0] === 'kickstart') return { ok: true, out: '' };
       return { ok: false, out: 'unexpected call' };
     },
@@ -92,8 +98,12 @@ test('watch-service install/status/uninstall 以固定 launchctl argv 管理且�
     traceLayout: (value) => ({ root: join(value, 'worktree-trace', 'v1') }),
     flag: (flags, name) => flags.get(name) ?? null,
     rejectUnknownFlags() {},
-    die(message) { throw new Error(message); },
-    log(message) { logs.push(message); },
+    die(message) {
+      throw new Error(message);
+    },
+    log(message) {
+      logs.push(message);
+    },
   });
 
   commands.cmdWatchService({ positionals: ['install'], flags: new Map([['interval-seconds', '45']]) });
@@ -101,12 +111,21 @@ test('watch-service install/status/uninstall 以固定 launchctl argv 管理且�
   assert.equal(status.installed, true);
   assert.equal(status.loaded, true);
   assert.match(readFileSync(status.plist_path, 'utf8'), /<integer>45<\/integer>/);
-  assert.equal(calls.some((call) => call[1] === 'bootstrap'), true);
-  assert.equal(calls.some((call) => call[1] === 'kickstart'), true);
+  assert.equal(
+    calls.some((call) => call[1] === 'bootstrap'),
+    true,
+  );
+  assert.equal(
+    calls.some((call) => call[1] === 'kickstart'),
+    true,
+  );
 
   commands.cmdWatchService({ positionals: ['uninstall'], flags: new Map() });
   assert.equal(existsSync(status.plist_path), false);
   assert.equal(loaded, false);
-  assert.equal(calls.some((call) => call[1] === 'bootout'), true);
+  assert.equal(
+    calls.some((call) => call[1] === 'bootout'),
+    true,
+  );
   assert.equal(logs.length, 2);
 });

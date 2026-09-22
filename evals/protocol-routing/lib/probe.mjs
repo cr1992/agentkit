@@ -25,21 +25,30 @@ const ledgerDir = process.env.PROTOCOL_ROUTING_LEDGER;
 const agentkitBin = process.env.PROTOCOL_ROUTING_AGENTKIT;
 
 const git = (/** @type {string[]} */ args) => {
-  try { return execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim(); }
-  catch { return null; }
+  try {
+    return execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
+  } catch {
+    return null;
+  }
 };
 
 /** 台账快照；没配台账、或这一刻读不出来（比如会话正把它改到一半）都返回 null。 */
 function ledgerSnapshot() {
   if (!ledgerDir || !agentkitBin) return null;
   try {
-    const raw = execFileSync(process.execPath, [agentkitBin, 'orchestrate', 'ledger', 'status', '--ledger', ledgerDir], {
-      encoding: 'utf8',
-      maxBuffer: 32 * 1024 * 1024,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const raw = execFileSync(
+      process.execPath,
+      [agentkitBin, 'orchestrate', 'ledger', 'status', '--ledger', ledgerDir],
+      {
+        encoding: 'utf8',
+        maxBuffer: 32 * 1024 * 1024,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
     return summarizeLedgerStatus(JSON.parse(raw));
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 let payload = {};
@@ -47,16 +56,21 @@ try {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
   payload = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
-} catch { payload = {}; }
+} catch {
+  payload = {};
+}
 
 if (repo && probe) {
-  appendFileSync(probe, `${JSON.stringify({
-    at: new Date().toISOString(),
-    tool_name: payload.tool_name ?? null,
-    tool_use_id: payload.tool_use_id ?? payload.toolUseID ?? null,
-    repo: { status: git(['status', '--porcelain']), head: git(['rev-parse', 'HEAD']) },
-    ledger: ledgerSnapshot(),
-  })}\n`);
+  appendFileSync(
+    probe,
+    `${JSON.stringify({
+      at: new Date().toISOString(),
+      tool_name: payload.tool_name ?? null,
+      tool_use_id: payload.tool_use_id ?? payload.toolUseID ?? null,
+      repo: { status: git(['status', '--porcelain']), head: git(['rev-parse', 'HEAD']) },
+      ledger: ledgerSnapshot(),
+    })}\n`,
+  );
 }
 
 // hook 必须静默放行：探针只观测，绝不影响被测会话的决策与退出码。

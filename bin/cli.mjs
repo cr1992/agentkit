@@ -15,11 +15,16 @@ import {
   validateShellManifest,
 } from '../core/runtime-bundle.mjs';
 
-const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));  // bin/ 的上一级即包根
+const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url))); // bin/ 的上一级即包根
 
 // 一级域：前缀之后的 argv 直接交给同一个脚本。
 const DOMAINS = {
-  worktree: { domain: 'worktree', skill: 'manage-worktrees', script: 'worktree-mgr.mjs', verbs: { scan: 'worktree-scan.mjs' } },
+  worktree: {
+    domain: 'worktree',
+    skill: 'manage-worktrees',
+    script: 'worktree-mgr.mjs',
+    verbs: { scan: 'worktree-scan.mjs' },
+  },
   contract: { domain: 'orchestrate', skill: 'orchestrate-subagents', script: 'contract-tool.mjs' },
   verify: { domain: 'verify', skill: 'verify-agent-output', script: 'verification-runtime.mjs' },
   loop: { domain: 'loop', skill: 'run-agent-verify-loop', script: 'loop-runtime.mjs' },
@@ -54,8 +59,11 @@ const DOCTOR_TARGETS = CAPABILITY_TARGETS;
 const DOC_DOMAINS = { orchestrate: 'orchestrate', worktree: 'worktree', verify: 'verify', loop: 'loop' };
 
 function packageVersion() {
-  try { return JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8')).version; }
-  catch { return 'unknown'; }
+  try {
+    return JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8')).version;
+  } catch {
+    return 'unknown';
+  }
 }
 
 function scriptPath(target) {
@@ -86,7 +94,11 @@ function forward(target, args) {
   }
   if (result.signal) {
     // facade 若吞掉子进程信号并改写为 exit 1，就不再满足“退出语义一致”。
-    try { process.kill(process.pid, result.signal); } catch { return 1; }
+    try {
+      process.kill(process.pid, result.signal);
+    } catch {
+      return 1;
+    }
     return 1;
   }
   return result.status === null ? 1 : result.status;
@@ -98,7 +110,11 @@ function capture(target, args) {
   if (!existsSync(path)) return null;
   const result = spawnSync(process.execPath, [path, ...args], { encoding: 'utf8' });
   if (result.status !== 0 || !result.stdout) return null;
-  try { return JSON.parse(result.stdout); } catch { return null; }
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    return null;
+  }
 }
 
 function helpText() {
@@ -139,7 +155,9 @@ function runCapabilities(args) {
     return 1;
   }
   if (json) {
-    process.stdout.write(`${JSON.stringify({ cli: 'agentkit', cli_version: packageVersion(), runtime_bundle_digest: runtimeBundleDigest(), skills }, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ cli: 'agentkit', cli_version: packageVersion(), runtime_bundle_digest: runtimeBundleDigest(), skills }, null, 2)}\n`,
+    );
     return 0;
   }
   for (const [skill, payload] of Object.entries(skills)) {
@@ -151,12 +169,18 @@ function runCapabilities(args) {
 function runDoctor(args) {
   const unknown = args.filter((arg) => arg !== '--json');
   if (unknown.length) {
-    process.stderr.write(`agentkit doctor: 未知选项「${unknown[0]}」；状态检查请使用对应域的 doctor 并传入 ledger/run/loop\n`);
+    process.stderr.write(
+      `agentkit doctor: 未知选项「${unknown[0]}」；状态检查请使用对应域的 doctor 并传入 ledger/run/loop\n`,
+    );
     return 2;
   }
   const json = args.includes('--json');
   const nodeMajor = Number.parseInt(process.versions.node.split('.')[0], 10);
-  const node = { healthy: Number.isSafeInteger(nodeMajor) && nodeMajor >= 22, version: process.versions.node, required: '>=22' };
+  const node = {
+    healthy: Number.isSafeInteger(nodeMajor) && nodeMajor >= 22,
+    version: process.versions.node,
+    required: '>=22',
+  };
   const gitResult = spawnSync('git', ['--version'], { encoding: 'utf8' });
   const git = {
     healthy: gitResult.status === 0,
@@ -168,7 +192,12 @@ function runDoctor(args) {
     const value = validateShellManifest();
     manifest = { healthy: true, package_name: value.package_name, package_version: value.package_version, error: null };
   } catch (error) {
-    manifest = { healthy: false, package_name: null, package_version: null, error: error instanceof Error ? error.message : String(error) };
+    manifest = {
+      healthy: false,
+      package_name: null,
+      package_version: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
   const skills = {};
   let installed = 0;
@@ -187,17 +216,34 @@ function runDoctor(args) {
       state_doctor: 'requires_explicit_state',
     };
   }
-  const healthy = node.healthy && git.healthy && manifest.healthy && installed > 0
-    && Object.values(skills).filter((item) => item.installed).every((item) => item.healthy);
-  const result = { cli: 'agentkit', cli_version: packageVersion(), runtime_bundle_digest: runtimeBundleDigest(), healthy, checks: { node, git, manifest }, skills };
+  const healthy =
+    node.healthy &&
+    git.healthy &&
+    manifest.healthy &&
+    installed > 0 &&
+    Object.values(skills)
+      .filter((item) => item.installed)
+      .every((item) => item.healthy);
+  const result = {
+    cli: 'agentkit',
+    cli_version: packageVersion(),
+    runtime_bundle_digest: runtimeBundleDigest(),
+    healthy,
+    checks: { node, git, manifest },
+    skills,
+  };
   if (json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   else {
     process.stdout.write(`agentkit ${packageVersion()} doctor: ${healthy ? 'healthy' : 'unhealthy'}\n`);
     process.stdout.write(`node ${node.version} (${node.healthy ? 'ok' : `需要 ${node.required}`})\n`);
     process.stdout.write(`git ${git.version ?? git.error} (${git.healthy ? 'ok' : 'unavailable'})\n`);
-    process.stdout.write(`shell manifest ${manifest.package_version ?? manifest.error} (${manifest.healthy ? 'ok' : 'invalid'})\n`);
+    process.stdout.write(
+      `shell manifest ${manifest.package_version ?? manifest.error} (${manifest.healthy ? 'ok' : 'invalid'})\n`,
+    );
     for (const [skill, check] of Object.entries(skills)) {
-      process.stdout.write(`${skill}: ${check.installed ? (check.healthy ? `runtime ${check.runtime_version ?? '?'} ok` : 'capabilities failed') : 'not installed'}\n`);
+      process.stdout.write(
+        `${skill}: ${check.installed ? (check.healthy ? `runtime ${check.runtime_version ?? '?'} ok` : 'capabilities failed') : 'not installed'}\n`,
+      );
     }
   }
   if (!installed) return 127;
@@ -236,7 +282,8 @@ function nextCommands(entry) {
     ];
   }
   if (entry.phase === 'ready_to_close') return [`agentkit orchestrate ledger close --ledger ${entry.ledger_dir}`];
-  if (entry.phase === 'empty') return [`agentkit orchestrate ledger add-node --ledger ${entry.ledger_dir} --input <node.json>`];
+  if (entry.phase === 'empty')
+    return [`agentkit orchestrate ledger add-node --ledger ${entry.ledger_dir} --input <node.json>`];
   if (entry.phase === 'blocked') {
     return [
       `agentkit orchestrate ledger status --ledger ${entry.ledger_dir}`,
@@ -263,7 +310,11 @@ function currentWorktreePath() {
   if (result.status !== 0) return null;
   const top = result.stdout.trim();
   if (!top) return null;
-  try { return realpathSync(top); } catch { return top; }
+  try {
+    return realpathSync(top);
+  } catch {
+    return top;
+  }
 }
 
 function worktreeSummary(record) {
@@ -299,8 +350,12 @@ function describeLedger(pointer, ledgerDir, status, records) {
       completion_ready: Boolean(status.summary?.completion_ready),
     },
     blockers: [
-      ...nodes.filter((node) => node.state === 'blocked').map((node) => `${node.node_id} blocked：${node.reason ?? '未记录原因'}`),
-      ...nodes.filter((node) => node.state === 'failed' && node.required !== false).map((node) => `${node.node_id} failed：${node.reason ?? '未记录原因'}`),
+      ...nodes
+        .filter((node) => node.state === 'blocked')
+        .map((node) => `${node.node_id} blocked：${node.reason ?? '未记录原因'}`),
+      ...nodes
+        .filter((node) => node.state === 'failed' && node.required !== false)
+        .map((node) => `${node.node_id} failed：${node.reason ?? '未记录原因'}`),
     ],
     uncovered_implementation_nodes: status.summary?.uncovered_implementation_nodes ?? [],
     unmet_completion_conditions: status.summary?.unmet_completion_conditions ?? [],
@@ -324,16 +379,32 @@ function collectLedgers(pointers, pointerApi, records) {
     const pointer = item.pointer;
     const dir = pointerApi.ledgerDirectory(pointer);
     if (!existsSync(join(dir, 'events.ndjson'))) {
-      dangling.push({ pointer_path: item.path, ledger_id: pointer.ledger_id, state: 'dangling_state_root', detail: `state_root ${pointer.state_root} 下找不到 ledger 事件链 ${join(dir, 'events.ndjson')}` });
+      dangling.push({
+        pointer_path: item.path,
+        ledger_id: pointer.ledger_id,
+        state: 'dangling_state_root',
+        detail: `state_root ${pointer.state_root} 下找不到 ledger 事件链 ${join(dir, 'events.ndjson')}`,
+      });
       continue;
     }
     const status = capture(LEDGER_TARGET, ['status', '--ledger', dir]);
     if (!status) {
-      dangling.push({ pointer_path: item.path, ledger_id: pointer.ledger_id, state: 'unreadable', detail: `ledger 目录 ${dir} 无法读取状态；用 agentkit orchestrate ledger doctor --ledger ${dir} 查看` });
+      dangling.push({
+        pointer_path: item.path,
+        ledger_id: pointer.ledger_id,
+        state: 'unreadable',
+        detail: `ledger 目录 ${dir} 无法读取状态；用 agentkit orchestrate ledger doctor --ledger ${dir} 查看`,
+      });
       continue;
     }
     if (status.lifecycle) {
-      terminal.push({ pointer_path: item.path, ledger_id: pointer.ledger_id, ledger_dir: dir, lifecycle_state: status.lifecycle.state, closed_at: status.lifecycle.closed_at });
+      terminal.push({
+        pointer_path: item.path,
+        ledger_id: pointer.ledger_id,
+        ledger_dir: dir,
+        lifecycle_state: status.lifecycle.state,
+        closed_at: status.lifecycle.closed_at,
+      });
       continue;
     }
     const entry = { ...describeLedger(pointer, dir, status, records), pointer_path: item.path };
@@ -347,16 +418,25 @@ function renderStatusText(report) {
   lines.push(`当前工作树: ${report.worktree_root ?? '(未知)'}  git common dir: ${report.git_common_dir}`);
   lines.push(`指针目录: ${report.pointer_dir}`);
   if (report.scope === 'worktree') {
-    lines.push(`当前 worktree 绑定 ledger=${report.worktree_binding.ledger_id}（record ${report.worktree_binding.worktree_id.slice(0, 8)}），已收窄到该 ledger。`);
+    lines.push(
+      `当前 worktree 绑定 ledger=${report.worktree_binding.ledger_id}（record ${report.worktree_binding.worktree_id.slice(0, 8)}），已收窄到该 ledger。`,
+    );
   } else if (report.worktree_binding) {
-    lines.push(`当前 worktree 的 record 绑定 ledger=${report.worktree_binding.ledger_id}，但该 ledger 没有可用指针；下面列出全部未终态 ledger。`);
+    lines.push(
+      `当前 worktree 的 record 绑定 ledger=${report.worktree_binding.ledger_id}，但该 ledger 没有可用指针；下面列出全部未终态 ledger。`,
+    );
   }
 
-  const groups = [['未终态 ledger', report.ledgers], ['skill_drift ledger（不能续跑）', report.drifted_ledgers]];
+  const groups = [
+    ['未终态 ledger', report.ledgers],
+    ['skill_drift ledger（不能续跑）', report.drifted_ledgers],
+  ];
   if (!report.ledgers.length && !report.drifted_ledgers.length) {
     lines.push('');
     lines.push('未发现 ledger。');
-    lines.push(`  在本仓 init 过的 ledger 会在 ${report.pointer_dir} 留下指针；升级前 init 的 ledger 没有指针，需要手传 --ledger <ledger 目录>。`);
+    lines.push(
+      `  在本仓 init 过的 ledger 会在 ${report.pointer_dir} 留下指针；升级前 init 的 ledger 没有指针，需要手传 --ledger <ledger 目录>。`,
+    );
     lines.push('  新建：agentkit orchestrate ledger init --contract <contract.json> --state-root <仓外路径>');
   }
   for (const [title, entries] of groups) {
@@ -364,12 +444,20 @@ function renderStatusText(report) {
     lines.push('');
     lines.push(`${title}：${entries.length} 个`);
     for (const entry of entries) {
-      lines.push(`  [${entry.ledger_id}] 阶段=${PHASE_LABELS[entry.phase] ?? entry.phase} revision=${entry.revision} 节点 pending/active/terminal=${entry.summary.pending}/${entry.summary.active}/${entry.summary.terminal}`);
+      lines.push(
+        `  [${entry.ledger_id}] 阶段=${PHASE_LABELS[entry.phase] ?? entry.phase} revision=${entry.revision} ` +
+          `节点 pending/active/terminal=${entry.summary.pending}/${entry.summary.active}/${entry.summary.terminal}`,
+      );
       lines.push(`    ledger: ${entry.ledger_dir}`);
-      lines.push(`    活跃 worktree: ${entry.worktrees.length ? entry.worktrees.map((item) => `${item.task}@${item.path}`).join('、') : '无'}`);
+      lines.push(
+        `    活跃 worktree: ${entry.worktrees.length ? entry.worktrees.map((item) => `${item.task}@${item.path}`).join('、') : '无'}`,
+      );
       lines.push(`    阻塞项: ${entry.blockers.length ? entry.blockers.join('；') : '无'}`);
-      lines.push(`    未覆盖节点: ${entry.uncovered_implementation_nodes.length ? entry.uncovered_implementation_nodes.join('、') : '无'}`);
-      if (entry.skill_drift) lines.push(`    skill_drift: ${entry.skill_drift_remediation ?? '冻结的 runtime 与当前不一致'}`);
+      lines.push(
+        `    未覆盖节点: ${entry.uncovered_implementation_nodes.length ? entry.uncovered_implementation_nodes.join('、') : '无'}`,
+      );
+      if (entry.skill_drift)
+        lines.push(`    skill_drift: ${entry.skill_drift_remediation ?? '冻结的 runtime 与当前不一致'}`);
       lines.push('    下一步:');
       for (const command of entry.next_commands) lines.push(`      ${command}`);
     }
@@ -378,13 +466,18 @@ function renderStatusText(report) {
     lines.push('');
     lines.push(`悬空指针：${report.dangling_pointers.length} 个（state root 已不存在或指针损坏）`);
     for (const item of report.dangling_pointers) lines.push(`  [${item.ledger_id}] ${item.state}：${item.detail}`);
-    lines.push(`  回收：agentkit orchestrate ledger reclaim-pointers --repository ${report.worktree_root ?? report.git_common_dir}`);
+    lines.push(
+      `  回收：agentkit orchestrate ledger reclaim-pointers --repository ${report.worktree_root ?? report.git_common_dir}`,
+    );
   }
   if (report.terminal_pointers.length) {
     lines.push('');
     lines.push(`已终态但指针仍在：${report.terminal_pointers.length} 个`);
-    for (const item of report.terminal_pointers) lines.push(`  [${item.ledger_id}] ${item.lifecycle_state} @ ${item.closed_at}`);
-    lines.push(`  回收：agentkit orchestrate ledger reclaim-pointers --repository ${report.worktree_root ?? report.git_common_dir}`);
+    for (const item of report.terminal_pointers)
+      lines.push(`  [${item.ledger_id}] ${item.lifecycle_state} @ ${item.closed_at}`);
+    lines.push(
+      `  回收：agentkit orchestrate ledger reclaim-pointers --repository ${report.worktree_root ?? report.git_common_dir}`,
+    );
   }
   return `${lines.join('\n')}\n`;
 }
@@ -392,23 +485,29 @@ function renderStatusText(report) {
 async function runStatus(args) {
   const unknown = args.filter((arg) => arg !== '--json');
   if (unknown.length) {
-    process.stderr.write(`agentkit status: 未知选项「${unknown[0]}」；本命令只接受 --json，作用域由当前工作目录所属的 git 仓库决定\n`);
+    process.stderr.write(
+      `agentkit status: 未知选项「${unknown[0]}」；本命令只接受 --json，作用域由当前工作目录所属的 git 仓库决定\n`,
+    );
     return 2;
   }
   const pointerApi = await import('../core/ledger-pointer.mjs');
   const found = pointerApi.resolveGitCommonDir(process.cwd());
   if (!found.common_dir) {
-    process.stderr.write(`agentkit status: ${found.reason}；status 从当前工作目录所属的 git 仓库读取仓级 ledger 指针，请在仓库内运行\n`);
+    process.stderr.write(
+      `agentkit status: ${found.reason}；status 从当前工作目录所属的 git 仓库读取仓级 ledger 指针，请在仓库内运行\n`,
+    );
     return 2;
   }
   const commonDir = found.common_dir;
   const records = await worktreeRecords(commonDir);
   const here = currentWorktreePath();
-  const bound = here ? records.find((record) => record.path === here && record.ledger) ?? null : null;
+  const bound = here ? (records.find((record) => record.path === here && record.ledger) ?? null) : null;
   const collected = collectLedgers(pointerApi.listLedgerPointers(commonDir), pointerApi, records);
 
   // 受管 worktree 里优先用 record 的 ledger 字段收窄；收窄不到就退回全量，并说明原因，不做猜测。
-  const narrowed = bound ? [...collected.active, ...collected.drifted].filter((entry) => entry.ledger_id === bound.ledger) : [];
+  const narrowed = bound
+    ? [...collected.active, ...collected.drifted].filter((entry) => entry.ledger_id === bound.ledger)
+    : [];
   const scope = narrowed.length ? 'worktree' : 'repository';
   const report = {
     cli: 'agentkit',
@@ -418,7 +517,9 @@ async function runStatus(args) {
     git_common_dir: commonDir,
     pointer_dir: pointerApi.pointerDirectory(commonDir),
     scope,
-    worktree_binding: bound ? { ledger_id: bound.ledger, worktree_id: bound.worktree_id, task: bound.task, path: bound.path } : null,
+    worktree_binding: bound
+      ? { ledger_id: bound.ledger, worktree_id: bound.worktree_id, task: bound.task, path: bound.path }
+      : null,
     ledgers: scope === 'worktree' ? narrowed.filter((entry) => !entry.skill_drift) : collected.active,
     drifted_ledgers: scope === 'worktree' ? narrowed.filter((entry) => entry.skill_drift) : collected.drifted,
     dangling_pointers: collected.dangling,
@@ -432,7 +533,10 @@ async function runStatus(args) {
 function docsIndex(domain) {
   const dir = join(PACKAGE_ROOT, 'docs', DOC_DOMAINS[domain]);
   if (!existsSync(dir)) return [];
-  return readdirSync(dir).filter((name) => name.endsWith('.md')).map((name) => basename(name, '.md')).sort();
+  return readdirSync(dir)
+    .filter((name) => name.endsWith('.md'))
+    .map((name) => basename(name, '.md'))
+    .sort();
 }
 
 function runDocs(args) {
@@ -447,7 +551,10 @@ function runDocs(args) {
   }
   const topics = docsIndex(domain);
   if (!topic) {
-    if (!topics.length) { process.stderr.write(`agentkit: ${domain} 没有可用参考文档\n`); return 127; }
+    if (!topics.length) {
+      process.stderr.write(`agentkit: ${domain} 没有可用参考文档\n`);
+      return 127;
+    }
     process.stdout.write(`${topics.join('\n')}\n`);
     return 0;
   }

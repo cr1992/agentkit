@@ -31,7 +31,12 @@ import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { REPO_ROOT, skillDigests } from './agentkit.mjs';
 
-export const SKILL_NAMES = ['manage-worktrees', 'orchestrate-subagents', 'run-agent-verify-loop', 'verify-agent-output'];
+export const SKILL_NAMES = [
+  'manage-worktrees',
+  'orchestrate-subagents',
+  'run-agent-verify-loop',
+  'verify-agent-output',
+];
 
 /** 安装器的 JSON 回报；解析不出来就当没有——它不参与判定。 */
 function parseInstallerReport(stdout) {
@@ -40,7 +45,9 @@ function parseInstallerReport(stdout) {
   try {
     const parsed = JSON.parse(stdout.slice(start));
     return Array.isArray(parsed) ? parsed : [];
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 }
 
 /** 四份 SKILL.md 都在某个 `skills/` 目录下。这是「装上了」的唯一判据。 */
@@ -52,11 +59,15 @@ export function skillsComplete(skillsDir) {
 function runSkillsInstaller({ source, configDir, home, timeoutMs }) {
   // 用 spawnSync 而不是 execFileSync：退出码非零时也要拿到 stdout / stderr，
   // 否则「安装其实成功了、只是某个无关 agent 报错」这种情形连日志都留不下。
-  const result = spawnSync('npx', ['-y', 'skills', 'add', source, '-g', '--agent', '*', '--skill', '*', '-y', '--copy', '--json'], {
-    encoding: 'utf8',
-    timeout: timeoutMs,
-    env: { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: configDir, XDG_CONFIG_HOME: join(home, '.config') },
-  });
+  const result = spawnSync(
+    'npx',
+    ['-y', 'skills', 'add', source, '-g', '--agent', '*', '--skill', '*', '-y', '--copy', '--json'],
+    {
+      encoding: 'utf8',
+      timeout: timeoutMs,
+      env: { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: configDir, XDG_CONFIG_HOME: join(home, '.config') },
+    },
+  );
   if (result.error) throw new Error(`skill 安装命令没跑起来：${/** @type {Error} */ (result.error).message}`);
   return { exit_code: result.status, stdout: String(result.stdout ?? ''), stderr: String(result.stderr ?? '') };
 }
@@ -96,8 +107,12 @@ export function prepareSkillCache({ cacheDir, source = REPO_ROOT, timeoutMs = 30
   // 唯一的判据：四份 SKILL.md 在不在缓存里。
   const missing = SKILL_NAMES.filter((name) => !existsSync(join(skillsDir, name, 'SKILL.md')));
   if (missing.length) {
-    const stderr = String(result.stderr ?? '').trim().slice(-2000);
-    throw new Error(`skill 安装不完整，缺少：${missing.join(', ')}（安装器退出码 ${result.exit_code}）${stderr ? `\n${stderr}` : ''}`);
+    const stderr = String(result.stderr ?? '')
+      .trim()
+      .slice(-2000);
+    throw new Error(
+      `skill 安装不完整，缺少：${missing.join(', ')}（安装器退出码 ${result.exit_code}）${stderr ? `\n${stderr}` : ''}`,
+    );
   }
 
   return {
@@ -124,7 +139,8 @@ export function prepareSkillCache({ cacheDir, source = REPO_ROOT, timeoutMs = 30
  * }}
  */
 export function installSkills({ configDir, home, cache }) {
-  if (!cache?.skills_dir) throw new Error('installSkills 需要 prepareSkillCache 产出的缓存；skill 每轮只装一次，会话从缓存复制');
+  if (!cache?.skills_dir)
+    throw new Error('installSkills 需要 prepareSkillCache 产出的缓存；skill 每轮只装一次，会话从缓存复制');
   mkdirSync(configDir, { recursive: true });
   mkdirSync(home, { recursive: true });
   const target = join(configDir, 'skills');

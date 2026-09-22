@@ -26,7 +26,11 @@ function makeOrigin() {
     git(origin, ['add', 'f.txt']);
     git(origin, ['commit', '-q', '-m', `c${n}`]);
   }
-  const artifact = { object_format: 'sha1', base_sha: git(origin, ['rev-parse', 'HEAD~1']), artifact_sha: git(origin, ['rev-parse', 'HEAD']) };
+  const artifact = {
+    object_format: 'sha1',
+    base_sha: git(origin, ['rev-parse', 'HEAD~1']),
+    artifact_sha: git(origin, ['rev-parse', 'HEAD']),
+  };
   return { sandbox, origin, artifact, cleanup: () => rmSync(sandbox, { recursive: true, force: true }) };
 }
 
@@ -48,6 +52,7 @@ test('shallow clone 被明确拒绝，而不是算出另一个 identity', (t) =>
   git(fixture.sandbox, ['clone', '-q', '--depth', '2', pathToFileURL(fixture.origin).href, shallow]);
   assert.throws(
     () => verifyGitArtifact(fixture.artifact, shallow),
-    (error) => error.code === 'stale_precondition' && /shallow clone/.test(error.message) && /--unshallow/.test(error.message),
+    (error) =>
+      error.code === 'stale_precondition' && /shallow clone/.test(error.message) && /--unshallow/.test(error.message),
   );
 });

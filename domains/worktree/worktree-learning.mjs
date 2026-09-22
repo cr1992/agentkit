@@ -29,7 +29,13 @@ export function createCommands(deps) {
   } = deps;
 
   function sanitizeLearningText(value) {
-    return oneLine(String(value ?? '').replace(/\bBearer\s+\S+/giu, 'Bearer [REDACTED]').replace(/\/(?:Users|home)\/[^\s"']+/gu, '[LOCAL_PATH]'), 'reflection text', 1000);
+    return oneLine(
+      String(value ?? '')
+        .replace(/\bBearer\s+\S+/giu, 'Bearer [REDACTED]')
+        .replace(/\/(?:Users|home)\/[^\s"']+/gu, '[LOCAL_PATH]'),
+      'reflection text',
+      1000,
+    );
   }
 
   function learningRoot(commonDir) {
@@ -43,7 +49,19 @@ export function createCommands(deps) {
     const { loaded, record } = worktreeEnvelopeContext(args);
     const input = readJsonFileOrDie(resolve(inputPath), 'incident --input 文件');
     if (!DIGEST_PATTERN.test(String(input.contract_digest ?? ''))) die('incident contract_digest 无效。', 2);
-    if (!['contract_gap', 'skill_gap', 'verification_gap', 'tool_gap', 'environment_gap', 'false_positive', 'false_negative', 'inefficiency'].includes(input.classification)) die('incident classification 无效。', 2);
+    if (
+      ![
+        'contract_gap',
+        'skill_gap',
+        'verification_gap',
+        'tool_gap',
+        'environment_gap',
+        'false_positive',
+        'false_negative',
+        'inefficiency',
+      ].includes(input.classification)
+    )
+      die('incident classification 无效。', 2);
     const chain = readEventChain(loaded.context.common_dir, record.worktree_id);
     const latest = chain.at(-1);
     if (!latest) die('worktree record 没有可引用事件。', 2);
@@ -74,7 +92,8 @@ export function createCommands(deps) {
     rejectUnknownFlags(args.flags, ['reflection', 'input', 'config']);
     const reflectionId = flag(args.flags, 'reflection');
     const inputPath = flag(args.flags, 'input');
-    if (!reflectionId || !inputPath || !/^[0-9a-f-]{36}$/iu.test(reflectionId)) die('propose-improvement 需要 --reflection <uuid> --input <json>。', 2);
+    if (!reflectionId || !inputPath || !/^[0-9a-f-]{36}$/iu.test(reflectionId))
+      die('propose-improvement 需要 --reflection <uuid> --input <json>。', 2);
     const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
     const reflectionPath = join(learningRoot(loaded.context.common_dir), 'reflections', `${reflectionId}.json`);
     if (!existsSync(reflectionPath)) die('Reflection 不存在。', 2);
@@ -84,13 +103,24 @@ export function createCommands(deps) {
     const proposal = {
       schema_version: 1,
       proposal_id: randomUUID(),
-      target_skill: { name: 'manage-worktrees', based_on_version: 'unversioned', based_on_digest: reflection.affected_skill.content_digest },
-      source_reflections: [{ reflection_id: reflection.reflection_id, reflection_digest: reflection.reflection_digest }],
+      target_skill: {
+        name: 'manage-worktrees',
+        based_on_version: 'unversioned',
+        based_on_digest: reflection.affected_skill.content_digest,
+      },
+      source_reflections: [
+        { reflection_id: reflection.reflection_id, reflection_digest: reflection.reflection_digest },
+      ],
       problem: { type: input.problem_type ?? 'skill_gap', evidence_refs: reflection.evidence_refs },
       proposed_change: sanitizeLearningText(input.proposed_change),
       affected_scope: (input.affected_scope ?? []).map(sanitizeLearningText),
       counterexamples: (input.counterexamples ?? []).map(sanitizeLearningText),
-      validation_plan: { replay_cases: input.validation_plan?.replay_cases ?? [], regression_suites: input.validation_plan?.regression_suites ?? [], independent_review: 'required', ...(input.validation_plan?.canary ? { canary: input.validation_plan.canary } : {}) },
+      validation_plan: {
+        replay_cases: input.validation_plan?.replay_cases ?? [],
+        regression_suites: input.validation_plan?.regression_suites ?? [],
+        independent_review: 'required',
+        ...(input.validation_plan?.canary ? { canary: input.validation_plan.canary } : {}),
+      },
       lifecycle: 'proposed',
     };
     proposal.proposal_digest = contentDigest(Buffer.from(JSON.stringify(canonicalJson(proposal))));
@@ -100,7 +130,6 @@ export function createCommands(deps) {
     writeFileSync(path, `${JSON.stringify(proposal, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
     console.log(JSON.stringify({ proposal, ref: path }, null, 2));
   }
-
 
   return {
     learningRoot,

@@ -2,14 +2,29 @@
 // 这些用例跨 orchestrate 与 worktree 两个域 + bin/ 顶层，因此放在共享 tests/ 下而不是某个域内。
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { collectJsonSchemaErrors } from '../core/json-schema-lite.mjs';
-import { LEDGER_ID_PATTERN, listLedgerPointers, pointerDirectory, resolveGitCommonDir, validateLedgerPointer } from '../core/ledger-pointer.mjs';
+import {
+  LEDGER_ID_PATTERN,
+  listLedgerPointers,
+  pointerDirectory,
+  resolveGitCommonDir,
+  validateLedgerPointer,
+} from '../core/ledger-pointer.mjs';
 import { canonicalJson, envelopeDigest } from '../domains/orchestrate/contract-tool.mjs';
 import { skillContentDigest } from '../domains/orchestrate/orchestration-ledger.mjs';
 
@@ -72,7 +87,14 @@ function writeContract(fixture, { name = 'contract', repository = fixture.repo }
     acceptance: [{ contract_item_id: 'done', requirement: '必要节点均有稳定产物' }],
     permissions: { mode: 'read_only', writable_paths: [] },
     environment: { repository, isolation: 'caller_supplied' },
-    skill_set: [{ name: 'orchestrate-subagents', version: '1.1.0', content_digest: skillContentDigest(), provider_mode: 'primary' }],
+    skill_set: [
+      {
+        name: 'orchestrate-subagents',
+        version: '1.1.0',
+        content_digest: skillContentDigest(),
+        provider_mode: 'primary',
+      },
+    ],
     stop_conditions: [],
     extensions: {},
   };
@@ -88,7 +110,15 @@ function initLedger(fixture, ledgerId, options = {}) {
   const stateRoot = options.stateRoot ?? join(fixture.stateRoot, ledgerId);
   return {
     contract: contract.contract,
-    ...ledgerJson(options.cwd ?? fixture.repo, ['init', '--contract', contract.path, '--state-root', stateRoot, '--ledger-id', ledgerId]),
+    ...ledgerJson(options.cwd ?? fixture.repo, [
+      'init',
+      '--contract',
+      contract.path,
+      '--state-root',
+      stateRoot,
+      '--ledger-id',
+      ledgerId,
+    ]),
   };
 }
 
@@ -100,34 +130,68 @@ function inputFile(fixture, name, value) {
 
 // 把一个 required 节点推到 passed，使 ledger 达到 completion_ready，正常 close 才能成立。
 function passOneNode(fixture, ledgerDir, id) {
-  ledgerJson(fixture.repo, ['add-node', '--ledger', ledgerDir, '--input', inputFile(fixture, `${id}-node`, {
-    node_id: id, objective: `完成 ${id}`, verification: { requirement: 'worker_self_check', provider: 'none', artifact_scope: 'node_output' },
-  })]);
-  ledgerJson(fixture.repo, ['dispatch-record', '--ledger', ledgerDir, '--node', id, '--input', inputFile(fixture, `${id}-dispatch`, {
-    schema_version: 2,
-    worker_id: id,
-    orchestration_mode: 'full',
-    attempt_id: `attempt-${id}`,
-    attempt: 1,
-    previous_attempt_id: null,
-    tier: 'primary',
-    model: 'provider-primary-current',
-    reasoning_effort: 'medium',
-    adjustment_action: 'initial',
-    failure_kind: null,
-    failure_ref: null,
-    selection_reason: '明确实现任务，使用已确认的常规执行配置',
-    config_source: ['global:/config/hosts/test.json'],
-    configuration_state: 'persisted-config',
-    model_resolution_state: 'discovered-and-validated',
-    capability_source: 'cache:/config/capabilities/test.json+live-validation',
-    capability_fingerprint: `sha256:${'e'.repeat(64)}`,
-    dispatch_provenance: 'explicit',
-    token_budget: 'unsupported',
-    max_attempts: 2,
-  })]);
-  ledgerJson(fixture.repo, ['attach', '--ledger', ledgerDir, '--node', id, '--type', 'report', '--input', inputFile(fixture, `${id}-report`, { report_id: `report-${id}` })]);
-  ledgerJson(fixture.repo, ['update', '--ledger', ledgerDir, '--node', id, '--input', inputFile(fixture, `${id}-pass`, { state: 'passed' })]);
+  ledgerJson(fixture.repo, [
+    'add-node',
+    '--ledger',
+    ledgerDir,
+    '--input',
+    inputFile(fixture, `${id}-node`, {
+      node_id: id,
+      objective: `完成 ${id}`,
+      verification: { requirement: 'worker_self_check', provider: 'none', artifact_scope: 'node_output' },
+    }),
+  ]);
+  ledgerJson(fixture.repo, [
+    'dispatch-record',
+    '--ledger',
+    ledgerDir,
+    '--node',
+    id,
+    '--input',
+    inputFile(fixture, `${id}-dispatch`, {
+      schema_version: 2,
+      worker_id: id,
+      orchestration_mode: 'full',
+      attempt_id: `attempt-${id}`,
+      attempt: 1,
+      previous_attempt_id: null,
+      tier: 'primary',
+      model: 'provider-primary-current',
+      reasoning_effort: 'medium',
+      adjustment_action: 'initial',
+      failure_kind: null,
+      failure_ref: null,
+      selection_reason: '明确实现任务，使用已确认的常规执行配置',
+      config_source: ['global:/config/hosts/test.json'],
+      configuration_state: 'persisted-config',
+      model_resolution_state: 'discovered-and-validated',
+      capability_source: 'cache:/config/capabilities/test.json+live-validation',
+      capability_fingerprint: `sha256:${'e'.repeat(64)}`,
+      dispatch_provenance: 'explicit',
+      token_budget: 'unsupported',
+      max_attempts: 2,
+    }),
+  ]);
+  ledgerJson(fixture.repo, [
+    'attach',
+    '--ledger',
+    ledgerDir,
+    '--node',
+    id,
+    '--type',
+    'report',
+    '--input',
+    inputFile(fixture, `${id}-report`, { report_id: `report-${id}` }),
+  ]);
+  ledgerJson(fixture.repo, [
+    'update',
+    '--ledger',
+    ledgerDir,
+    '--node',
+    id,
+    '--input',
+    inputFile(fixture, `${id}-pass`, { state: 'passed' }),
+  ]);
 }
 
 // 制造 skill_drift：改冻结的 content_digest 并重签整条事件链，等价于「这份 ledger 冻结在另一个 runtime 上」。
@@ -136,13 +200,24 @@ function driftLedger(ledgerDir) {
   const journalPath = join(ledgerDir, 'events.ndjson');
   const frozen = `sha256:${'0'.repeat(64)}`;
   let previous = null;
-  const rewritten = readFileSync(journalPath, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line)).map((event) => {
-    const next = { ...event, previous_event_digest: previous, snapshot: { ...event.snapshot, skill_provenance: { ...event.snapshot.skill_provenance, content_digest: frozen } } };
-    delete next.event_digest;
-    next.event_digest = envelopeDigest(next, 'event_digest');
-    previous = next.event_digest;
-    return next;
-  });
+  const rewritten = readFileSync(journalPath, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .map((event) => {
+      const next = {
+        ...event,
+        previous_event_digest: previous,
+        snapshot: {
+          ...event.snapshot,
+          skill_provenance: { ...event.snapshot.skill_provenance, content_digest: frozen },
+        },
+      };
+      delete next.event_digest;
+      next.event_digest = envelopeDigest(next, 'event_digest');
+      previous = next.event_digest;
+      return next;
+    });
   writeFileSync(journalPath, `${rewritten.map((event) => canonicalJson(event)).join('\n')}\n`);
   writeFileSync(join(ledgerDir, 'snapshot.json'), `${JSON.stringify(rewritten.at(-1).snapshot, null, 2)}\n`);
 }
@@ -156,7 +231,13 @@ test('ledger init 在 git common dir 下写仓级指针，指针不进版本控�
     assert.equal(initialized.pointer.git_common_dir, join(fixture.repo, '.git'));
 
     const pointer = JSON.parse(readFileSync(initialized.pointer.path, 'utf8'));
-    assert.deepEqual(Object.keys(pointer).sort(), ['contract_digest', 'created_at', 'ledger_id', 'schema_version', 'state_root']);
+    assert.deepEqual(Object.keys(pointer).sort(), [
+      'contract_digest',
+      'created_at',
+      'ledger_id',
+      'schema_version',
+      'state_root',
+    ]);
     assert.equal(pointer.ledger_id, 'alpha');
     assert.equal(pointer.state_root, initialized.state_root);
     assert.equal(pointer.contract_digest, initialized.contract.contract_digest);
@@ -168,7 +249,10 @@ test('ledger init 在 git common dir 下写仓级指针，指针不进版本控�
     const report = statusJson(fixture.repo);
     assert.equal(report.scope, 'repository');
     assert.equal(report.pointer_dir, fixture.pointerDir);
-    assert.deepEqual(report.ledgers.map((entry) => entry.ledger_id), ['alpha']);
+    assert.deepEqual(
+      report.ledgers.map((entry) => entry.ledger_id),
+      ['alpha'],
+    );
     assert.equal(report.ledgers[0].ledger_dir, initialized.ledger_dir);
     assert.equal(report.ledgers[0].skill_drift, false);
     assert.equal(report.ledgers[0].pointer_contract_digest_matches, true);
@@ -182,7 +266,9 @@ test('ledger init 在 git common dir 下写仓级指针，指针不进版本控�
     for (const fragment of ['阶段=', '活跃 worktree:', '阻塞项:', '未覆盖节点:', '下一步:']) {
       assert.ok(text.stdout.includes(fragment), `status 文本缺少「${fragment}」：\n${text.stdout}`);
     }
-  } finally { fixture.cleanup(); }
+  } finally {
+    fixture.cleanup();
+  }
 });
 
 test('linked worktree 里 init 与 status 都落在主仓 .git 上，不会每棵树各写一份指针', () => {
@@ -202,9 +288,15 @@ test('linked worktree 里 init 与 status 都落在主仓 .git 上，不会每�
     for (const cwd of [fixture.repo, linked]) {
       const report = statusJson(cwd);
       assert.equal(report.git_common_dir, join(fixture.repo, '.git'));
-      assert.deepEqual(report.ledgers.map((entry) => entry.ledger_id), ['beta'], `cwd=${cwd}`);
+      assert.deepEqual(
+        report.ledgers.map((entry) => entry.ledger_id),
+        ['beta'],
+        `cwd=${cwd}`,
+      );
     }
-  } finally { fixture.cleanup(); }
+  } finally {
+    fixture.cleanup();
+  }
 });
 
 test('close 与 close --abandon 之后指针消失，status 不再列出该 ledger', () => {
@@ -212,7 +304,12 @@ test('close 与 close --abandon 之后指针消失，status 不再列出该 ledg
   try {
     const closed = initLedger(fixture, 'closing');
     const abandoned = initLedger(fixture, 'abandoning');
-    assert.deepEqual(statusJson(fixture.repo).ledgers.map((entry) => entry.ledger_id).sort(), ['abandoning', 'closing']);
+    assert.deepEqual(
+      statusJson(fixture.repo)
+        .ledgers.map((entry) => entry.ledger_id)
+        .sort(),
+      ['abandoning', 'closing'],
+    );
 
     passOneNode(fixture, closed.ledger_dir, 'only');
     const closeResult = ledgerJson(fixture.repo, ['close', '--ledger', closed.ledger_dir]);
@@ -220,7 +317,14 @@ test('close 与 close --abandon 之后指针消失，status 不再列出该 ledg
     assert.equal(closeResult.pointer.removed, true);
     assert.equal(existsSync(closed.pointer.path), false);
 
-    const abandonResult = ledgerJson(fixture.repo, ['close', '--ledger', abandoned.ledger_dir, '--abandon', '--reason', '需求取消']);
+    const abandonResult = ledgerJson(fixture.repo, [
+      'close',
+      '--ledger',
+      abandoned.ledger_dir,
+      '--abandon',
+      '--reason',
+      '需求取消',
+    ]);
     assert.equal(abandonResult.lifecycle.state, 'abandoned');
     assert.equal(abandonResult.pointer.removed, true);
     assert.equal(existsSync(abandoned.pointer.path), false);
@@ -232,7 +336,9 @@ test('close 与 close --abandon 之后指针消失，status 不再列出该 ledg
     assert.deepEqual(readdirSync(fixture.pointerDir), []);
     const text = node(fixture.repo, [CLI, 'status']);
     assert.ok(text.stdout.includes('未发现 ledger。'), text.stdout);
-  } finally { fixture.cleanup(); }
+  } finally {
+    fixture.cleanup();
+  }
 });
 
 test("environment.repository 为 'none' 时不写指针，init 输出说明原因", () => {
@@ -243,7 +349,10 @@ test("environment.repository 为 'none' 时不写指针，init 输出说明原�
     assert.equal(initialized.pointer.path, null);
     assert.match(initialized.pointer.reason, /contract\.environment\.repository 当前值 "none"/u);
     assert.match(initialized.pointer.reason, /--ledger/u);
-    assert.ok(initialized.warnings.some((item) => item.includes('仓级指针未写入')), JSON.stringify(initialized.warnings));
+    assert.ok(
+      initialized.warnings.some((item) => item.includes('仓级指针未写入')),
+      JSON.stringify(initialized.warnings),
+    );
     assert.equal(existsSync(fixture.pointerDir), false);
     assert.deepEqual(statusJson(fixture.repo).ledgers, []);
 
@@ -252,7 +361,9 @@ test("environment.repository 为 'none' 时不写指针，init 输出说明原�
     assert.equal(missing.pointer.written, false);
     assert.match(missing.pointer.reason, /路径不存在/u);
     assert.equal(existsSync(join(missing.ledger_dir, 'events.ndjson')), true, '指针跳过不能影响 ledger 本身');
-  } finally { fixture.cleanup(); }
+  } finally {
+    fixture.cleanup();
+  }
 });
 
 test('同名 ledger 换 state root 重建时指针被覆盖，init 明确说明旧 ledger 从此要手传 --ledger', () => {
@@ -263,14 +374,22 @@ test('同名 ledger 换 state root 重建时指针被覆盖，init 明确说明�
     const second = initLedger(fixture, 'same-id', { stateRoot: join(fixture.stateRoot, 'second') });
     assert.equal(second.pointer.written, true);
     assert.equal(second.pointer.replaced, first.state_root);
-    assert.ok(second.warnings.some((item) => item.includes(first.state_root) && item.includes('手传 --ledger')), JSON.stringify(second.warnings));
+    assert.ok(
+      second.warnings.some((item) => item.includes(first.state_root) && item.includes('手传 --ledger')),
+      JSON.stringify(second.warnings),
+    );
 
     // 指针按 ledger_id 索引，只剩一份，指向新的 state root；旧 ledger 本身没有被动过。
     assert.deepEqual(readdirSync(fixture.pointerDir), ['same-id.json']);
     const report = statusJson(fixture.repo);
-    assert.deepEqual(report.ledgers.map((entry) => entry.ledger_dir), [second.ledger_dir]);
+    assert.deepEqual(
+      report.ledgers.map((entry) => entry.ledger_dir),
+      [second.ledger_dir],
+    );
     assert.equal(existsSync(join(first.ledger_dir, 'events.ndjson')), true);
-  } finally { fixture.cleanup(); }
+  } finally {
+    fixture.cleanup();
+  }
 });
 
 test('同时存在多个未终态 ledger 时全部列出，不做猜测', () => {
@@ -278,9 +397,14 @@ test('同时存在多个未终态 ledger 时全部列出，不做猜测', () => 
   try {
     for (const id of ['one', 'three', 'two']) initLedger(fixture, id);
     const report = statusJson(fixture.repo);
-    assert.deepEqual(report.ledgers.map((entry) => entry.ledger_id), ['one', 'three', 'two']);
+    assert.deepEqual(
+      report.ledgers.map((entry) => entry.ledger_id),
+      ['one', 'three', 'two'],
+    );
     for (const entry of report.ledgers) assert.ok(entry.next_commands.length > 0, entry.ledger_id);
-  } finally { fixture.cleanup(); }
+  } finally {
+    fixture.cleanup();
+  }
 });
 
 test('悬空与终态指针被 doctor --repository 报告、由 reclaim-pointers 显式回收；drift 未终态的指针保留并在 status 单独成组', () => {
@@ -294,9 +418,29 @@ test('悬空与终态指针被 doctor --repository 报告、由 reclaim-pointers
     rmSync(dangling.state_root, { recursive: true, force: true });
     driftLedger(drifted.ledger_dir);
     // 终态 ledger 的指针留在原地：模拟 close 时删除失败后残留的那一份。
-    const terminalClose = ledgerJson(fixture.repo, ['close', '--ledger', terminal.ledger_dir, '--abandon', '--reason', '升级后不再继续']);
+    const terminalClose = ledgerJson(fixture.repo, [
+      'close',
+      '--ledger',
+      terminal.ledger_dir,
+      '--abandon',
+      '--reason',
+      '升级后不再继续',
+    ]);
     assert.equal(terminalClose.pointer.removed, true);
-    writeFileSync(terminal.pointer.path, `${JSON.stringify({ schema_version: 1, ledger_id: 'terminal', state_root: terminal.state_root, contract_digest: terminal.contract.contract_digest, created_at: new Date().toISOString() }, null, 2)}\n`);
+    writeFileSync(
+      terminal.pointer.path,
+      `${JSON.stringify(
+        {
+          schema_version: 1,
+          ledger_id: 'terminal',
+          state_root: terminal.state_root,
+          contract_digest: terminal.contract.contract_digest,
+          created_at: new Date().toISOString()
+        },
+        null,
+        2
+      )}\n`,
+    );
 
     const doctor = ledgerJson(fixture.repo, ['doctor', '--repository', fixture.repo]);
     assert.equal(doctor.mode, 'repository');
@@ -314,18 +458,35 @@ test('悬空与终态指针被 doctor --repository 报告、由 reclaim-pointers
     assert.match(doctor.remediation, /reclaim-pointers --repository/u);
 
     // doctor 是只读的：报告之后指针一个都不能少。
-    assert.deepEqual(readdirSync(fixture.pointerDir).sort(), ['dangling.json', 'drifted.json', 'healthy.json', 'terminal.json']);
+    assert.deepEqual(readdirSync(fixture.pointerDir).sort(), [
+      'dangling.json',
+      'drifted.json',
+      'healthy.json',
+      'terminal.json',
+    ]);
 
     const report = statusJson(fixture.repo);
-    assert.deepEqual(report.ledgers.map((entry) => entry.ledger_id), ['healthy']);
-    assert.deepEqual(report.drifted_ledgers.map((entry) => entry.ledger_id), ['drifted']);
+    assert.deepEqual(
+      report.ledgers.map((entry) => entry.ledger_id),
+      ['healthy'],
+    );
+    assert.deepEqual(
+      report.drifted_ledgers.map((entry) => entry.ledger_id),
+      ['drifted'],
+    );
     assert.match(report.drifted_ledgers[0].skill_drift_remediation, /close --abandon --reason/u);
     // drift 的 ledger 只给放弃与 re-contract，不给续跑命令。
     assert.equal(report.drifted_ledgers[0].next_commands.length, 2);
     assert.match(report.drifted_ledgers[0].next_commands[0], /close --ledger .* --abandon --reason <text>/u);
     assert.match(report.drifted_ledgers[0].next_commands[1], /re-contract/u);
-    assert.deepEqual(report.dangling_pointers.map((item) => item.ledger_id), ['dangling']);
-    assert.deepEqual(report.terminal_pointers.map((item) => item.ledger_id), ['terminal']);
+    assert.deepEqual(
+      report.dangling_pointers.map((item) => item.ledger_id),
+      ['dangling'],
+    );
+    assert.deepEqual(
+      report.terminal_pointers.map((item) => item.ledger_id),
+      ['terminal'],
+    );
 
     const reclaimed = ledgerJson(fixture.repo, ['reclaim-pointers', '--repository', fixture.repo]);
     assert.deepEqual(reclaimed.reclaimed.map((item) => item.ledger_id).sort(), ['dangling', 'terminal']);
@@ -333,7 +494,9 @@ test('悬空与终态指针被 doctor --repository 报告、由 reclaim-pointers
     assert.deepEqual(reclaimed.retained.map((item) => item.ledger_id).sort(), ['drifted', 'healthy']);
     assert.deepEqual(readdirSync(fixture.pointerDir).sort(), ['drifted.json', 'healthy.json']);
     assert.equal(ledgerJson(fixture.repo, ['doctor', '--repository', fixture.repo]).healthy, true);
-  } finally { fixture.cleanup(); }
+  } finally {
+    fixture.cleanup();
+  }
 });
 
 test('doctor 的两个档位互斥，缺档位时 fail closed', () => {
@@ -341,7 +504,14 @@ test('doctor 的两个档位互斥，缺档位时 fail closed', () => {
   try {
     const initialized = initLedger(fixture, 'modes');
     assert.equal(ledgerJson(fixture.repo, ['doctor', '--ledger', initialized.ledger_dir]).mode, 'ledger');
-    const both = node(fixture.repo, [LEDGER, 'doctor', '--ledger', initialized.ledger_dir, '--repository', fixture.repo]);
+    const both = node(fixture.repo, [
+      LEDGER,
+      'doctor',
+      '--ledger',
+      initialized.ledger_dir,
+      '--repository',
+      fixture.repo,
+    ]);
     assert.equal(both.status, 2);
     assert.match(both.stderr, /--ledger 与 --repository 互斥/u);
     const neither = node(fixture.repo, [LEDGER, 'doctor']);
@@ -350,7 +520,9 @@ test('doctor 的两个档位互斥，缺档位时 fail closed', () => {
     const notRepo = node(fixture.repo, [LEDGER, 'doctor', '--repository', join(fixture.sandbox, 'state')]);
     assert.equal(notRepo.status, 2);
     assert.match(notRepo.stderr, /无法解析 git common dir/u);
-  } finally { fixture.cleanup(); }
+  } finally {
+    fixture.cleanup();
+  }
 });
 
 test('worktree spawn --ledger 写进 record，非法 id 被拒，该 worktree 里 status 收窄到对应 ledger', () => {
@@ -359,13 +531,43 @@ test('worktree spawn --ledger 写进 record，非法 id 被拒，该 worktree �
     initLedger(fixture, 'wide');
     const bound = initLedger(fixture, 'bound');
 
-    const rejected = node(fixture.repo, [MANAGER, 'spawn', 'bad-binding', '--agent', 'codex', '--agent-id', 'thread-1', '--purpose', '非法 ledger id', '--codegraph', 'off', '--ledger', 'not a ledger id']);
+    const rejected = node(fixture.repo, [
+      MANAGER,
+      'spawn',
+      'bad-binding',
+      '--agent',
+      'codex',
+      '--agent-id',
+      'thread-1',
+      '--purpose',
+      '非法 ledger id',
+      '--codegraph',
+      'off',
+      '--ledger',
+      'not a ledger id',
+    ]);
     assert.notEqual(rejected.status, 0);
     const refusal = `${rejected.stdout}${rejected.stderr}`;
     assert.match(refusal, /--ledger 无效/u);
     assert.ok(refusal.includes(LEDGER_ID_PATTERN.source), `拒绝文案要写明格式要求：${refusal}`);
 
-    const spawned = node(fixture.repo, [MANAGER, 'spawn', 'bound-task', '--agent', 'codex', '--agent-id', 'thread-1', '--purpose', '绑定 ledger 的实现树', '--codegraph', 'off', '--root', join(fixture.sandbox, 'worktrees'), '--ledger', 'bound']);
+    const spawned = node(fixture.repo, [
+      MANAGER,
+      'spawn',
+      'bound-task',
+      '--agent',
+      'codex',
+      '--agent-id',
+      'thread-1',
+      '--purpose',
+      '绑定 ledger 的实现树',
+      '--codegraph',
+      'off',
+      '--root',
+      join(fixture.sandbox, 'worktrees'),
+      '--ledger',
+      'bound',
+    ]);
     assert.equal(spawned.status, 0, spawned.stderr || spawned.stdout);
 
     const recordsDir = join(fixture.repo, '.git', 'worktree-trace', 'v1', 'records');
@@ -375,20 +577,47 @@ test('worktree spawn --ledger 写进 record，非法 id 被拒，该 worktree �
     const worktreePath = records[0].path;
 
     // 仓级视角仍然两个都列；受管 worktree 里用 record 的 ledger 字段收窄到一个。
-    assert.deepEqual(statusJson(fixture.repo).ledgers.map((entry) => entry.ledger_id).sort(), ['bound', 'wide']);
+    assert.deepEqual(
+      statusJson(fixture.repo)
+        .ledgers.map((entry) => entry.ledger_id)
+        .sort(),
+      ['bound', 'wide'],
+    );
     const narrowed = statusJson(worktreePath);
     assert.equal(narrowed.scope, 'worktree');
     assert.equal(narrowed.worktree_binding.ledger_id, 'bound');
-    assert.deepEqual(narrowed.ledgers.map((entry) => entry.ledger_id), ['bound']);
+    assert.deepEqual(
+      narrowed.ledgers.map((entry) => entry.ledger_id),
+      ['bound'],
+    );
     assert.equal(narrowed.ledgers[0].ledger_dir, bound.ledger_dir);
-    assert.deepEqual(narrowed.ledgers[0].worktrees.map((item) => item.path), [worktreePath]);
+    assert.deepEqual(
+      narrowed.ledgers[0].worktrees.map((item) => item.path),
+      [worktreePath],
+    );
 
     // 不传 --ledger 的树保持 null，老 record 的缺省语义不变。
-    const unbound = node(fixture.repo, [MANAGER, 'spawn', 'unbound-task', '--agent', 'codex', '--agent-id', 'thread-2', '--purpose', '不绑定 ledger', '--codegraph', 'off', '--root', join(fixture.sandbox, 'worktrees')]);
+    const unbound = node(fixture.repo, [
+      MANAGER,
+      'spawn',
+      'unbound-task',
+      '--agent',
+      'codex',
+      '--agent-id',
+      'thread-2',
+      '--purpose',
+      '不绑定 ledger',
+      '--codegraph',
+      'off',
+      '--root',
+      join(fixture.sandbox, 'worktrees'),
+    ]);
     assert.equal(unbound.status, 0, unbound.stderr || unbound.stdout);
     const all = readdirSync(recordsDir).map((name) => JSON.parse(readFileSync(join(recordsDir, name), 'utf8')));
     assert.deepEqual(all.map((record) => record.ledger).sort(), ['bound', null].sort());
-  } finally { fixture.cleanup(); }
+  } finally {
+    fixture.cleanup();
+  }
 });
 
 test('ledger-pointer schema 接受合法样例、拒绝多余字段与非法取值，运行时与 schema 判据一致', () => {
@@ -404,7 +633,10 @@ test('ledger-pointer schema 接受合法样例、拒绝多余字段与非法取�
 
   const extra = { ...sample, note: '夹带私货' };
   assert.equal(POINTER_SCHEMA.additionalProperties, false);
-  assert.ok(collectJsonSchemaErrors(extra, POINTER_SCHEMA).some((message) => message.includes('note')), '多余字段必须被 schema 拒绝');
+  assert.ok(
+    collectJsonSchemaErrors(extra, POINTER_SCHEMA).some((message) => message.includes('note')),
+    '多余字段必须被 schema 拒绝',
+  );
   assert.throws(() => validateLedgerPointer(extra), /含未知字段：note/u);
 
   for (const [field, value, pattern] of [
@@ -437,7 +669,9 @@ test('agentkit status 在非 git 目录与未知选项上 fail closed，提示�
     assert.equal(unknown.status, 2);
     assert.equal(unknown.stdout, '');
     assert.match(unknown.stderr, /未知选项「--repo」/u);
-  } finally { rmSync(sandbox, { recursive: true, force: true }); }
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
 });
 
 test('core 的指针原语在非 git 目录上给出带路径的拒绝理由，不抛异常', () => {
@@ -451,5 +685,7 @@ test('core 的指针原语在非 git 目录上给出带路径的拒绝理由，�
     assert.match(absent.reason, /路径不存在/u);
     assert.deepEqual(listLedgerPointers(join(sandbox, 'missing-common-dir')), []);
     assert.equal(pointerDirectory('/x/.git'), join('/x/.git', 'agentkit', 'ledgers'));
-  } finally { rmSync(sandbox, { recursive: true, force: true }); }
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
 });

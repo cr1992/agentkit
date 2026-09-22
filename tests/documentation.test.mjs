@@ -17,11 +17,16 @@ function markdownFiles(root) {
 }
 
 test('操作文档只示范 agentkit 命令，不重新引入 Skill 兼容脚本', () => {
-  const files = ['orchestrate', 'worktree', 'verify', 'loop']
-    .flatMap((domain) => markdownFiles(join(ROOT, 'docs', domain)));
+  const files = ['orchestrate', 'worktree', 'verify', 'loop'].flatMap((domain) =>
+    markdownFiles(join(ROOT, 'docs', domain)),
+  );
   for (const path of files) {
     const text = readFileSync(path, 'utf8');
-    assert.doesNotMatch(text, /node\s+(?:["']?\$SKILL_DIR\/scripts\/|["']?<skill-dir(?:ectory)?>\/scripts\/|scripts\/)/u, path);
+    assert.doesNotMatch(
+      text,
+      /node\s+(?:["']?\$SKILL_DIR\/scripts\/|["']?<skill-dir(?:ectory)?>\/scripts\/|scripts\/)/u,
+      path,
+    );
     assert.doesNotMatch(text, /Node\.js 18\+/u, path);
   }
 });

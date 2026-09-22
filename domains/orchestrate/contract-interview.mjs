@@ -35,7 +35,8 @@ const WRITE_REQUIRED = [...READ_ONLY_REQUIRED, 'scope.exclude', 'stop_conditions
 
 /** 字段语义：随题一起发给用户，让选项可被判断。不含任何可照抄的合规值。 */
 const FIELD_SEMANTICS = {
-  permissions: 'permissions.mode 决定本次任务能不能写仓库。read_only 只允许读与报告；write 允许改动，并会追加边界与刹车两道必问题。',
+  permissions:
+    'permissions.mode 决定本次任务能不能写仓库。read_only 只允许读与报告；write 允许改动，并会追加边界与刹车两道必问题。',
   objective: 'objective 是冻结产物要达成的目标，一句话说清"做完是什么样"，不是过程描述。',
   acceptance: 'acceptance[].requirement 是可观察的验收要求：第三方只看仓库与命令输出就能判定通过或不通过。',
   'scope.include': 'scope.include 是本次任务允许触碰的面，按路径或模块写。',
@@ -122,7 +123,9 @@ export function requiredFields(contract) {
 function selectedText(answer) {
   if (answer?.selected === 'custom') return typeof answer.custom_value === 'string' ? answer.custom_value : null;
   const options = Array.isArray(answer?.options) ? answer.options : [];
-  return Number.isSafeInteger(answer?.selected) && answer.selected >= 0 && answer.selected < options.length ? options[answer.selected] : null;
+  return Number.isSafeInteger(answer?.selected) && answer.selected >= 0 && answer.selected < options.length
+    ? options[answer.selected]
+    : null;
 }
 
 /** 三个可 deferred 字段都是列表字段，assumption 整段落在这里。 */
@@ -151,10 +154,14 @@ function fieldHolds(contract, field, text) {
   if (text === null) return false;
   if (field === 'permissions') return contract?.permissions?.mode === text;
   if (field === 'objective') return contract?.objective === text;
-  if (field === 'acceptance') return (Array.isArray(contract?.acceptance) ? contract.acceptance : []).some((item) => item?.requirement === text);
-  if (field === 'scope.include') return (Array.isArray(contract?.scope?.include) ? contract.scope.include : []).includes(text);
-  if (field === 'scope.exclude') return (Array.isArray(contract?.scope?.exclude) ? contract.scope.exclude : []).includes(text);
-  if (field === 'stop_conditions') return (Array.isArray(contract?.stop_conditions) ? contract.stop_conditions : []).includes(text);
+  if (field === 'acceptance')
+    return (Array.isArray(contract?.acceptance) ? contract.acceptance : []).some((item) => item?.requirement === text);
+  if (field === 'scope.include')
+    return (Array.isArray(contract?.scope?.include) ? contract.scope.include : []).includes(text);
+  if (field === 'scope.exclude')
+    return (Array.isArray(contract?.scope?.exclude) ? contract.scope.exclude : []).includes(text);
+  if (field === 'stop_conditions')
+    return (Array.isArray(contract?.stop_conditions) ? contract.stop_conditions : []).includes(text);
   return false;
 }
 
@@ -177,8 +184,11 @@ export function completion(contract) {
   }
 
   const answeredFields = new Set();
-  for (const answer of state.answers) if (answer?.source === 'user' && typeof answer?.field === 'string') answeredFields.add(answer.field);
-  for (const assumption of state.assumptions) if (typeof assumption?.field === 'string' && DEFERRABLE_FIELDS.has(assumption.field)) answeredFields.add(assumption.field);
+  for (const answer of state.answers)
+    if (answer?.source === 'user' && typeof answer?.field === 'string') answeredFields.add(answer.field);
+  for (const assumption of state.assumptions)
+    if (typeof assumption?.field === 'string' && DEFERRABLE_FIELDS.has(assumption.field))
+      answeredFields.add(assumption.field);
   for (const field of requiredFields(contract)) {
     if (!answeredFields.has(field)) {
       const detail = DEFERRABLE_FIELDS.has(field)
@@ -191,30 +201,54 @@ export function completion(contract) {
   state.assumptions.forEach((assumption, index) => {
     const field = assumption?.field;
     if (typeof field !== 'string' || !DEFERRABLE_FIELDS.has(field)) {
-      missing.push({ criterion: 'assumption_invalid', field: field ?? null, detail: `extensions.interview.assumptions[${index}].field = ${quote(field ?? null)}：该字段必须由用户在给出的选项中作答，不接受 assumption` });
+      missing.push({
+        criterion: 'assumption_invalid',
+        field: field ?? null,
+        detail: `extensions.interview.assumptions[${index}].field = ${quote(field ?? null)}：该字段必须由用户在给出的选项中作答，不接受 assumption`,
+      });
       return;
     }
     if (assumption?.reason !== 'user_deferred') {
-      missing.push({ criterion: 'assumption_invalid', field, detail: `extensions.interview.assumptions[${index}].reason = ${quote(assumption?.reason ?? null)}：只接受 "user_deferred"` });
+      missing.push({
+        criterion: 'assumption_invalid',
+        field,
+        detail: `extensions.interview.assumptions[${index}].reason = ${quote(assumption?.reason ?? null)}：只接受 "user_deferred"`,
+      });
       return;
     }
     if (!assumptionHolds(contract, field, assumption.assumed)) {
-      missing.push({ criterion: 'assumption_field_mismatch', field, detail: `extensions.interview.assumptions[${index}]：假定内容 ${quote(assumption.assumed ?? null)} 与 ${field} 的当前值不一致，记录与契约已经脱钩` });
+      missing.push({
+        criterion: 'assumption_field_mismatch',
+        field,
+        detail: `extensions.interview.assumptions[${index}]：假定内容 ${quote(assumption.assumed ?? null)} 与 ${field} 的当前值不一致，记录与契约已经脱钩`,
+      });
     }
   });
 
   state.answers.forEach((answer, index) => {
     if (answer?.source !== 'user' || typeof answer?.field !== 'string') {
-      missing.push({ criterion: 'answer_invalid', field: answer?.field ?? null, detail: `extensions.interview.answers[${index}]：source 必须是 "user"，field 必须是字段路径` });
+      missing.push({
+        criterion: 'answer_invalid',
+        field: answer?.field ?? null,
+        detail: `extensions.interview.answers[${index}]：source 必须是 "user"，field 必须是字段路径`,
+      });
       return;
     }
     const text = selectedText(answer);
     if (text === null) {
-      missing.push({ criterion: 'answer_invalid', field: answer.field, detail: `extensions.interview.answers[${index}].selected 无法解析为选项内容` });
+      missing.push({
+        criterion: 'answer_invalid',
+        field: answer.field,
+        detail: `extensions.interview.answers[${index}].selected 无法解析为选项内容`,
+      });
       return;
     }
     if (!fieldHolds(contract, answer.field, text)) {
-      missing.push({ criterion: 'answer_field_mismatch', field: answer.field, detail: `extensions.interview.answers[${index}]：选中内容 ${quote(text)} 与 ${answer.field} 的当前值不一致，记录与契约已经脱钩` });
+      missing.push({
+        criterion: 'answer_field_mismatch',
+        field: answer.field,
+        detail: `extensions.interview.answers[${index}]：选中内容 ${quote(text)} 与 ${answer.field} 的当前值不一致，记录与契约已经脱钩`,
+      });
     }
   });
 
@@ -230,15 +264,24 @@ export function outstandingFields(contract) {
   const state = readInterviewState(contract);
   const report = contractSubstance(contract);
   const answered = new Set();
-  for (const answer of state.answers) if (answer?.source === 'user' && typeof answer?.field === 'string') answered.add(answer.field);
-  for (const assumption of state.assumptions) if (typeof assumption?.field === 'string' && DEFERRABLE_FIELDS.has(assumption.field)) answered.add(assumption.field);
+  for (const answer of state.answers)
+    if (answer?.source === 'user' && typeof answer?.field === 'string') answered.add(answer.field);
+  for (const assumption of state.assumptions)
+    if (typeof assumption?.field === 'string' && DEFERRABLE_FIELDS.has(assumption.field))
+      answered.add(assumption.field);
 
   const pending = new Set(requiredFields(contract).filter((field) => !answered.has(field)));
   // error 指向的字段一律重问：填了一轮文字不等于问完了，占位还在就说明这道题没答。
-  for (const finding of report.errors) { const field = routeFinding(finding); if (field) pending.add(field); }
+  for (const finding of report.errors) {
+    const field = routeFinding(finding);
+    if (field) pending.add(field);
+  }
   // warning 指向的字段若已有作答记录就不再问：用户可以明确回答"没有要排除的"，
   // 这时"write 模式 exclude 为空"的 warning 仍在，但该字段已经问过了。
-  for (const finding of report.warnings) { const field = routeFinding(finding); if (field && !answered.has(field)) pending.add(field); }
+  for (const finding of report.warnings) {
+    const field = routeFinding(finding);
+    if (field && !answered.has(field)) pending.add(field);
+  }
   return FIELD_ORDER.filter((field) => pending.has(field));
 }
 
@@ -282,15 +325,20 @@ export function ask(contract) {
 /** 选项校验：只看形状，不对自然语言做判定。 */
 function validateOptions(entry, index) {
   const options = entry?.options;
-  if (!Array.isArray(options)) throw new InterviewError(`answers[${index}].options 缺失：每题必须带上当时给出的选项原文`);
+  if (!Array.isArray(options))
+    throw new InterviewError(`answers[${index}].options 缺失：每题必须带上当时给出的选项原文`);
   if (options.length < MIN_OPTIONS || options.length > MAX_OPTIONS) {
-    throw new InterviewError(`answers[${index}].options 有 ${options.length} 项：必须是 ${MIN_OPTIONS}–${MAX_OPTIONS} 个选项，0 或 1 个是开放式问题`);
+    throw new InterviewError(
+      `answers[${index}].options 有 ${options.length} 项：必须是 ${MIN_OPTIONS}–${MAX_OPTIONS} 个选项，0 或 1 个是开放式问题`,
+    );
   }
   const cleaned = options.map((option, position) => {
-    if (typeof option !== 'string' || !option.trim()) throw new InterviewError(`answers[${index}].options[${position}] 为空：选项必须是非空字符串`);
+    if (typeof option !== 'string' || !option.trim())
+      throw new InterviewError(`answers[${index}].options[${position}] 为空：选项必须是非空字符串`);
     return option.trim();
   });
-  if (new Set(cleaned).size !== cleaned.length) throw new InterviewError(`answers[${index}].options 存在重复项：选项必须互不相同，否则这道题没有在做选择`);
+  if (new Set(cleaned).size !== cleaned.length)
+    throw new InterviewError(`answers[${index}].options 存在重复项：选项必须互不相同，否则这道题没有在做选择`);
   return options;
 }
 
@@ -302,10 +350,13 @@ function normalizeAssumed(entry, index) {
   const raw = entry?.assumed;
   const list = typeof raw === 'string' ? [raw] : raw;
   if (!Array.isArray(list)) {
-    throw new InterviewError(`answers[${index}].assumed = ${quote(raw ?? null)}：deferred 必须写明替用户假定进该字段的内容，字符串数组；空数组表示"没有"`);
+    throw new InterviewError(
+      `answers[${index}].assumed = ${quote(raw ?? null)}：deferred 必须写明替用户假定进该字段的内容，字符串数组；空数组表示"没有"`,
+    );
   }
   list.forEach((item, position) => {
-    if (typeof item !== 'string' || !item.trim()) throw new InterviewError(`answers[${index}].assumed[${position}] 为空：假定内容必须是非空字符串`);
+    if (typeof item !== 'string' || !item.trim())
+      throw new InterviewError(`answers[${index}].assumed[${position}] 为空：假定内容必须是非空字符串`);
   });
   if (new Set(list).size !== list.length) throw new InterviewError(`answers[${index}].assumed 存在重复项`);
   return [...list];
@@ -313,15 +364,23 @@ function normalizeAssumed(entry, index) {
 
 /** deferred 整段替换字段：assumption 与字段是一一对应的，追加会让完成判据第 3 条无从判定。 */
 function applyDeferral(contract, field, assumed) {
-  if (field === 'scope.include') { contract.scope.include = [...assumed]; return; }
-  if (field === 'scope.exclude') { contract.scope.exclude = [...assumed]; return; }
+  if (field === 'scope.include') {
+    contract.scope.include = [...assumed];
+    return;
+  }
+  if (field === 'scope.exclude') {
+    contract.scope.exclude = [...assumed];
+    return;
+  }
   contract.stop_conditions = [...assumed];
 }
 
 /** permissions 是唯一取值受限的字段：它决定后续必问题清单，不能是自由文本。 */
 function applyPermissions(contract, text, index) {
   if (!['read_only', 'write'].includes(text)) {
-    throw new InterviewError(`answers[${index}] 选中 ${quote(text)}：permissions 的选项内容必须恰好是 permissions.mode 的取值之一，当前值为 ${quote(contract?.permissions?.mode ?? null)}`);
+    throw new InterviewError(
+      `answers[${index}] 选中 ${quote(text)}：permissions 的选项内容必须恰好是 permissions.mode 的取值之一，当前值为 ${quote(contract?.permissions?.mode ?? null)}`,
+    );
   }
   contract.permissions.mode = text;
   if (text === 'read_only') contract.permissions.writable_paths = [];
@@ -330,12 +389,20 @@ function applyPermissions(contract, text, index) {
 /** 把选中的内容写进对应字段。列表字段追加，已存在则不重复写。 */
 function applyToField(contract, field, text, index) {
   if (field === 'permissions') return applyPermissions(contract, text, index);
-  if (field === 'objective') { contract.objective = text; return; }
+  if (field === 'objective') {
+    contract.objective = text;
+    return;
+  }
   if (field === 'acceptance') {
     // 占位条目由 core/contract-substance.mjs 的判据识别，这里不自己比对字面量：
     // 占位文本改了而这里没跟上，就会变成"在占位条目旁边再加一条"，实质性判据依旧报错。
-    const placeholder = contract.acceptance.findIndex((item) => contractSubstance({ acceptance: [item] }).errors.length > 0);
-    if (placeholder >= 0) { contract.acceptance[placeholder].requirement = text; return; }
+    const placeholder = contract.acceptance.findIndex(
+      (item) => contractSubstance({ acceptance: [item] }).errors.length > 0,
+    );
+    if (placeholder >= 0) {
+      contract.acceptance[placeholder].requirement = text;
+      return;
+    }
     if (contract.acceptance.some((item) => item?.requirement === text)) return;
     const ids = new Set(contract.acceptance.map((item) => item?.contract_item_id));
     let ordinal = contract.acceptance.length + 1;
@@ -345,14 +412,24 @@ function applyToField(contract, field, text, index) {
   }
   if (field === 'scope.include') {
     // 占位条目在 core/contract-substance.mjs 的判据里，这里靠它识别，不自己比对字面量。
-    const placeholders = contract.scope.include.filter((item) => contractSubstance({ scope: { include: [item] } }).errors.length > 0);
+    const placeholders = contract.scope.include.filter(
+      (item) => contractSubstance({ scope: { include: [item] } }).errors.length > 0,
+    );
     contract.scope.include = contract.scope.include.filter((item) => !placeholders.includes(item));
     if (!contract.scope.include.includes(text)) contract.scope.include.push(text);
     return;
   }
-  if (field === 'scope.exclude') { if (!contract.scope.exclude.includes(text)) contract.scope.exclude.push(text); return; }
-  if (field === 'stop_conditions') { if (!contract.stop_conditions.includes(text)) contract.stop_conditions.push(text); return; }
-  throw new InterviewError(`answers[${index}].field = ${quote(field)}：不是本命令认识的字段路径，可选：${FIELD_ORDER.join(' / ')}`);
+  if (field === 'scope.exclude') {
+    if (!contract.scope.exclude.includes(text)) contract.scope.exclude.push(text);
+    return;
+  }
+  if (field === 'stop_conditions') {
+    if (!contract.stop_conditions.includes(text)) contract.stop_conditions.push(text);
+    return;
+  }
+  throw new InterviewError(
+    `answers[${index}].field = ${quote(field)}：不是本命令认识的字段路径，可选：${FIELD_ORDER.join(' / ')}`,
+  );
 }
 
 /**
@@ -366,8 +443,10 @@ export function answer(draft, answers) {
   if (state.round >= MAX_ROUNDS) {
     throw new InterviewError(renderExhausted(completion(contract), state.round));
   }
-  if (!Array.isArray(answers) || !answers.length) throw new InterviewError('本轮作答为空：--answers 必须是 answers 数组或 { answers: [...] }');
-  if (answers.length > MAX_QUESTIONS_PER_ROUND) throw new InterviewError(`本轮作答有 ${answers.length} 条：一轮最多 ${MAX_QUESTIONS_PER_ROUND} 题`);
+  if (!Array.isArray(answers) || !answers.length)
+    throw new InterviewError('本轮作答为空：--answers 必须是 answers 数组或 { answers: [...] }');
+  if (answers.length > MAX_QUESTIONS_PER_ROUND)
+    throw new InterviewError(`本轮作答有 ${answers.length} 条：一轮最多 ${MAX_QUESTIONS_PER_ROUND} 题`);
 
   const nextAnswers = [...state.answers.map((item) => structuredClone(item))];
   const nextAssumptions = [...state.assumptions.map((item) => structuredClone(item))];
@@ -376,15 +455,20 @@ export function answer(draft, answers) {
   answers.forEach((entry, index) => {
     const field = entry?.field;
     if (typeof field !== 'string' || !FIELD_ORDER.includes(field)) {
-      throw new InterviewError(`answers[${index}].field = ${quote(field ?? null)}：不是本命令认识的字段路径，可选：${FIELD_ORDER.join(' / ')}`);
+      throw new InterviewError(
+        `answers[${index}].field = ${quote(field ?? null)}：不是本命令认识的字段路径，可选：${FIELD_ORDER.join(' / ')}`,
+      );
     }
-    if (seen.has(field)) throw new InterviewError(`answers[${index}].field = ${quote(field)}：同一轮里重复作答同一个字段`);
+    if (seen.has(field))
+      throw new InterviewError(`answers[${index}].field = ${quote(field)}：同一轮里重复作答同一个字段`);
     seen.add(field);
     validateOptions(entry, index);
 
     if (entry.deferred === true) {
       if (!DEFERRABLE_FIELDS.has(field)) {
-        throw new InterviewError(`answers[${index}].field = ${quote(field)}：该字段必须由用户在给出的选项中作答，不接受 deferred；可以 deferred 的只有 ${[...DEFERRABLE_FIELDS].join(' / ')}`);
+        throw new InterviewError(
+          `answers[${index}].field = ${quote(field)}：该字段必须由用户在给出的选项中作答，不接受 deferred；可以 deferred 的只有 ${[...DEFERRABLE_FIELDS].join(' / ')}`,
+        );
       }
       // 不替用户选，但也不让契约自相矛盾：assumed 原样写进字段。
       // 执行方读的是契约字段而不是 extensions，字段为空、extensions 里却写着"假定排除 X"，
@@ -393,29 +477,42 @@ export function answer(draft, answers) {
       applyDeferral(contract, field, assumed);
       const record = { field, assumed, reason: 'user_deferred' };
       const existing = nextAssumptions.findIndex((item) => item?.field === field);
-      if (existing >= 0) nextAssumptions[existing] = record; else nextAssumptions.push(record);
+      if (existing >= 0) nextAssumptions[existing] = record;
+      else nextAssumptions.push(record);
       // 整段替换会冲掉此前作答写进该字段的值，留着旧记录会让完成判据第 3 条必然不成立。
-      for (let position = nextAnswers.length - 1; position >= 0; position -= 1) if (nextAnswers[position]?.field === field) nextAnswers.splice(position, 1);
+      for (let position = nextAnswers.length - 1; position >= 0; position -= 1)
+        if (nextAnswers[position]?.field === field) nextAnswers.splice(position, 1);
       return;
     }
 
-    if (entry.source !== 'user') throw new InterviewError(`answers[${index}].source = ${quote(entry?.source ?? null)}：只接受 "user"；命令检查不了它的真伪，但不接受别的取值`);
+    if (entry.source !== 'user')
+      throw new InterviewError(
+        `answers[${index}].source = ${quote(entry?.source ?? null)}：只接受 "user"；命令检查不了它的真伪，但不接受别的取值`,
+      );
     const text = selectedText(entry);
     if (text === null) {
-      throw new InterviewError(`answers[${index}].selected = ${quote(entry?.selected ?? null)}：必须是 options 的下标，或 "custom" 配非空 custom_value`);
+      throw new InterviewError(
+        `answers[${index}].selected = ${quote(entry?.selected ?? null)}：必须是 options 的下标，或 "custom" 配非空 custom_value`,
+      );
     }
     applyToField(contract, field, text, index);
     const record = { field, options: entry.options.map((option) => option), selected: entry.selected, source: 'user' };
     if (entry.selected === 'custom') record.custom_value = text;
     // 单值字段再次作答替换旧记录：两条记录只有一条能与字段当前值一致，留着另一条只会让判据 3 永远不成立。
     const duplicate = SINGLE_VALUED.has(field) ? nextAnswers.findIndex((item) => item?.field === field) : -1;
-    if (duplicate >= 0) nextAnswers[duplicate] = record; else nextAnswers.push(record);
+    if (duplicate >= 0) nextAnswers[duplicate] = record;
+    else nextAnswers.push(record);
     // 字段被真正作答后，之前的 deferral 不再成立。
     const deferred = nextAssumptions.findIndex((item) => item?.field === field);
     if (deferred >= 0) nextAssumptions.splice(deferred, 1);
   });
 
-  contract.extensions.interview = { schema_version: 1, round: state.round + 1, answers: nextAnswers, assumptions: nextAssumptions };
+  contract.extensions.interview = {
+    schema_version: 1,
+    round: state.round + 1,
+    answers: nextAnswers,
+    assumptions: nextAssumptions,
+  };
   const status = completion(contract);
   if (!status.complete && contract.extensions.interview.round >= MAX_ROUNDS) {
     throw new InterviewError(renderExhausted(status, contract.extensions.interview.round));
@@ -441,8 +538,10 @@ function renderExhausted(status, round) {
 export function assertFreezable(contract) {
   const status = completion(contract);
   if (status.complete) return status;
-  throw new InterviewError([
-    `interview 完成判据未满足（${status.missing.length} 项），不能冻结:`,
-    ...status.missing.map((item) => `- ${item.detail}`),
-  ].join('\n'));
+  throw new InterviewError(
+    [
+      `interview 完成判据未满足（${status.missing.length} 项），不能冻结:`,
+      ...status.missing.map((item) => `- ${item.detail}`),
+    ].join('\n'),
+  );
 }

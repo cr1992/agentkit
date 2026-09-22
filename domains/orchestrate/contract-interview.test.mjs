@@ -19,7 +19,11 @@ const run = (args) => spawnSync(process.execPath, [CLI, ...args], { cwd: ROOT, e
 
 function sandbox() {
   const dir = mkdtempSync(join(tmpdir(), 'contract-interview-'));
-  const write = (name, value) => { const path = join(dir, name); writeFileSync(path, JSON.stringify(value, null, 2)); return path; };
+  const write = (name, value) => {
+    const path = join(dir, name);
+    writeFileSync(path, JSON.stringify(value, null, 2));
+    return path;
+  };
   const read = (path) => JSON.parse(readFileSync(path, 'utf8'));
   return { dir, write, read, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
@@ -34,13 +38,28 @@ function answerRound(box, draft, answers, tag) {
 
 const FIRST_ROUND = [
   { field: 'permissions', options: ['read_only', 'write'], selected: 1, source: 'user' },
-  { field: 'objective', options: ['把 interview 状态机落到 contract 域', '只补一份说明文档'], selected: 0, source: 'user' },
-  { field: 'acceptance', options: ['npm test 全绿且新增用例逐条通过', '作者自己看过一遍'], selected: 0, source: 'user' },
+  {
+    field: 'objective',
+    options: ['把 interview 状态机落到 contract 域', '只补一份说明文档'],
+    selected: 0,
+    source: 'user',
+  },
+  {
+    field: 'acceptance',
+    options: ['npm test 全绿且新增用例逐条通过', '作者自己看过一遍'],
+    selected: 0,
+    source: 'user',
+  },
   { field: 'scope.include', options: ['domains/orchestrate/', 'bin/'], selected: 0, source: 'user' },
 ];
 const SECOND_ROUND = [
   { field: 'scope.exclude', options: ['schemas/ 与四个 SKILL.md', 'tests/'], selected: 0, source: 'user' },
-  { field: 'stop_conditions', options: ['需要改 schema 才能通过时停止上报', '改点别的继续往下做'], selected: 0, source: 'user' },
+  {
+    field: 'stop_conditions',
+    options: ['需要改 schema 才能通过时停止上报', '改点别的继续往下做'],
+    selected: 0,
+    source: 'user',
+  },
 ];
 
 test('从 scaffold 出发，两轮合规回填得到的契约通过 contract validate 与 ledger init', () => {
@@ -52,7 +71,10 @@ test('从 scaffold 出发，两轮合规回填得到的契约通过 contract val
     assert.equal(first.payload.round, 1);
     assert.equal(first.payload.complete, false);
     // 权限一答成 write，第二轮的题就换成了边界与刹车。
-    assert.deepEqual(first.payload.next.questions.map((item) => item.field), ['scope.exclude', 'stop_conditions']);
+    assert.deepEqual(
+      first.payload.next.questions.map((item) => item.field),
+      ['scope.exclude', 'stop_conditions'],
+    );
 
     const second = answerRound(box, first.payload.contract, SECOND_ROUND, 'r2');
     assert.equal(second.status, 0, second.stderr);
@@ -71,29 +93,45 @@ test('从 scaffold 出发，两轮合规回填得到的契约通过 contract val
 
     const frozenPath = box.write('frozen.json', frozen.contract);
     assert.equal(contractMain(['validate', '--input', frozenPath]).valid, true);
-    const ledger = ledgerMain(['init', '--contract', frozenPath, '--state-root', join(box.dir, 'ledger'), '--allow-repository-state']);
+    const ledger = ledgerMain([
+      'init',
+      '--contract',
+      frozenPath,
+      '--state-root',
+      join(box.dir, 'ledger'),
+      '--allow-repository-state',
+    ]);
     assert.match(ledger.ledger_id, /^[0-9a-f-]{36}$/u);
-  } finally { box.cleanup(); }
+  } finally {
+    box.cleanup();
+  }
 });
 
 test('write 权限下必问 scope.exclude 与 stop_conditions，read_only 下不问', () => {
   const box = sandbox();
   try {
     const scaffold = contractMain(['scaffold', '--workdir', box.dir]);
-    const readOnly = answerRound(box, scaffold, [
-      { field: 'permissions', options: ['read_only', 'write'], selected: 0, source: 'user' },
-      ...FIRST_ROUND.slice(1),
-    ], 'ro');
+    const readOnly = answerRound(
+      box,
+      scaffold,
+      [{ field: 'permissions', options: ['read_only', 'write'], selected: 0, source: 'user' }, ...FIRST_ROUND.slice(1)],
+      'ro',
+    );
     assert.equal(readOnly.status, 0, readOnly.stderr);
     assert.equal(readOnly.payload.complete, true);
     assert.deepEqual(outstandingFields(readOnly.payload.contract), []);
-    assert.deepEqual(readOnly.payload.contract.extensions.interview.answers.map((item) => item.field), ['permissions', 'objective', 'acceptance', 'scope.include']);
+    assert.deepEqual(
+      readOnly.payload.contract.extensions.interview.answers.map((item) => item.field),
+      ['permissions', 'objective', 'acceptance', 'scope.include'],
+    );
 
     const write = answerRound(box, scaffold, FIRST_ROUND, 'wr');
     assert.deepEqual(outstandingFields(write.payload.contract), ['scope.exclude', 'stop_conditions']);
     // permissions 最先问：不先定权限，写任务会一路走完却从没被问到边界和刹车。
     assert.equal(ask(scaffold).questions[0].field, 'permissions');
-  } finally { box.cleanup(); }
+  } finally {
+    box.cleanup();
+  }
 });
 
 test('只把 TODO 换成任意文字、没有作答记录：实质性判据通过，interview 不冻结并按字段路径列出缺失记录', () => {
@@ -115,23 +153,31 @@ test('只把 TODO 换成任意文字、没有作答记录：实质性判据通�
     const error = JSON.parse(freeze.stderr);
     assert.equal(error.error, 'interview_rejected');
     for (const field of ['permissions', 'objective', 'acceptance', 'scope.include']) {
-      assert.match(error.message, new RegExp(`${field.replace('.', '\\.')}：缺少 source`, 'u'), `未列出缺失的作答记录：${field}`);
+      assert.match(
+        error.message,
+        new RegExp(`${field.replace('.', '\\.')}：缺少 source`, 'u'),
+        `未列出缺失的作答记录：${field}`,
+      );
     }
     assert.deepEqual(
       completion(contract).missing.map((item) => item.criterion),
       ['missing_answer', 'missing_answer', 'missing_answer', 'missing_answer'],
     );
-  } finally { box.cleanup(); }
+  } finally {
+    box.cleanup();
+  }
 });
 
 test('作答记录与字段当前值不一致时不冻结', () => {
   const box = sandbox();
   try {
     const scaffold = contractMain(['scaffold', '--workdir', box.dir]);
-    const done = answerRound(box, scaffold, [
-      { field: 'permissions', options: ['read_only', 'write'], selected: 0, source: 'user' },
-      ...FIRST_ROUND.slice(1),
-    ], 'ok');
+    const done = answerRound(
+      box,
+      scaffold,
+      [{ field: 'permissions', options: ['read_only', 'write'], selected: 0, source: 'user' }, ...FIRST_ROUND.slice(1)],
+      'ok',
+    );
     assert.equal(done.payload.complete, true);
 
     // 事后手改字段而不更新记录：契约本身仍然通过实质性判据，但完成判据第 3 条不成立。
@@ -144,8 +190,13 @@ test('作答记录与字段当前值不一致时不冻结', () => {
     const freeze = run(['contract', 'interview-freeze', '--input', path]);
     assert.notEqual(freeze.status, 0);
     assert.match(JSON.parse(freeze.stderr).message, /与 objective 的当前值不一致/u);
-    assert.deepEqual(completion(tampered).missing.map((item) => item.criterion), ['answer_field_mismatch']);
-  } finally { box.cleanup(); }
+    assert.deepEqual(
+      completion(tampered).missing.map((item) => item.criterion),
+      ['answer_field_mismatch'],
+    );
+  } finally {
+    box.cleanup();
+  }
 });
 
 test('"都行"的 scope.exclude：assumed 写进字段、进 assumptions[]、视为已作答；事后手改则不冻结', () => {
@@ -153,10 +204,20 @@ test('"都行"的 scope.exclude：assumed 写进字段、进 assumptions[]、视
   try {
     const scaffold = contractMain(['scaffold', '--workdir', box.dir]);
     const first = answerRound(box, scaffold, FIRST_ROUND, 'r1');
-    const second = answerRound(box, first.payload.contract, [
-      { field: 'scope.exclude', options: ['schemas/ 与四个 SKILL.md', 'tests/'], deferred: true, assumed: ['schemas/', '四个 SKILL.md'] },
-      SECOND_ROUND[1],
-    ], 'r2');
+    const second = answerRound(
+      box,
+      first.payload.contract,
+      [
+        {
+          field: 'scope.exclude',
+          options: ['schemas/ 与四个 SKILL.md', 'tests/'],
+          deferred: true,
+          assumed: ['schemas/', '四个 SKILL.md'],
+        },
+        SECOND_ROUND[1],
+      ],
+      'r2',
+    );
     assert.equal(second.status, 0, second.stderr);
     const contract = second.payload.contract;
     assert.deepEqual(contract.extensions.interview.assumptions, [
@@ -166,7 +227,10 @@ test('"都行"的 scope.exclude：assumed 写进字段、进 assumptions[]、视
     // 字段为空却在 extensions 里写着"假定排除 X"，是一份自己跟自己打架的契约。
     assert.deepEqual(contract.scope.exclude, ['schemas/', '四个 SKILL.md']);
     // 走的是 assumption 这条路，不伪造成用户作答记录。
-    assert.equal(contract.extensions.interview.answers.some((item) => item.field === 'scope.exclude'), false);
+    assert.equal(
+      contract.extensions.interview.answers.some((item) => item.field === 'scope.exclude'),
+      false,
+    );
     assert.equal(second.payload.complete, true);
     assert.deepEqual(outstandingFields(contract), []);
 
@@ -182,8 +246,13 @@ test('"都行"的 scope.exclude：assumed 写进字段、进 assumptions[]、视
     const rejected = run(['contract', 'interview-freeze', '--input', tamperedPath]);
     assert.notEqual(rejected.status, 0);
     assert.match(JSON.parse(rejected.stderr).message, /与 scope\.exclude 的当前值不一致/u);
-    assert.deepEqual(completion(tampered).missing.map((item) => item.criterion), ['assumption_field_mismatch']);
-  } finally { box.cleanup(); }
+    assert.deepEqual(
+      completion(tampered).missing.map((item) => item.criterion),
+      ['assumption_field_mismatch'],
+    );
+  } finally {
+    box.cleanup();
+  }
 });
 
 test('assumed 为空数组的 scope.exclude deferred 可以冻结，write 模式的 warning 保留', () => {
@@ -191,15 +260,22 @@ test('assumed 为空数组的 scope.exclude deferred 可以冻结，write 模式
   try {
     const scaffold = contractMain(['scaffold', '--workdir', box.dir]);
     const first = answerRound(box, scaffold, FIRST_ROUND, 'r1');
-    const second = answerRound(box, first.payload.contract, [
-      { field: 'scope.exclude', options: ['schemas/ 与四个 SKILL.md', '没有要排除的'], deferred: true, assumed: [] },
-      SECOND_ROUND[1],
-    ], 'r2');
+    const second = answerRound(
+      box,
+      first.payload.contract,
+      [
+        { field: 'scope.exclude', options: ['schemas/ 与四个 SKILL.md', '没有要排除的'], deferred: true, assumed: [] },
+        SECOND_ROUND[1],
+      ],
+      'r2',
+    );
     assert.equal(second.status, 0, second.stderr);
     const contract = second.payload.contract;
     // 空数组表示"没有要排除的"：字段留空是与 assumption 一致的，不是脱钩。
     assert.deepEqual(contract.scope.exclude, []);
-    assert.deepEqual(contract.extensions.interview.assumptions, [{ field: 'scope.exclude', assumed: [], reason: 'user_deferred' }]);
+    assert.deepEqual(contract.extensions.interview.assumptions, [
+      { field: 'scope.exclude', assumed: [], reason: 'user_deferred' },
+    ]);
     assert.equal(second.payload.complete, true);
     // warning 允许保留：它只说明"边界没划出来"，划不划得对判据判断不了。
     assert.equal(second.payload.warnings.length, 1);
@@ -208,7 +284,9 @@ test('assumed 为空数组的 scope.exclude deferred 可以冻结，write 模式
     const freeze = run(['contract', 'interview-freeze', '--input', box.write('empty-deferred.json', contract)]);
     assert.equal(freeze.status, 0, freeze.stderr);
     assert.match(JSON.parse(freeze.stdout).warnings[0], /scope\.exclude 为空/u);
-  } finally { box.cleanup(); }
+  } finally {
+    box.cleanup();
+  }
 });
 
 test('permissions / objective / acceptance 不接受 deferred，只能由用户在选项中作答', () => {
@@ -216,15 +294,20 @@ test('permissions / objective / acceptance 不接受 deferred，只能由用户�
   try {
     const scaffold = contractMain(['scaffold', '--workdir', box.dir]);
     for (const field of ['permissions', 'objective', 'acceptance']) {
-      const result = answerRound(box, scaffold, [
-        { field, options: ['A 选项', 'B 选项'], deferred: true, assumed: ['模型替他定的值'] },
-      ], `deferred-${field.replace('.', '-')}`);
+      const result = answerRound(
+        box,
+        scaffold,
+        [{ field, options: ['A 选项', 'B 选项'], deferred: true, assumed: ['模型替他定的值'] }],
+        `deferred-${field.replace('.', '-')}`,
+      );
       assert.notEqual(result.status, 0, `${field} 的 deferred 本应被拒绝`);
       const message = JSON.parse(result.stderr).message;
       assert.match(message, new RegExp(`answers\\[0\\]\\.field = "${field}"`, 'u'), `${field}：错误文案未写明字段路径`);
       assert.match(message, /该字段必须由用户在给出的选项中作答/u);
     }
-  } finally { box.cleanup(); }
+  } finally {
+    box.cleanup();
+  }
 });
 
 test('模型预填 objective 但没有用户作答记录时不冻结，且不提 assumption 这条路', () => {
@@ -250,17 +333,32 @@ test('模型预填 objective 但没有用户作答记录时不冻结，且不提
     assert.notEqual(freeze.status, 0);
     const message = JSON.parse(freeze.stderr).message;
     for (const field of ['objective', 'acceptance']) {
-      assert.match(message, new RegExp(`${field}：缺少 source: "user" 的作答记录，该字段必须由用户在给出的选项中作答`, 'u'), `${field} 未被要求用户作答`);
-      assert.match(message, new RegExp(`assumptions\\[\\d+\\]\\.field = "${field}"：该字段必须由用户在给出的选项中作答，不接受 assumption`, 'u'));
+      assert.match(
+        message,
+        new RegExp(`${field}：缺少 source: "user" 的作答记录，该字段必须由用户在给出的选项中作答`, 'u'),
+        `${field} 未被要求用户作答`,
+      );
+      assert.match(
+        message,
+        new RegExp(
+          `assumptions\\[\\d+\\]\\.field = "${field}"：该字段必须由用户在给出的选项中作答，不接受 assumption`,
+          'u',
+        ),
+      );
     }
     // 核心三项的 remaining_criteria 不再提 user_deferred 这条路；可 deferred 的字段仍然提。
     const blocked = completion(contract).missing.filter((item) => item.criterion === 'missing_answer');
-    assert.deepEqual(blocked.map((item) => item.field), ['objective', 'acceptance', 'scope.include']);
+    assert.deepEqual(
+      blocked.map((item) => item.field),
+      ['objective', 'acceptance', 'scope.include'],
+    );
     for (const item of blocked) {
       if (item.field === 'scope.include') assert.match(item.detail, /user_deferred 的 assumption/u);
       else assert.doesNotMatch(item.detail, /user_deferred/u, `${item.field} 不应再给出 assumption 这条路`);
     }
-  } finally { box.cleanup(); }
+  } finally {
+    box.cleanup();
+  }
 });
 
 test('选项数为 1 或 5、选项重复都被拒绝', () => {
@@ -272,7 +370,10 @@ test('选项数为 1 或 5、选项重复都被拒绝', () => {
       [[{ field: 'objective', options: ['a', 'b', 'c', 'd', 'e'], selected: 0, source: 'user' }], /有 5 项/u],
       [[{ field: 'objective', options: ['同一句话', '同一句话'], selected: 0, source: 'user' }], /存在重复项/u],
       [[{ field: 'objective', options: ['正常一条', '   '], selected: 0, source: 'user' }], /options\[1\] 为空/u],
-      [[{ field: 'objective', options: ['正常一条', '另一条'], selected: 5, source: 'user' }], /必须是 options 的下标/u],
+      [
+        [{ field: 'objective', options: ['正常一条', '另一条'], selected: 5, source: 'user' }],
+        /必须是 options 的下标/u,
+      ],
       [[{ field: 'objective', options: ['正常一条', '另一条'], selected: 0, source: 'model' }], /只接受 "user"/u],
     ];
     for (const [answers, pattern] of cases) {
@@ -280,7 +381,9 @@ test('选项数为 1 或 5、选项重复都被拒绝', () => {
       assert.notEqual(result.status, 0, `本应拒绝：${JSON.stringify(answers)}`);
       assert.match(JSON.parse(result.stderr).message, pattern);
     }
-  } finally { box.cleanup(); }
+  } finally {
+    box.cleanup();
+  }
 });
 
 test(`第 ${MAX_ROUNDS} 轮回填后完成判据仍未满足时非零退出并建议拆分任务`, () => {
@@ -294,9 +397,19 @@ test(`第 ${MAX_ROUNDS} 轮回填后完成判据仍未满足时非零退出并�
     assert.equal(second.status, 0, second.stderr);
     assert.equal(second.payload.round, 2);
 
-    const third = answerRound(box, second.payload.contract, [
-      { field: 'scope.include', options: ['domains/orchestrate/contract-interview.mjs', 'core/'], selected: 0, source: 'user' },
-    ], 'x3');
+    const third = answerRound(
+      box,
+      second.payload.contract,
+      [
+        {
+          field: 'scope.include',
+          options: ['domains/orchestrate/contract-interview.mjs', 'core/'],
+          selected: 0,
+          source: 'user',
+        },
+      ],
+      'x3',
+    );
     assert.notEqual(third.status, 0);
     assert.equal(third.stdout, '');
     const error = JSON.parse(third.stderr);
@@ -304,7 +417,9 @@ test(`第 ${MAX_ROUNDS} 轮回填后完成判据仍未满足时非零退出并�
     assert.match(error.message, new RegExp(`已用满 ${MAX_ROUNDS}/${MAX_ROUNDS} 轮`, 'u'));
     assert.match(error.message, /stop_conditions：缺少 source/u);
     assert.match(error.message, /建议把任务拆开/u);
-  } finally { box.cleanup(); }
+  } finally {
+    box.cleanup();
+  }
 });
 
 test('core 的每条契约层判据都能路由到一道题上', () => {
@@ -318,5 +433,7 @@ test('core 的每条契约层判据都能路由到一道题上', () => {
     for (const finding of [...report.errors, ...report.warnings]) {
       assert.notEqual(routeFinding(finding), null, `core 新增判据未接入提问路由：${finding}`);
     }
-  } finally { box.cleanup(); }
+  } finally {
+    box.cleanup();
+  }
 });

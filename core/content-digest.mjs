@@ -33,7 +33,10 @@ function collect(root, prefix, entries, output) {
       output.push({ path: relativePath, size: bytes.length, sha256: sha256(bytes) });
     }
   };
-  if (!entries) { visit(base, prefix); return; }
+  if (!entries) {
+    visit(base, prefix);
+    return;
+  }
   for (const name of entries) if (existsSync(join(base, name))) visit(join(base, name), `${prefix}/${name}`);
 }
 

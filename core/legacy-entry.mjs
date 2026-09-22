@@ -11,8 +11,11 @@ import { assertPublicCommandCompatibility, RuntimeBundleError } from './runtime-
 
 /** @param {string} moduleUrl 调用方的 import.meta.url */
 export function isProcessEntry(moduleUrl) {
-  try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(moduleUrl)); }
-  catch { return false; }
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
 }
 
 /**

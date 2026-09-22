@@ -174,11 +174,14 @@ test('非法 task 在任何 branch/path/repository identity 副作用前拒绝',
 test('semantic 命名 DoD 在任何 worktree 副作用前 fail-closed', (t) => {
   const fixture = makeRepo();
   t.after(fixture.cleanup);
-  writeProfile(fixture.repo, genericProfile({
-    branch_template: '{host}/{task}',
-    path_template: '{host}-{task}',
-    task_naming: { mode: 'semantic', example: 'ci-gate-hardening' },
-  }));
+  writeProfile(
+    fixture.repo,
+    genericProfile({
+      branch_template: '{host}/{task}',
+      path_template: '{host}-{task}',
+      task_naming: { mode: 'semantic', example: 'ci-gate-hardening' },
+    }),
+  );
   const initialBranches = git(fixture.repo, ['branch', '--format=%(refname:short)']);
 
   for (const task of ['trace-9', 'TRACE-NINE', '1234', 'singleword']) {
@@ -267,20 +270,26 @@ test('Profile 严格拒绝未知字段和未知 scan adapter', () => {
     (error) => error instanceof WorktreeProfileError && error.code === 'TASK_NAMING_DOD_FAILED',
   );
   assert.throws(
-    () => validateProfile(genericProfile({
-      branch_template: '{host}/{task_short}-{id8}',
-      path_template: '{host}-{task_short}-{id8}',
-      task_naming: { mode: 'semantic', example: 'ci-gate-hardening' },
-    })),
+    () =>
+      validateProfile(
+        genericProfile({
+          branch_template: '{host}/{task_short}-{id8}',
+          path_template: '{host}-{task_short}-{id8}',
+          task_naming: { mode: 'semantic', example: 'ci-gate-hardening' },
+        }),
+      ),
     (error) => error instanceof WorktreeProfileError && error.code === 'PROFILE_NAMING_DOD_FAILED',
   );
 });
 
 test('Profile 拒绝逃出仓库的 scan glob，并包含当前平台临时目录', () => {
   assert.throws(
-    () => validateProfile(genericProfile({
-      scan: { sources: [{ type: 'kiro_tasks', glob: '../outside/tasks.md' }] },
-    })),
+    () =>
+      validateProfile(
+        genericProfile({
+          scan: { sources: [{ type: 'kiro_tasks', glob: '../outside/tasks.md' }] },
+        }),
+      ),
     (error) => error instanceof WorktreeProfileError && error.code === 'PROFILE_INVALID_GLOB',
   );
   const profile = validateProfile(genericProfile());
@@ -289,14 +298,16 @@ test('Profile 拒绝逃出仓库的 scan glob，并包含当前平台临时目�
 });
 
 test('Profile 可声明薄 GitLab change-request adapter', () => {
-  const profile = validateProfile(genericProfile({
-    change_request: {
-      provider: 'gitlab',
-      remote: 'upstream',
-      target_branch: 'trunk',
-      remove_source_branch: false,
-    },
-  }));
+  const profile = validateProfile(
+    genericProfile({
+      change_request: {
+        provider: 'gitlab',
+        remote: 'upstream',
+        target_branch: 'trunk',
+        remove_source_branch: false,
+      },
+    }),
+  );
   assert.deepEqual(profile.change_request, {
     provider: 'gitlab',
     remote: 'upstream',
@@ -390,9 +401,7 @@ test('repository_id 初始化后稳定且位于 git common-dir', (t) => {
   const second = ensureRepositoryIdentity(context);
   assert.match(first.repository_id, /^[0-9a-f-]{36}$/);
   assert.equal(second.repository_id, first.repository_id);
-  const stored = JSON.parse(
-    readFileSync(join(context.common_dir, 'worktree-trace', 'v1', 'repository.json'), 'utf8'),
-  );
+  const stored = JSON.parse(readFileSync(join(context.common_dir, 'worktree-trace', 'v1', 'repository.json'), 'utf8'));
   assert.equal(stored.repository_id, first.repository_id);
   assert.equal(dirname(context.common_dir), realpathSync(fixture.repo));
 });

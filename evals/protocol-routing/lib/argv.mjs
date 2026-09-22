@@ -27,28 +27,55 @@ export function tokenize(text) {
   const tokens = [];
   let current = '';
   let started = false;
-  const push = () => { if (started) { tokens.push(current); current = ''; started = false; } };
+  const push = () => {
+    if (started) {
+      tokens.push(current);
+      current = '';
+      started = false;
+    }
+  };
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i];
-    if (ch === '\\' && i + 1 < text.length) { current += text[i + 1]; started = true; i += 1; continue; }
-    if (ch === '\'' || ch === '"') {
+    if (ch === '\\' && i + 1 < text.length) {
+      current += text[i + 1];
+      started = true;
+      i += 1;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
       const quote = ch;
       started = true;
       i += 1;
       while (i < text.length && text[i] !== quote) {
-        if (quote === '"' && text[i] === '\\' && i + 1 < text.length) { current += text[i + 1]; i += 2; continue; }
+        if (quote === '"' && text[i] === '\\' && i + 1 < text.length) {
+          current += text[i + 1];
+          i += 2;
+          continue;
+        }
         current += text[i];
         i += 1;
       }
       continue;
     }
-    if (ch === '\n') { push(); tokens.push('\n'); continue; }
-    if (/\s/u.test(ch)) { push(); continue; }
+    if (ch === '\n') {
+      push();
+      tokens.push('\n');
+      continue;
+    }
+    if (/\s/u.test(ch)) {
+      push();
+      continue;
+    }
     if (ch === '&' || ch === '|' || ch === ';') {
       push();
       let op = ch;
-      if (text[i + 1] === ch && ch !== ';') { op += ch; i += 1; }
-      else if (ch === '|' && text[i + 1] === '&') { op += '&'; i += 1; }
+      if (text[i + 1] === ch && ch !== ';') {
+        op += ch;
+        i += 1;
+      } else if (ch === '|' && text[i + 1] === '&') {
+        op += '&';
+        i += 1;
+      }
       tokens.push(op);
       continue;
     }
@@ -73,7 +100,11 @@ const isAssignment = (/** @type {string} */ token) => /^[A-Za-z_][A-Za-z0-9_]*=/
 function agentkitArgvFromSegment(segment) {
   let index = 0;
   // `env FOO=1 …` 与裸的 `FOO=1 …` 都先剥掉。
-  while (index < segment.length && (isAssignment(segment[index]) || segment[index] === 'env' || WRAPPERS.has(segment[index]))) index += 1;
+  while (
+    index < segment.length &&
+    (isAssignment(segment[index]) || segment[index] === 'env' || WRAPPERS.has(segment[index]))
+  )
+    index += 1;
   if (index >= segment.length) return null;
   const head = basename(segment[index]);
 
@@ -83,8 +114,8 @@ function agentkitArgvFromSegment(segment) {
     for (let i = index + 1; i < segment.length; i += 1) {
       const name = basename(segment[i]);
       if (name === 'agentkit.mjs' || name === 'agentkit' || name === 'cli.mjs') return segment.slice(i + 1);
-      if (segment[i].startsWith('-')) continue;  // node 自身的选项
-      return null;                                // 第一个非选项不是 agentkit 入口
+      if (segment[i].startsWith('-')) continue; // node 自身的选项
+      return null; // 第一个非选项不是 agentkit 入口
     }
     return null;
   }
@@ -117,8 +148,14 @@ export function extractAgentkitArgv(command) {
   /** @type {string[][]} */
   const segments = [[]];
   for (const token of tokens) {
-    if (SEPARATORS.has(token)) { segments.push([]); continue; }
-    if (REDIRECTIONS.test(token)) { segments.push([]); continue; }
+    if (SEPARATORS.has(token)) {
+      segments.push([]);
+      continue;
+    }
+    if (REDIRECTIONS.test(token)) {
+      segments.push([]);
+      continue;
+    }
     segments[segments.length - 1].push(token);
   }
   /** @type {string[][]} */

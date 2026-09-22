@@ -47,7 +47,11 @@ test('sum 累加数组', () => {
 
 /** @param {string} cwd @param {string[]} args */
 export function git(cwd, args) {
-  return execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', HOME: cwd } }).trim();
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', HOME: cwd },
+  }).trim();
 }
 
 /**

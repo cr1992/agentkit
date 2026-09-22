@@ -24,7 +24,8 @@ const lenient = createDigestKit({ ValidationError: JcsError, strict: false });
 /** IEEE 754 双精度的十六进制表示还原成 JS number（附录 B 的输入列就是这个形式）。 */
 function ieee754(hex) {
   const view = new DataView(new ArrayBuffer(8));
-  for (let index = 0; index < 8; index += 1) view.setUint8(index, Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16));
+  for (let index = 0; index < 8; index += 1)
+    view.setUint8(index, Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16));
   return view.getFloat64(0, false);
 }
 
@@ -44,7 +45,10 @@ const SECTION_324_BYTES = `
   5b 33 33 33 33 33 33 33 33 33 2e 33 33 33 33 33 33 33 2c 31
   65 2b 33 30 2c 34 2e 35 2c 30 2e 30 30 32 2c 31 65 2d 32 37
   5d 2c 22 73 74 72 69 6e 67 22 3a 22 e2 82 ac 24 5c 75 30 30
-  30 66 5c 6e 41 27 42 5c 22 5c 5c 5c 5c 5c 22 2f 22 7d`.split(/\s+/u).filter(Boolean).join('');
+  30 66 5c 6e 41 27 42 5c 22 5c 5c 5c 5c 5c 22 2f 22 7d`
+  .split(/\s+/u)
+  .filter(Boolean)
+  .join('');
 
 test('RFC 8785 §3.2.2 + §3.2.4：样例规范化后逐字节等于 RFC 给出的 UTF-8 序列', () => {
   const canonical = strict.canonicalJson(JSON.parse(SECTION_322_INPUT));
@@ -79,7 +83,16 @@ test('RFC 8785 §3.2.3：属性按 UTF-16 code unit 排序，含非 ASCII 与星
 
 test('RFC 8785 §3.2.3：嵌套对象递归排序，数组元素顺序不变', () => {
   assert.equal(
-    strict.canonicalJson({ b: 1, a: { d: [{ f: 2, e: 1 }, { h: 4, g: 3 }], c: 0 } }),
+    strict.canonicalJson({
+      b: 1,
+      a: {
+        d: [
+          { f: 2, e: 1 },
+          { h: 4, g: 3 },
+        ],
+        c: 0,
+      },
+    }),
     '{"a":{"c":0,"d":[{"e":1,"f":2},{"g":3,"h":4}]},"b":1}',
   );
 });
@@ -114,9 +127,12 @@ const APPENDIX_B = [
 ];
 
 test('RFC 8785 附录 B：数值序列化逐项匹配', () => {
-  const mismatches = APPENDIX_B
-    .map(([hex, expected, comment]) => ({ hex, expected, comment, actual: strict.canonicalJson(ieee754(hex)) }))
-    .filter((row) => row.actual !== row.expected);
+  const mismatches = APPENDIX_B.map(([hex, expected, comment]) => ({
+    hex,
+    expected,
+    comment,
+    actual: strict.canonicalJson(ieee754(hex)),
+  })).filter((row) => row.actual !== row.expected);
   assert.deepEqual(mismatches, []);
 });
 

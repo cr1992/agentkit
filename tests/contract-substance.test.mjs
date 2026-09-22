@@ -7,12 +7,25 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
-  SCAFFOLD_ARGV, SCAFFOLD_CHECK_ID, contractSubstance, coverageSubstance, profileSubstance, substanceWarnings,
+  SCAFFOLD_ARGV,
+  SCAFFOLD_CHECK_ID,
+  contractSubstance,
+  coverageSubstance,
+  profileSubstance,
+  substanceWarnings,
 } from '../core/contract-substance.mjs';
 import { main as contractMain } from '../domains/orchestrate/contract-tool.mjs';
-import { main as ledgerMain, skillContentDigest as ledgerSkillDigest } from '../domains/orchestrate/orchestration-ledger.mjs';
+import {
+  main as ledgerMain,
+  skillContentDigest as ledgerSkillDigest,
+} from '../domains/orchestrate/orchestration-ledger.mjs';
 import { main as verifyMain } from '../domains/verify/verification-runtime.mjs';
-import { canonicalJson, envelopeDigest, main as loopMain, skillContentDigest as loopSkillDigest } from '../domains/loop/loop-runtime.mjs';
+import {
+  canonicalJson,
+  envelopeDigest,
+  main as loopMain,
+  skillContentDigest as loopSkillDigest,
+} from '../domains/loop/loop-runtime.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CONTRACT_TOOL = join(ROOT, 'domains', 'orchestrate', 'contract-tool.mjs');
@@ -33,12 +46,19 @@ function scaffoldFixture() {
   git(repo, ['add', 'README.md']);
   git(repo, ['commit', '-m', 'chore: base']);
   const head = git(repo, ['rev-parse', 'HEAD']);
-  const write = (name, value) => { const path = join(sandbox, name); writeFileSync(path, JSON.stringify(value)); return path; };
+  const write = (name, value) => {
+    const path = join(sandbox, name);
+    writeFileSync(path, JSON.stringify(value));
+    return path;
+  };
   const contract = verifyMain(['scaffold', '--kind', 'contract', '--workdir', repo]);
   const profile = verifyMain(['scaffold', '--kind', 'profile']);
   const artifact = verifyMain(['scaffold', '--kind', 'artifact', '--workdir', repo, '--base-sha', head]);
   return {
-    sandbox, repo, contract, profile,
+    sandbox,
+    repo,
+    contract,
+    profile,
     contractPath: write('contract.json', contract),
     profilePath: write('profile.json', profile),
     artifactPath: write('artifact.json', artifact),
@@ -66,18 +86,42 @@ function filledFixture({ contract: contractOverrides = {}, profile: profileOverr
       { contract_item_id: 'no-dead-link', requirement: 'README 中的相对链接都指向现存文件' },
     ],
     // loop init 与 ledger init 各自要求绑定本域当前摘要，否则连形状校验都到不了。
-    skill_set: [...base.contract.skill_set,
+    skill_set: [
+      ...base.contract.skill_set,
       { name: 'run-agent-verify-loop', version: '1.0.0', content_digest: loopSkillDigest(), provider_mode: 'primary' },
-      { name: 'orchestrate-subagents', version: '1.1.0', content_digest: ledgerSkillDigest(), provider_mode: 'primary' }],
+      {
+        name: 'orchestrate-subagents',
+        version: '1.1.0',
+        content_digest: ledgerSkillDigest(),
+        provider_mode: 'primary',
+      },
+    ],
     ...contractOverrides,
   });
   const profile = sign('filled-profile', 'profile', {
     ...base.profile,
-    l0_checks: [{ check_id: 'readme-links', argv: ['node', '-e', 'process.exit(0)'], cwd_rel: '.', stage: 'both', timeout_ms: 30_000, expected_exit_codes: [0] }],
-    l1_review: [{ contract_item_id: 'install-steps', lenses: ['functional', 'scope', 'verification_definition', 'safety'] }],
+    l0_checks: [
+      {
+        check_id: 'readme-links',
+        argv: ['node', '-e', 'process.exit(0)'],
+        cwd_rel: '.',
+        stage: 'both',
+        timeout_ms: 30_000,
+        expected_exit_codes: [0],
+      },
+    ],
+    l1_review: [
+      { contract_item_id: 'install-steps', lenses: ['functional', 'scope', 'verification_definition', 'safety'] },
+    ],
     ...profileOverrides,
   });
-  return { ...base, contract: contract.value, contractPath: contract.path, profile: profile.value, profilePath: profile.path };
+  return {
+    ...base,
+    contract: contract.value,
+    contractPath: contract.path,
+    profile: profile.value,
+    profilePath: profile.path,
+  };
 }
 
 /** 断言 message 含全部 expected 原因且不含任何 absent 原因。 */
@@ -96,32 +140,91 @@ test('scaffold 原样生成的契约与 profile 在全部创建入口被拒，�
     assert.equal(profileReasons.length, 2);
 
     // 只有契约的入口：只报契约层。
-    assert.throws(() => contractMain(['validate', '--input', f.contractPath]),
-      (error) => carries(error.message, contractReasons, profileReasons));
-    assert.throws(() => ledgerMain(['init', '--contract', f.contractPath, '--state-root', join(f.sandbox, 'ledger-state')]),
-      (error) => carries(error.message, contractReasons, profileReasons));
+    assert.throws(
+      () => contractMain(['validate', '--input', f.contractPath]),
+      (error) => carries(error.message, contractReasons, profileReasons),
+    );
+    assert.throws(
+      () => ledgerMain(['init', '--contract', f.contractPath, '--state-root', join(f.sandbox, 'ledger-state')]),
+      (error) => carries(error.message, contractReasons, profileReasons),
+    );
 
     // 带 profile 的入口：两层都报。
-    const report = verifyMain(['preflight', '--contract', f.contractPath, '--profile', f.profilePath, '--artifact', f.artifactPath]);
+    const report = verifyMain([
+      'preflight',
+      '--contract',
+      f.contractPath,
+      '--profile',
+      f.profilePath,
+      '--artifact',
+      f.artifactPath,
+    ]);
     assert.equal(report.valid, false);
     carries(report.errors.join('\n'), [...contractReasons, ...profileReasons]);
-    assert.throws(() => verifyMain(['init', '--contract', f.contractPath, '--profile', f.profilePath, '--artifact', f.artifactPath,
-      '--workdir', f.repo, '--isolation-assurance', 'host_reported', '--state-root', join(f.sandbox, 'verify-state')]),
-    (error) => carries(error.message, [...contractReasons, ...profileReasons]));
-    assert.throws(() => loopMain(['init', '--contract', f.contractPath, '--profile', f.profilePath,
-      '--provider', 'embedded', '--state-root', join(f.sandbox, 'loop-state')]),
-    (error) => carries(error.message, [...contractReasons, ...profileReasons]));
+    assert.throws(
+      () =>
+        verifyMain([
+          'init',
+          '--contract',
+          f.contractPath,
+          '--profile',
+          f.profilePath,
+          '--artifact',
+          f.artifactPath,
+          '--workdir',
+          f.repo,
+          '--isolation-assurance',
+          'host_reported',
+          '--state-root',
+          join(f.sandbox, 'verify-state'),
+        ]),
+      (error) => carries(error.message, [...contractReasons, ...profileReasons]),
+    );
+    assert.throws(
+      () =>
+        loopMain([
+          'init',
+          '--contract',
+          f.contractPath,
+          '--profile',
+          f.profilePath,
+          '--provider',
+          'embedded',
+          '--state-root',
+          join(f.sandbox, 'loop-state'),
+        ]),
+      (error) => carries(error.message, [...contractReasons, ...profileReasons]),
+    );
 
     // prepare-run 默认输出紧凑结果，拒绝原因也要带出来，不能只剩 invalid_input。
-    const cli = spawnSync(process.execPath, [join(ROOT, 'domains', 'verify', 'verification-runtime.mjs'), 'prepare-run',
-      '--contract', f.contractPath, '--profile', f.profilePath, '--artifact', f.artifactPath, '--workdir', f.repo,
-      '--isolation-assurance', 'host_reported', '--state-root', join(f.sandbox, 'prepare-state')], { encoding: 'utf8' });
+    const cli = spawnSync(
+      process.execPath,
+      [
+        join(ROOT, 'domains', 'verify', 'verification-runtime.mjs'),
+        'prepare-run',
+        '--contract',
+        f.contractPath,
+        '--profile',
+        f.profilePath,
+        '--artifact',
+        f.artifactPath,
+        '--workdir',
+        f.repo,
+        '--isolation-assurance',
+        'host_reported',
+        '--state-root',
+        join(f.sandbox, 'prepare-state'),
+      ],
+      { encoding: 'utf8' },
+    );
     assert.notEqual(cli.status, 0);
     const compact = JSON.parse(cli.stdout);
     assert.equal(compact.status, 'invalid_input');
     assert.equal(compact.prepared, false);
     carries(compact.errors.join('\n'), [...contractReasons, ...profileReasons]);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('profile 哨兵的两个分支各自独立触发，只改名或只换命令都绕不过去', () => {
@@ -150,35 +253,85 @@ test('没被任何 L1 审到的 acceptance 在带 profile 的创建入口被拒�
     const reason = 'acceptance[1].contract_item_id = "no-dead-link"：未被任何 l1_review 条目引用';
     assert.deepEqual(coverageSubstance(f.contract, f.profile).errors, [reason]);
 
-    const report = verifyMain(['preflight', '--contract', f.contractPath, '--profile', f.profilePath, '--artifact', f.artifactPath]);
+    const report = verifyMain([
+      'preflight',
+      '--contract',
+      f.contractPath,
+      '--profile',
+      f.profilePath,
+      '--artifact',
+      f.artifactPath,
+    ]);
     assert.equal(report.valid, false);
     carries(report.errors.join('\n'), [reason]);
-    assert.throws(() => loopMain(['init', '--contract', f.contractPath, '--profile', f.profilePath,
-      '--provider', 'embedded', '--workdir', f.repo, '--state-root', join(f.sandbox, 'loop-state')]),
-    (error) => carries(error.message, [reason]));
+    assert.throws(
+      () =>
+        loopMain([
+          'init',
+          '--contract',
+          f.contractPath,
+          '--profile',
+          f.profilePath,
+          '--provider',
+          'embedded',
+          '--workdir',
+          f.repo,
+          '--state-root',
+          join(f.sandbox, 'loop-state'),
+        ]),
+      (error) => carries(error.message, [reason]),
+    );
 
     // 单向绑定已有实现负责的方向不变：L1 引用不存在的 acceptance 仍然是形状错误。
     // 覆盖判据补的是反方向，而只拿到契约的入口做不到，所以不能在那里报。
     assert.equal(contractMain(['validate', '--input', f.contractPath]).valid, true);
 
     // 补齐覆盖后同一组入口放行；这条同时证明拒绝理由指向的就是可修的那一处。
-    const covered = filledFixture({ profile: { l1_review: [
-      { contract_item_id: 'install-steps', lenses: ['functional', 'scope'] },
-      { contract_item_id: 'no-dead-link', lenses: ['functional', 'scope'] },
-    ] } });
+    const covered = filledFixture({
+      profile: {
+        l1_review: [
+          { contract_item_id: 'install-steps', lenses: ['functional', 'scope'] },
+          { contract_item_id: 'no-dead-link', lenses: ['functional', 'scope'] },
+        ],
+      },
+    });
     try {
       assert.deepEqual(coverageSubstance(covered.contract, covered.profile).errors, []);
-      assert.equal(verifyMain(['preflight', '--contract', covered.contractPath, '--profile', covered.profilePath, '--artifact', covered.artifactPath]).valid, true);
-    } finally { covered.cleanup(); }
-  } finally { f.cleanup(); }
+      assert.equal(
+        verifyMain([
+          'preflight',
+          '--contract',
+          covered.contractPath,
+          '--profile',
+          covered.profilePath,
+          '--artifact',
+          covered.artifactPath,
+        ]).valid,
+        true,
+      );
+    } finally {
+      covered.cleanup();
+    }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('write 合同缺 exclude / stop_conditions 只报 warning：valid 仍为 true，退出码仍为 0', () => {
-  const write = { permissions: { mode: 'write', writable_paths: ['README.md'] }, scope: { include: ['README.md'], exclude: [] }, stop_conditions: [] };
-  const f = filledFixture({ contract: write, profile: { l1_review: [
-    { contract_item_id: 'install-steps', lenses: ['functional'] },
-    { contract_item_id: 'no-dead-link', lenses: ['functional'] },
-  ] } });
+  const write = {
+    permissions: { mode: 'write', writable_paths: ['README.md'] },
+    scope: { include: ['README.md'], exclude: [] },
+    stop_conditions: [],
+  };
+  const f = filledFixture({
+    contract: write,
+    profile: {
+      l1_review: [
+        { contract_item_id: 'install-steps', lenses: ['functional'] },
+        { contract_item_id: 'no-dead-link', lenses: ['functional'] },
+      ],
+    },
+  });
   try {
     const { errors, warnings } = contractSubstance(f.contract);
     assert.deepEqual(errors, []);
@@ -189,12 +342,22 @@ test('write 合同缺 exclude / stop_conditions 只报 warning：valid 仍为 tr
     const validated = contractMain(['validate', '--input', f.contractPath]);
     assert.equal(validated.valid, true);
     assert.deepEqual(validated.warnings, warnings);
-    const cli = spawnSync(process.execPath, [CONTRACT_TOOL, 'validate', '--input', f.contractPath], { encoding: 'utf8' });
+    const cli = spawnSync(process.execPath, [CONTRACT_TOOL, 'validate', '--input', f.contractPath], {
+      encoding: 'utf8',
+    });
     assert.equal(cli.status, 0);
     assert.deepEqual(JSON.parse(cli.stdout).warnings, warnings);
 
     // 带 profile 的入口同样只是多带一段 warning，不改变 valid。
-    const report = verifyMain(['preflight', '--contract', f.contractPath, '--profile', f.profilePath, '--artifact', f.artifactPath]);
+    const report = verifyMain([
+      'preflight',
+      '--contract',
+      f.contractPath,
+      '--profile',
+      f.profilePath,
+      '--artifact',
+      f.artifactPath,
+    ]);
     assert.equal(report.valid, true);
     assert.deepEqual(report.warnings, warnings);
     assert.deepEqual(report.errors, []);
@@ -209,8 +372,18 @@ test('write 合同缺 exclude / stop_conditions 只报 warning：valid 仍为 tr
     assert.deepEqual(health.substance_warnings, warnings);
 
     // 只要写入面划出了边界，或者声明了终止条件，对应那条就不再出现。
-    const bounded = filledFixture({ contract: { ...write, scope: { include: ['README.md'], exclude: ['src/**'] }, stop_conditions: ['连续两轮同一失败指纹'] } });
-    try { assert.deepEqual(contractSubstance(bounded.contract).warnings, []); } finally { bounded.cleanup(); }
+    const bounded = filledFixture({
+      contract: {
+        ...write,
+        scope: { include: ['README.md'], exclude: ['src/**'] },
+        stop_conditions: ['连续两轮同一失败指纹'],
+      },
+    });
+    try {
+      assert.deepEqual(contractSubstance(bounded.contract).warnings, []);
+    } finally {
+      bounded.cleanup();
+    }
 
     // read_only 合同本来就不靠 exclude / stop_conditions 划边界，不该被打扰。
     const readOnly = filledFixture();
@@ -218,8 +391,12 @@ test('write 合同缺 exclude / stop_conditions 只报 warning：valid 仍为 tr
       assert.equal(readOnly.contract.permissions.mode, 'read_only');
       assert.deepEqual(contractSubstance(readOnly.contract).warnings, []);
       assert.equal('warnings' in contractMain(['validate', '--input', readOnly.contractPath]), false);
-    } finally { readOnly.cleanup(); }
-  } finally { f.cleanup(); }
+    } finally {
+      readOnly.cleanup();
+    }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('契约层判据按不可信输入读取，缺字段时不抛异常', () => {
@@ -270,7 +447,14 @@ function frozenScaffoldStateRoot() {
     created_at: now,
     updated_at: now,
   };
-  const event = { schema_version: 1, revision: 0, kind: 'initialized', recorded_at: now, previous_event_digest: null, snapshot };
+  const event = {
+    schema_version: 1,
+    revision: 0,
+    kind: 'initialized',
+    recorded_at: now,
+    previous_event_digest: null,
+    snapshot,
+  };
   event.event_digest = envelopeDigest(event, 'event_digest');
   writeFileSync(join(loopDir, 'events.ndjson'), `${canonicalJson(event)}\n`, { mode: 0o600 });
   writeFileSync(join(loopDir, 'snapshot.json'), `${canonicalJson(snapshot)}\n`, { mode: 0o600 });
@@ -289,13 +473,32 @@ test('判据出现之前冻结的 loop：adopt-root 与 validate 仍然成功，
     assert.equal(health.healthy, true);
     assert.deepEqual(health.findings, []);
     assert.deepEqual(health.substance_warnings, substanceWarnings(f.contract, f.profile));
-    carries(health.substance_warnings.join('\n'), [...contractSubstance(f.contract).errors, ...profileSubstance(f.profile).errors]);
+    carries(health.substance_warnings.join('\n'), [
+      ...contractSubstance(f.contract).errors,
+      ...profileSubstance(f.profile).errors,
+    ]);
 
     // 同一份契约走创建入口仍然被拒：降级只发生在回看路径上。
-    assert.throws(() => loopMain(['init', '--contract', f.contractPath, '--profile', f.profilePath,
-      '--provider', 'embedded', '--workdir', f.repo, '--state-root', join(f.sandbox, 'fresh-state')]),
-    (error) => carries(error.message, contractSubstance(f.contract).errors));
-  } finally { f.cleanup(); }
+    assert.throws(
+      () =>
+        loopMain([
+          'init',
+          '--contract',
+          f.contractPath,
+          '--profile',
+          f.profilePath,
+          '--provider',
+          'embedded',
+          '--workdir',
+          f.repo,
+          '--state-root',
+          join(f.sandbox, 'fresh-state'),
+        ]),
+      (error) => carries(error.message, contractSubstance(f.contract).errors),
+    );
+  } finally {
+    f.cleanup();
+  }
 });
 
 // 续跑与恢复入口不重判实质性：契约冻结后不可变，实质性只在冻结那一刻判定一次；validate、
@@ -318,8 +521,16 @@ test('实质性检查只接在创建入口，五份校验实现共用同一模�
   // doctor 口径单独一个入口，调用它就等于"只报不判"。
   const doctorCall = /\bsubstanceWarnings\(/u;
 
-  for (const path of ['domains/orchestrate/contract-tool.mjs', 'domains/verify/verification-runtime.mjs', 'domains/loop/loop-runtime.mjs']) {
-    assert.match(readFileSync(join(ROOT, path), 'utf8'), /from '\.\.\/\.\.\/core\/contract-substance\.mjs'/u, `${path} 未引用共享模块`);
+  for (const path of [
+    'domains/orchestrate/contract-tool.mjs',
+    'domains/verify/verification-runtime.mjs',
+    'domains/loop/loop-runtime.mjs',
+  ]) {
+    assert.match(
+      readFileSync(join(ROOT, path), 'utf8'),
+      /from '\.\.\/\.\.\/core\/contract-substance\.mjs'/u,
+      `${path} 未引用共享模块`,
+    );
   }
 
   // orchestrate：只有 validate 命令与 ledger init 打开 substance；doctor 只走降级口径。

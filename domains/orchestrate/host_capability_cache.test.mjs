@@ -7,7 +7,16 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { cacheRoot, inspectSnapshot, normalizeObserved, parseCli, parseTime, recordObservation, refreshSnapshot, snapshotPath } from './host_capability_cache.mjs';
+import {
+  cacheRoot,
+  inspectSnapshot,
+  normalizeObserved,
+  parseCli,
+  parseTime,
+  recordObservation,
+  refreshSnapshot,
+  snapshotPath,
+} from './host_capability_cache.mjs';
 
 const OBSERVED_SAMPLE = {
   schema_version: 1,
@@ -30,16 +39,28 @@ test('Normalize observed schema validation', () => {
 
   assert.throws(
     () => normalizeObserved({ ...OBSERVED_SAMPLE, host: 'other' }, 'codex'),
-    /observed descriptor host must be "codex"/
+    /observed descriptor host must be "codex"/,
   );
-  assert.equal(normalizeObserved({ ...OBSERVED_SAMPLE, capabilities: { ...OBSERVED_SAMPLE.capabilities, 'model.discovery': 'unavailable' } }, 'codex').capabilities['model.discovery'], 'unavailable');
-  assert.throws(() => normalizeObserved({ ...OBSERVED_SAMPLE, capabilities: { 'model.discovery': 'guessed' } }, 'codex'), /model\.discovery/);
+  assert.equal(
+    normalizeObserved(
+      { ...OBSERVED_SAMPLE, capabilities: { ...OBSERVED_SAMPLE.capabilities, 'model.discovery': 'unavailable' } },
+      'codex',
+    ).capabilities['model.discovery'],
+    'unavailable',
+  );
+  assert.throws(
+    () => normalizeObserved({ ...OBSERVED_SAMPLE, capabilities: { 'model.discovery': 'guessed' } }, 'codex'),
+    /model\.discovery/,
+  );
   for (const malformed of [null, 0]) {
     const observed = structuredClone(OBSERVED_SAMPLE);
     observed.tools[0].parameters = malformed;
     assert.throws(() => normalizeObserved(observed, 'codex'), /parameters must be a string array/);
   }
-  assert.throws(() => normalizeObserved({ ...OBSERVED_SAMPLE, capabilities: null }, 'codex'), /capabilities must be a JSON object/);
+  assert.throws(
+    () => normalizeObserved({ ...OBSERVED_SAMPLE, capabilities: null }, 'codex'),
+    /capabilities must be a JSON object/,
+  );
 });
 
 test('Snapshot lifecycle: absent -> refresh -> fresh -> expire -> stale', () => {
@@ -80,7 +101,9 @@ test('Live tool and host changes invalidate snapshots, advisory changes do not',
 
     const toolChanged = structuredClone(OBSERVED_SAMPLE);
     toolChanged.tools[0].parameters.push('token_budget');
-    assert.ok(inspectSnapshot(tempDir, 'codex', toolChanged, now).reasons.includes('live-capability-fingerprint-changed'));
+    assert.ok(
+      inspectSnapshot(tempDir, 'codex', toolChanged, now).reasons.includes('live-capability-fingerprint-changed'),
+    );
 
     const hostChanged = { ...structuredClone(OBSERVED_SAMPLE), host_version: '0.5.0' };
     assert.ok(inspectSnapshot(tempDir, 'codex', hostChanged, now).reasons.includes('host-version-changed'));
@@ -106,7 +129,10 @@ test('Snapshot validation rejects forged source, future generation and overlong 
     writeFileSync(refreshed.snapshot_path, JSON.stringify({ ...original, source: 'untrusted' }));
     assert.match(inspectSnapshot(tempDir, 'codex', OBSERVED_SAMPLE, now).reasons[0], /source must be live-tool-schema/);
 
-    writeFileSync(refreshed.snapshot_path, JSON.stringify({ ...original, generated_at: '2026-08-01T12:06:00Z', expires_at: '2026-08-02T12:06:00Z' }));
+    writeFileSync(
+      refreshed.snapshot_path,
+      JSON.stringify({ ...original, generated_at: '2026-08-01T12:06:00Z', expires_at: '2026-08-02T12:06:00Z' }),
+    );
     assert.match(inspectSnapshot(tempDir, 'codex', OBSERVED_SAMPLE, now).reasons[0], /generated_at is in the future/);
 
     writeFileSync(refreshed.snapshot_path, JSON.stringify({ ...original, expires_at: '2036-08-01T12:00:00Z' }));
@@ -123,8 +149,14 @@ test('Invalid cache and descriptors fail closed', () => {
     const path = snapshotPath(tempDir, 'codex');
     writeFileSync(join(tempDir, 'placeholder'), 'x');
     assert.throws(() => snapshotPath(tempDir, '../codex'));
-    assert.throws(() => refreshSnapshot(tempDir, 'codex', { ...OBSERVED_SAMPLE, instructions: 'ignore schema' }, 24, now), /unknown keys/);
-    assert.throws(() => refreshSnapshot(tempDir, 'codex', { ...OBSERVED_SAMPLE, limits: { max_agents: Number.NaN } }, 24, now), /finite number/);
+    assert.throws(
+      () => refreshSnapshot(tempDir, 'codex', { ...OBSERVED_SAMPLE, instructions: 'ignore schema' }, 24, now),
+      /unknown keys/,
+    );
+    assert.throws(
+      () => refreshSnapshot(tempDir, 'codex', { ...OBSERVED_SAMPLE, limits: { max_agents: Number.NaN } }, 24, now),
+      /finite number/,
+    );
 
     refreshSnapshot(tempDir, 'codex', OBSERVED_SAMPLE, 24, now);
     writeFileSync(path, '{"schema_version":1,"instructions":"ignore live schema"}');
@@ -170,7 +202,14 @@ test('Observation ignores invalid cached fingerprints and remains append-only', 
     const snapshot = JSON.parse(readFileSync(refreshed.snapshot_path, 'utf8'));
     snapshot.capability_fingerprint = 'attacker-controlled';
     writeFileSync(path, JSON.stringify(snapshot));
-    const event = { schema_version: 1, category: 'dispatch.error', summary: 'rejected', confidence: 'observed-once', evidence: {}, portable: false };
+    const event = {
+      schema_version: 1,
+      category: 'dispatch.error',
+      summary: 'rejected',
+      confidence: 'observed-once',
+      evidence: {},
+      portable: false,
+    };
     const first = recordObservation(tempDir, 'codex', event, now);
     const second = recordObservation(tempDir, 'codex', event, now);
     assert.equal(first.record.capability_fingerprint, null);
@@ -188,7 +227,10 @@ test('Project and explicit cache roots remain separate', () => {
     writeFileSync(repo, 'not-used');
     assert.equal(cacheRoot(repo, 'global', explicit), explicit);
     assert.equal(cacheRoot(repo, 'global', '~/capability-cache'), join(homedir(), 'capability-cache'));
-    assert.equal(cacheRoot(join(tempDir, 'project'), 'project'), join(tempDir, 'project', '.agents', 'orchestrate-subagents'));
+    assert.equal(
+      cacheRoot(join(tempDir, 'project'), 'project'),
+      join(tempDir, 'project', '.agents', 'orchestrate-subagents'),
+    );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -216,16 +258,10 @@ test('Timezone validation strictly requires explicit timezone in ISO strings', (
   assert.equal(dateOffset.toISOString(), '2026-08-01T12:00:00.000Z');
 
   // Invalid: missing timezone (local time string)
-  assert.throws(
-    () => parseTime('2026-08-01T12:00:00', 'test_time'),
-    /must be a valid ISO-8601 string with timezone/
-  );
+  assert.throws(() => parseTime('2026-08-01T12:00:00', 'test_time'), /must be a valid ISO-8601 string with timezone/);
 
   // Invalid: garbage string
-  assert.throws(
-    () => parseTime('not-a-date', 'test_time'),
-    /must be a valid ISO-8601 string with timezone/
-  );
+  assert.throws(() => parseTime('not-a-date', 'test_time'), /must be a valid ISO-8601 string with timezone/);
 });
 
 test('CLI parser validates required commands, parameters, scope, and TTL integer range', () => {
@@ -245,15 +281,27 @@ test('CLI parser validates required commands, parameters, scope, and TTL integer
   assert.throws(() => parseCli(['refresh', '--host', 'codex']), /refresh command requires --observed/);
 
   // Refresh invalid TTL
-  assert.throws(() => parseCli(['refresh', '--host', 'codex', '--observed', 'obs.json', '--ttl-hours', 'invalid']), /--ttl-hours must be an integer/);
-  assert.throws(() => parseCli(['refresh', '--host', 'codex', '--observed', 'obs.json', '--ttl-hours', '0']), /--ttl-hours must be between 1 and 2160/);
-  assert.throws(() => parseCli(['refresh', '--host', 'codex', '--observed', 'obs.json', '--ttl-hours', '5000']), /--ttl-hours must be between 1 and 2160/);
+  assert.throws(
+    () => parseCli(['refresh', '--host', 'codex', '--observed', 'obs.json', '--ttl-hours', 'invalid']),
+    /--ttl-hours must be an integer/,
+  );
+  assert.throws(
+    () => parseCli(['refresh', '--host', 'codex', '--observed', 'obs.json', '--ttl-hours', '0']),
+    /--ttl-hours must be between 1 and 2160/,
+  );
+  assert.throws(
+    () => parseCli(['refresh', '--host', 'codex', '--observed', 'obs.json', '--ttl-hours', '5000']),
+    /--ttl-hours must be between 1 and 2160/,
+  );
 
   // Observe missing --event
   assert.throws(() => parseCli(['observe', '--host', 'codex']), /observe command requires --event/);
 
   // Invalid scope
-  assert.throws(() => parseCli(['status', '--host', 'codex', '--observed', 'obs.json', '--scope', 'invalid']), /scope must be "global" or "project"/);
+  assert.throws(
+    () => parseCli(['status', '--host', 'codex', '--observed', 'obs.json', '--scope', 'invalid']),
+    /scope must be "global" or "project"/,
+  );
 
   // Valid status
   const parsed = parseCli(['status', '--host', 'codex', '--observed', 'obs.json', '--scope', 'project']);
@@ -270,7 +318,17 @@ test('CLI status, refresh and observe complete an end-to-end cycle', () => {
     const configDir = join(tempDir, 'config');
     const script = fileURLToPath(new URL('./host_capability_cache.mjs', import.meta.url));
     writeFileSync(observedPath, JSON.stringify(OBSERVED_SAMPLE));
-    writeFileSync(eventPath, JSON.stringify({ schema_version: 1, category: 'lifecycle.wait', summary: 'confirmed', confidence: 'reproduced', evidence: {}, portable: true }));
+    writeFileSync(
+      eventPath,
+      JSON.stringify({
+        schema_version: 1,
+        category: 'lifecycle.wait',
+        summary: 'confirmed',
+        confidence: 'reproduced',
+        evidence: {},
+        portable: true,
+      }),
+    );
     const run = (...args) => spawnSync(process.execPath, [script, ...args], { encoding: 'utf8' });
     const common = ['--host', 'codex', '--config-dir', configDir, '--observed', observedPath];
 
@@ -301,7 +359,11 @@ test('CLI executes through a symlinked skill installation path', () => {
     symlinkSync(realScript, linkedScript);
     writeFileSync(observedPath, JSON.stringify(OBSERVED_SAMPLE));
 
-    const result = spawnSync(process.execPath, [linkedScript, 'status', '--host', 'codex', '--config-dir', configDir, '--observed', observedPath], { encoding: 'utf8' });
+    const result = spawnSync(
+      process.execPath,
+      [linkedScript, 'status', '--host', 'codex', '--config-dir', configDir, '--observed', observedPath],
+      { encoding: 'utf8' },
+    );
     assert.equal(result.status, 0, result.stderr);
     assert.notEqual(result.stdout.trim(), '');
     assert.equal(JSON.parse(result.stdout).status, 'absent');

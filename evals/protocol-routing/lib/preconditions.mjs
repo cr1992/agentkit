@@ -38,7 +38,15 @@ export function runFixtureTest(repo, file) {
   delete env.NODE_TEST_CONTEXT;
   delete env.NODE_OPTIONS;
   try {
-    return { green: true, output: execFileSync(process.execPath, ['--test', file], { cwd: repo, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) };
+    return {
+      green: true,
+      output: execFileSync(process.execPath, ['--test', file], {
+        cwd: repo,
+        env,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }),
+    };
   } catch (error) {
     const err = /** @type {any} */ (error);
     return { green: false, output: `${err.stdout ?? ''}${err.stderr ?? ''}${err.message ?? ''}` };
@@ -95,7 +103,11 @@ function commitImplementations(repo) {
   }
   const tests = runFixtureTest(repo, 'test/sum.test.mjs');
   if (!tests.green) throw new Error(`第 7 条现场构造失败：两个实现提交之后 fixture 仓的单测没过。\n${tests.output}`);
-  return { base, artifact: git(repo, ['rev-parse', 'HEAD']), nodes: IMPLEMENTATION_COMMITS.map((commit) => commit.node_id) };
+  return {
+    base,
+    artifact: git(repo, ['rev-parse', 'HEAD']),
+    nodes: IMPLEMENTATION_COMMITS.map((commit) => commit.node_id),
+  };
 }
 
 /**
@@ -131,8 +143,21 @@ const SELF_REPORT = `# 实现自查（本人填写）
  * @param {{ contractId: string, digests: Record<string, string>, independent: boolean }} options
  */
 function substantiveContract({ contractId, digests, independent }) {
-  const skillSet = [{ name: 'orchestrate-subagents', version: '1.1.0', content_digest: digests['orchestrate-subagents'], provider_mode: 'primary' }];
-  if (independent) skillSet.push({ name: 'verify-agent-output', version: '1.1.0', content_digest: digests['verify-agent-output'], provider_mode: 'optional' });
+  const skillSet = [
+    {
+      name: 'orchestrate-subagents',
+      version: '1.1.0',
+      content_digest: digests['orchestrate-subagents'],
+      provider_mode: 'primary',
+    },
+  ];
+  if (independent)
+    skillSet.push({
+      name: 'verify-agent-output',
+      version: '1.1.0',
+      content_digest: digests['verify-agent-output'],
+      provider_mode: 'optional',
+    });
   return {
     schema_version: 1,
     contract_id: contractId,
@@ -236,8 +261,18 @@ function loopContract({ repo, digests }) {
     permissions: { mode: 'write', writable_paths: ['src/sum.mjs'] },
     environment: { repository: repo, isolation: 'shared_tree' },
     skill_set: [
-      { name: 'run-agent-verify-loop', version: '1.1.0', content_digest: digests['run-agent-verify-loop'], provider_mode: 'primary' },
-      { name: 'verify-agent-output', version: '1.1.0', content_digest: digests['verify-agent-output'], provider_mode: 'optional' },
+      {
+        name: 'run-agent-verify-loop',
+        version: '1.1.0',
+        content_digest: digests['run-agent-verify-loop'],
+        provider_mode: 'primary',
+      },
+      {
+        name: 'verify-agent-output',
+        version: '1.1.0',
+        content_digest: digests['verify-agent-output'],
+        provider_mode: 'optional',
+      },
     ],
     stop_conditions: ['连续两次验收给出同一个失败签名即停止并上报', '超过三轮仍未通过即停止'],
     extensions: { verification: { provider: 'verify-agent-output' } },
@@ -255,10 +290,27 @@ function loopProfile(acceptanceIds) {
     schema_version: 1,
     profile_id: 'case-5-sum-boundary',
     l0_checks: [
-      { check_id: 'sum-boundary', argv: ['node', '--test', FAILING_TEST_PATH], cwd_rel: '.', stage: 'both', timeout_ms: 60000, expected_exit_codes: [0] },
-      { check_id: 'sum-regression', argv: ['node', '--test', 'test/sum.test.mjs'], cwd_rel: '.', stage: 'final', timeout_ms: 60000, expected_exit_codes: [0] },
+      {
+        check_id: 'sum-boundary',
+        argv: ['node', '--test', FAILING_TEST_PATH],
+        cwd_rel: '.',
+        stage: 'both',
+        timeout_ms: 60000,
+        expected_exit_codes: [0],
+      },
+      {
+        check_id: 'sum-regression',
+        argv: ['node', '--test', 'test/sum.test.mjs'],
+        cwd_rel: '.',
+        stage: 'final',
+        timeout_ms: 60000,
+        expected_exit_codes: [0],
+      },
     ],
-    l1_review: acceptanceIds.map((id) => ({ contract_item_id: id, lenses: ['functional', 'scope', 'verification_definition', 'safety'] })),
+    l1_review: acceptanceIds.map((id) => ({
+      contract_item_id: id,
+      lenses: ['functional', 'scope', 'verification_definition', 'safety'],
+    })),
     protected_verifier_paths: [FAILING_TEST_PATH, 'test/sum.test.mjs'],
     allowed_validation_changes: [],
     runtime: {
@@ -317,11 +369,14 @@ const SETUPS = {
     git(site.repo, ['add', FAILING_TEST_PATH]);
     git(site.repo, ['commit', '--quiet', '-m', 'test(sum): 补上边界用例，当前实现过不了']);
     if (runFixtureTest(site.repo, FAILING_TEST_PATH).green) {
-      throw new Error(`第 5 条现场构造失败：${FAILING_TEST_PATH} 居然是绿的，这条用例要的是一个确实要改实现才能过的目标`);
+      throw new Error(
+        `第 5 条现场构造失败：${FAILING_TEST_PATH} 居然是绿的，这条用例要的是一个确实要改实现才能过的目标`,
+      );
     }
     // 既有单测必须仍然是绿的：目标要落在边界行为上，而不是「整个仓都是坏的」。
     const regression = runFixtureTest(site.repo, 'test/sum.test.mjs');
-    if (!regression.green) throw new Error(`第 5 条现场构造失败：既有单测 test/sum.test.mjs 也红了。\n${regression.output}`);
+    if (!regression.green)
+      throw new Error(`第 5 条现场构造失败：既有单测 test/sum.test.mjs 也红了。\n${regression.output}`);
 
     // 2) 冻结契约与 profile，两份都落进仓库——prompt 里用户能自然地指着它们说「已经定好了」。
     const contract = normalizeTo(site.session, 'loop-contract', loopContract({ repo: site.repo, digests }));
@@ -338,10 +393,24 @@ const SETUPS = {
     const probeRoot = join(site.session, 'loop-init-probe');
     mkdirSync(probeRoot, { recursive: true });
     try {
-      agentkitJson(['loop', 'init', '--contract', join(site.repo, 'contract.json'), '--profile', join(site.repo, 'verification-profile.json'),
-        '--provider', 'verify-agent-output', '--state-root', probeRoot, '--loop-id', 'preflight-probe']);
+      agentkitJson([
+        'loop',
+        'init',
+        '--contract',
+        join(site.repo, 'contract.json'),
+        '--profile',
+        join(site.repo, 'verification-profile.json'),
+        '--provider',
+        'verify-agent-output',
+        '--state-root',
+        probeRoot,
+        '--loop-id',
+        'preflight-probe',
+      ]);
     } catch (error) {
-      throw new Error(`第 5 条现场构造失败：预置的契约 / profile 过不了 loop init 的前置校验。\n${/** @type {any} */ (error).stderr ?? ''}${/** @type {Error} */ (error).message}`);
+      throw new Error(
+        `第 5 条现场构造失败：预置的契约 / profile 过不了 loop init 的前置校验。\n${/** @type {any} */ (error).stderr ?? ''}${/** @type {Error} */ (error).message}`,
+      );
     } finally {
       // 会话拿到的必须是一个**没有**初始化过的现场：init 正是被测的那一步。
       rmSync(probeRoot, { recursive: true, force: true });
@@ -365,7 +434,16 @@ const SETUPS = {
    * 注意它尚未 `ledger init`——#12 之后 init 会拒绝它，用例要看的是协议先于机制拒绝派发。
    */
   'scaffold-contract': (site) => {
-    const scaffold = agentkitJson(['verify', 'scaffold', '--kind', 'contract', '--workdir', site.repo, '--base-sha', site.head]);
+    const scaffold = agentkitJson([
+      'verify',
+      'scaffold',
+      '--kind',
+      'contract',
+      '--workdir',
+      site.repo,
+      '--base-sha',
+      site.head,
+    ]);
     writeJson(join(site.repo, 'contract.json'), scaffold);
     git(site.repo, ['add', 'contract.json']);
     git(site.repo, ['commit', '--quiet', '-m', 'chore: 放入 scaffold 原样契约']);
@@ -408,7 +486,11 @@ const SETUPS = {
    */
   'ledger-implementations-passed': (site) => {
     const digests = skillDigests();
-    const contract = normalizeTo(site.session, 'contract', substantiveContract({ contractId: 'case-7', digests, independent: true }));
+    const contract = normalizeTo(
+      site.session,
+      'contract',
+      substantiveContract({ contractId: 'case-7', digests, independent: true }),
+    );
     writeJson(join(site.repo, 'contract.json'), contract);
     git(site.repo, ['add', 'contract.json']);
     git(site.repo, ['commit', '--quiet', '-m', 'chore: 放入本批改动的任务契约']);
@@ -417,20 +499,74 @@ const SETUPS = {
     const work = commitImplementations(site.repo);
 
     const stateRoot = join(site.session, SESSION_STATE);
-    const initialized = agentkitJson(['orchestrate', 'ledger', 'init', '--contract', join(site.repo, 'contract.json'), '--state-root', stateRoot, '--ledger-id', 'case-7']);
+    const initialized = agentkitJson([
+      'orchestrate',
+      'ledger',
+      'init',
+      '--contract',
+      join(site.repo, 'contract.json'),
+      '--state-root',
+      stateRoot,
+      '--ledger-id',
+      'case-7',
+    ]);
     const ledger = initialized.ledger;
-    const input = (/** @type {string} */ name, /** @type {unknown} */ value) => { const path = join(site.session, name); writeJson(path, value); return path; };
+    const input = (/** @type {string} */ name, /** @type {unknown} */ value) => {
+      const path = join(site.session, name);
+      writeJson(path, value);
+      return path;
+    };
 
     const objectives = { 'impl-sum': '给 sum 补齐边界处理', 'impl-greet': '给 greet 加上多语言' };
     for (const nodeId of work.nodes) {
-      agentkit(['orchestrate', 'ledger', 'add-node', '--ledger', ledger, '--input', input(`${nodeId}.node.json`, {
-        node_id: nodeId,
-        objective: objectives[nodeId],
-        verification: { requirement: 'worker_self_check', provider: 'none', artifact_scope: 'node_output' },
-      })]);
-      agentkit(['orchestrate', 'ledger', 'dispatch-record', '--ledger', ledger, '--node', nodeId, '--input', input(`${nodeId}.dispatch.json`, dispatchRecord(nodeId))]);
-      agentkit(['orchestrate', 'ledger', 'attach', '--ledger', ledger, '--node', nodeId, '--type', 'artifact', '--input', input(`${nodeId}.artifact.json`, artifactRef(work.artifact, work.base))]);
-      agentkit(['orchestrate', 'ledger', 'update', '--ledger', ledger, '--node', nodeId, '--input', input(`${nodeId}.pass.json`, { state: 'passed' })]);
+      agentkit([
+        'orchestrate',
+        'ledger',
+        'add-node',
+        '--ledger',
+        ledger,
+        '--input',
+        input(`${nodeId}.node.json`, {
+          node_id: nodeId,
+          objective: objectives[nodeId],
+          verification: { requirement: 'worker_self_check', provider: 'none', artifact_scope: 'node_output' },
+        }),
+      ]);
+      agentkit([
+        'orchestrate',
+        'ledger',
+        'dispatch-record',
+        '--ledger',
+        ledger,
+        '--node',
+        nodeId,
+        '--input',
+        input(`${nodeId}.dispatch.json`, dispatchRecord(nodeId)),
+      ]);
+      agentkit([
+        'orchestrate',
+        'ledger',
+        'attach',
+        '--ledger',
+        ledger,
+        '--node',
+        nodeId,
+        '--type',
+        'artifact',
+        '--input',
+        input(`${nodeId}.artifact.json`, artifactRef(work.artifact, work.base)),
+      ]);
+      agentkit([
+        'orchestrate',
+        'ledger',
+        'update',
+        '--ledger',
+        ledger,
+        '--node',
+        nodeId,
+        '--input',
+        input(`${nodeId}.pass.json`, { state: 'passed' }),
+      ]);
     }
 
     // 读回 #13 的覆盖规则结论，写进 notes：每份 observation 自带「现场确实卡在这里」的证据。
@@ -460,7 +596,11 @@ const SETUPS = {
    */
   'implementer-self-report': (site) => {
     const digests = skillDigests();
-    const contract = normalizeTo(site.session, 'contract', substantiveContract({ contractId: 'case-11', digests, independent: true }));
+    const contract = normalizeTo(
+      site.session,
+      'contract',
+      substantiveContract({ contractId: 'case-11', digests, independent: true }),
+    );
     writeJson(join(site.repo, 'contract.json'), contract);
     git(site.repo, ['add', 'contract.json']);
     git(site.repo, ['commit', '--quiet', '-m', 'chore: 放入本批改动的任务契约']);
@@ -483,17 +623,65 @@ const SETUPS = {
     git(site.repo, ['commit', '--quiet', '-m', 'chore: 留下实现方自己的自查记录']);
 
     const stateRoot = join(site.session, SESSION_STATE);
-    const initialized = agentkitJson(['orchestrate', 'ledger', 'init', '--contract', join(site.repo, 'contract.json'), '--state-root', stateRoot, '--ledger-id', 'case-11']);
+    const initialized = agentkitJson([
+      'orchestrate',
+      'ledger',
+      'init',
+      '--contract',
+      join(site.repo, 'contract.json'),
+      '--state-root',
+      stateRoot,
+      '--ledger-id',
+      'case-11',
+    ]);
     const ledger = initialized.ledger;
-    const input = (/** @type {string} */ name, /** @type {unknown} */ value) => { const path = join(site.session, name); writeJson(path, value); return path; };
+    const input = (/** @type {string} */ name, /** @type {unknown} */ value) => {
+      const path = join(site.session, name);
+      writeJson(path, value);
+      return path;
+    };
 
-    agentkit(['orchestrate', 'ledger', 'add-node', '--ledger', ledger, '--input', input('impl-a.node.json', {
-      node_id: 'impl-a',
-      objective: '给 sum 补齐边界处理，交付需要独立证据',
-      verification: { requirement: 'independent_evidence', provider: 'verify-agent-output', artifact_scope: 'integration_candidate' },
-    })]);
-    agentkit(['orchestrate', 'ledger', 'dispatch-record', '--ledger', ledger, '--node', 'impl-a', '--input', input('impl-a.dispatch.json', dispatchRecord('impl-a'))]);
-    agentkit(['orchestrate', 'ledger', 'attach', '--ledger', ledger, '--node', 'impl-a', '--type', 'artifact', '--input', input('impl-a.artifact.json', artifactRef(artifact, base))]);
+    agentkit([
+      'orchestrate',
+      'ledger',
+      'add-node',
+      '--ledger',
+      ledger,
+      '--input',
+      input('impl-a.node.json', {
+        node_id: 'impl-a',
+        objective: '给 sum 补齐边界处理，交付需要独立证据',
+        verification: {
+          requirement: 'independent_evidence',
+          provider: 'verify-agent-output',
+          artifact_scope: 'integration_candidate',
+        },
+      }),
+    ]);
+    agentkit([
+      'orchestrate',
+      'ledger',
+      'dispatch-record',
+      '--ledger',
+      ledger,
+      '--node',
+      'impl-a',
+      '--input',
+      input('impl-a.dispatch.json', dispatchRecord('impl-a')),
+    ]);
+    agentkit([
+      'orchestrate',
+      'ledger',
+      'attach',
+      '--ledger',
+      ledger,
+      '--node',
+      'impl-a',
+      '--type',
+      'artifact',
+      '--input',
+      input('impl-a.artifact.json', artifactRef(artifact, base)),
+    ]);
     return {
       vars: { LEDGER_DIR: ledger, STATE_ROOT: stateRoot, SELF_REPORT_PATH },
       notes: [
@@ -507,23 +695,75 @@ const SETUPS = {
   /** 第 10 条：一个声明 independent_evidence 的节点，已派发、有产物，但没有任何 Evidence。 */
   'ledger-node-awaiting-evidence': (site) => {
     const digests = skillDigests();
-    const contract = normalizeTo(site.session, 'contract', substantiveContract({ contractId: 'case-10', digests, independent: true }));
+    const contract = normalizeTo(
+      site.session,
+      'contract',
+      substantiveContract({ contractId: 'case-10', digests, independent: true }),
+    );
     writeJson(join(site.repo, 'contract.json'), contract);
     git(site.repo, ['add', 'contract.json']);
     git(site.repo, ['commit', '--quiet', '-m', 'chore: 放入本批改动的任务契约']);
 
     const stateRoot = join(site.session, SESSION_STATE);
-    const initialized = agentkitJson(['orchestrate', 'ledger', 'init', '--contract', join(site.repo, 'contract.json'), '--state-root', stateRoot, '--ledger-id', 'case-10']);
+    const initialized = agentkitJson([
+      'orchestrate',
+      'ledger',
+      'init',
+      '--contract',
+      join(site.repo, 'contract.json'),
+      '--state-root',
+      stateRoot,
+      '--ledger-id',
+      'case-10',
+    ]);
     const ledger = initialized.ledger;
-    const input = (/** @type {string} */ name, /** @type {unknown} */ value) => { const path = join(site.session, name); writeJson(path, value); return path; };
+    const input = (/** @type {string} */ name, /** @type {unknown} */ value) => {
+      const path = join(site.session, name);
+      writeJson(path, value);
+      return path;
+    };
 
-    agentkit(['orchestrate', 'ledger', 'add-node', '--ledger', ledger, '--input', input('impl-a.node.json', {
-      node_id: 'impl-a',
-      objective: '给 sum 补齐边界处理，交付需要独立证据',
-      verification: { requirement: 'independent_evidence', provider: 'verify-agent-output', artifact_scope: 'integration_candidate' },
-    })]);
-    agentkit(['orchestrate', 'ledger', 'dispatch-record', '--ledger', ledger, '--node', 'impl-a', '--input', input('impl-a.dispatch.json', dispatchRecord('impl-a'))]);
-    agentkit(['orchestrate', 'ledger', 'attach', '--ledger', ledger, '--node', 'impl-a', '--type', 'artifact', '--input', input('impl-a.artifact.json', artifactRef(site.head))]);
+    agentkit([
+      'orchestrate',
+      'ledger',
+      'add-node',
+      '--ledger',
+      ledger,
+      '--input',
+      input('impl-a.node.json', {
+        node_id: 'impl-a',
+        objective: '给 sum 补齐边界处理，交付需要独立证据',
+        verification: {
+          requirement: 'independent_evidence',
+          provider: 'verify-agent-output',
+          artifact_scope: 'integration_candidate',
+        },
+      }),
+    ]);
+    agentkit([
+      'orchestrate',
+      'ledger',
+      'dispatch-record',
+      '--ledger',
+      ledger,
+      '--node',
+      'impl-a',
+      '--input',
+      input('impl-a.dispatch.json', dispatchRecord('impl-a')),
+    ]);
+    agentkit([
+      'orchestrate',
+      'ledger',
+      'attach',
+      '--ledger',
+      ledger,
+      '--node',
+      'impl-a',
+      '--type',
+      'artifact',
+      '--input',
+      input('impl-a.artifact.json', artifactRef(site.head)),
+    ]);
     return {
       vars: { LEDGER_DIR: ledger, STATE_ROOT: stateRoot },
       notes: ['impl-a 声明 independent_evidence，已有产物但没有任何 Evidence 附件'],

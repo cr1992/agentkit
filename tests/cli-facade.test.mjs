@@ -13,21 +13,63 @@ const run = (args) => spawnSync(process.execPath, args, { cwd: ROOT, encoding: '
 // 新入口 → 旧入口。P1 的 facade 只加前缀，转发路径上三样东西必须完全一致：
 // stdout 逐字节、stderr 逐字节、退出码。成功与失败两类形状都要覆盖。
 const EQUIVALENT = [
-  [['worktree', 'capabilities', '--json'], ['manage-worktrees', 'worktree-mgr.mjs', 'capabilities', '--json']],
-  [['worktree', 'scan', '--help'], ['manage-worktrees', 'worktree-scan.mjs', '--help']],
-  [['contract', 'capabilities'], ['orchestrate-subagents', 'contract-tool.mjs', 'capabilities']],
-  [['contract', '--help'], ['orchestrate-subagents', 'contract-tool.mjs', '--help']],
-  [['orchestrate', 'ledger', 'capabilities', '--json'], ['orchestrate-subagents', 'orchestration-ledger.mjs', 'capabilities', '--json']],
-  [['orchestrate', 'preflight', 'capabilities'], ['orchestrate-subagents', 'worker-capability-preflight.mjs', 'capabilities']],
-  [['orchestrate', 'review-budget', 'capabilities'], ['orchestrate-subagents', 'review-budget.mjs', 'capabilities']],
-  [['orchestrate', 'reflection', 'capabilities'], ['orchestrate-subagents', 'orchestration-reflection.mjs', 'capabilities']],
-  [['verify', 'capabilities', '--json'], ['verify-agent-output', 'verification-runtime.mjs', 'capabilities', '--json']],
-  [['loop', 'capabilities'], ['run-agent-verify-loop', 'loop-runtime.mjs', 'capabilities']],
+  [
+    ['worktree', 'capabilities', '--json'],
+    ['manage-worktrees', 'worktree-mgr.mjs', 'capabilities', '--json'],
+  ],
+  [
+    ['worktree', 'scan', '--help'],
+    ['manage-worktrees', 'worktree-scan.mjs', '--help'],
+  ],
+  [
+    ['contract', 'capabilities'],
+    ['orchestrate-subagents', 'contract-tool.mjs', 'capabilities'],
+  ],
+  [
+    ['contract', '--help'],
+    ['orchestrate-subagents', 'contract-tool.mjs', '--help'],
+  ],
+  [
+    ['orchestrate', 'ledger', 'capabilities', '--json'],
+    ['orchestrate-subagents', 'orchestration-ledger.mjs', 'capabilities', '--json'],
+  ],
+  [
+    ['orchestrate', 'preflight', 'capabilities'],
+    ['orchestrate-subagents', 'worker-capability-preflight.mjs', 'capabilities'],
+  ],
+  [
+    ['orchestrate', 'review-budget', 'capabilities'],
+    ['orchestrate-subagents', 'review-budget.mjs', 'capabilities'],
+  ],
+  [
+    ['orchestrate', 'reflection', 'capabilities'],
+    ['orchestrate-subagents', 'orchestration-reflection.mjs', 'capabilities'],
+  ],
+  [
+    ['verify', 'capabilities', '--json'],
+    ['verify-agent-output', 'verification-runtime.mjs', 'capabilities', '--json'],
+  ],
+  [
+    ['loop', 'capabilities'],
+    ['run-agent-verify-loop', 'loop-runtime.mjs', 'capabilities'],
+  ],
   // 失败形状同样要等价：这三个入口在无效输入上各有自己的错误载荷与非零退出码。
-  [['loop', '--help'], ['run-agent-verify-loop', 'loop-runtime.mjs', '--help']],
-  [['host', 'cache'], ['orchestrate-subagents', 'host_capability_cache.mjs']],
-  [['host', 'model-policy', '--help'], ['orchestrate-subagents', 'resolve_model_policy.mjs', '--help']],
-  [['verify', 'digest', '--kind', 'contract'], ['verify-agent-output', 'verification-runtime.mjs', 'digest', '--kind', 'contract']],
+  [
+    ['loop', '--help'],
+    ['run-agent-verify-loop', 'loop-runtime.mjs', '--help'],
+  ],
+  [
+    ['host', 'cache'],
+    ['orchestrate-subagents', 'host_capability_cache.mjs'],
+  ],
+  [
+    ['host', 'model-policy', '--help'],
+    ['orchestrate-subagents', 'resolve_model_policy.mjs', '--help'],
+  ],
+  [
+    ['verify', 'digest', '--kind', 'contract'],
+    ['verify-agent-output', 'verification-runtime.mjs', 'digest', '--kind', 'contract'],
+  ],
 ];
 
 test('facade 转发与直接调用旧入口在 stdout、stderr 与退出码上完全等价', () => {
@@ -43,8 +85,23 @@ test('facade 转发与直接调用旧入口在 stdout、stderr 与退出码上�
 });
 
 test('facade 覆盖了每个域与每个二级工具', () => {
-  const covered = new Set(EQUIVALENT.map(([viaCli]) => viaCli.slice(0, viaCli[0] === 'orchestrate' || viaCli[0] === 'host' ? 2 : 1).join(' ')));
-  for (const expected of ['worktree', 'contract', 'verify', 'loop', 'orchestrate ledger', 'orchestrate preflight', 'orchestrate review-budget', 'orchestrate reflection', 'host cache', 'host model-policy']) {
+  const covered = new Set(
+    EQUIVALENT.map(([viaCli]) =>
+      viaCli.slice(0, viaCli[0] === 'orchestrate' || viaCli[0] === 'host' ? 2 : 1).join(' '),
+    ),
+  );
+  for (const expected of [
+    'worktree',
+    'contract',
+    'verify',
+    'loop',
+    'orchestrate ledger',
+    'orchestrate preflight',
+    'orchestrate review-budget',
+    'orchestrate reflection',
+    'host cache',
+    'host model-policy',
+  ]) {
     assert.ok(covered.has(expected), `等价性用例未覆盖 ${expected}`);
   }
 });
@@ -89,9 +146,16 @@ test('docs 只输出参考文档原文，缺主题时列索引', () => {
   const orchestrate = run([CLI, 'docs', 'orchestrate']);
   assert.equal(orchestrate.status, 0);
   assert.deepEqual(orchestrate.stdout.trim().split('\n'), [
-    'contract-interview', 'dispatch-contract', 'failure-routing-and-recovery', 'host-capability-cache',
-    'isolation-fallback', 'model-routing-config', 'orchestration-runtime', 'review-budget',
-    'task-playbooks', 'user-facing-reporting',
+    'contract-interview',
+    'dispatch-contract',
+    'failure-routing-and-recovery',
+    'host-capability-cache',
+    'isolation-fallback',
+    'model-routing-config',
+    'orchestration-runtime',
+    'review-budget',
+    'task-playbooks',
+    'user-facing-reporting',
   ]);
   const interview = run([CLI, 'docs', 'orchestrate', 'contract-interview']);
   assert.equal(interview.status, 0);
@@ -104,7 +168,11 @@ test('docs 只输出参考文档原文，缺主题时列索引', () => {
   const missing = run([CLI, 'docs', 'verify', 'nope']);
   assert.equal(missing.status, 2);
   assert.match(missing.stderr, /没有主题/u);
-  assert.deepEqual(missing.stdout.trim().split('\n'), ['evidence-schema', 'input-preparation', 'verification-protocol']);
+  assert.deepEqual(missing.stdout.trim().split('\n'), [
+    'evidence-schema',
+    'input-preparation',
+    'verification-protocol',
+  ]);
 
   const badDomain = run([CLI, 'docs', 'nope']);
   assert.equal(badDomain.status, 2);

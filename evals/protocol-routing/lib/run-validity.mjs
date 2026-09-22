@@ -58,14 +58,25 @@ export function classifyRunValidity(observation) {
   //    退出码也不是 0，所以这一条必须排在所有故障判据前面——否则每一次提前终止
   //    都会被当成崩溃重试一遍，省下来的时间又原样还回去。
   if (end?.early_terminated) {
-    return { valid: true, signal: null, reason: `正向断言在第 ${end.early_terminated.at_seq} 个事件成立，会话由 harness 主动终止` };
+    return {
+      valid: true,
+      signal: null,
+      reason: `正向断言在第 ${end.early_terminated.at_seq} 个事件成立，会话由 harness 主动终止`,
+    };
   }
 
   // 1) 宿主在 result 事件上明确标了错误。最强的一条，且与工具调用数无关。
   if (host?.is_error === true) {
     const status = typeof host.api_error_status === 'number' ? `，api_error_status=${host.api_error_status}` : '';
-    const text = typeof host.final_text_prefix === 'string' && host.final_text_prefix.trim() ? `：${oneLine(host.final_text_prefix)}` : '';
-    return { valid: false, signal: 'result_is_error', reason: `宿主 result 事件 is_error=true（subtype=${host.subtype ?? '未知'}，num_turns=${host.num_turns ?? '未知'}${status}）${text}` };
+    const text =
+      typeof host.final_text_prefix === 'string' && host.final_text_prefix.trim()
+        ? `：${oneLine(host.final_text_prefix)}`
+        : '';
+    return {
+      valid: false,
+      signal: 'result_is_error',
+      reason: `宿主 result 事件 is_error=true（subtype=${host.subtype ?? '未知'}，num_turns=${host.num_turns ?? '未知'}${status}）${text}`,
+    };
   }
 
   // 2) 宿主用错误 subtype 收尾（`error_max_turns` 除外，见文件头）。
@@ -77,7 +88,11 @@ export function classifyRunValidity(observation) {
   //    留作兜底——万一某个宿主版本忘了把 is_error 置起来。
   const finalText = typeof host?.final_text_prefix === 'string' ? host.final_text_prefix.trimStart() : '';
   if (finalText.startsWith(API_ERROR_PREFIX)) {
-    return { valid: false, signal: 'final_text_api_error', reason: `最终文本以「${API_ERROR_PREFIX}」开头：${oneLine(finalText)}` };
+    return {
+      valid: false,
+      signal: 'final_text_api_error',
+      reason: `最终文本以「${API_ERROR_PREFIX}」开头：${oneLine(finalText)}`,
+    };
   }
 
   // 4) 会话进程非零退出**且**零工具事件：连 result 事件都没拿到的崩溃。

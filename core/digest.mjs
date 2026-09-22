@@ -51,7 +51,10 @@ export function createDigestKit({ ValidationError, strict = false, defaultDigest
     if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
     if (typeof value === 'object') {
       const object = /** @type {Record<string, unknown>} */ (value);
-      return `{${Object.keys(object).sort().map((key) => `${canonicalJson(key)}:${canonicalJson(object[key])}`).join(',')}}`;
+      return `{${Object.keys(object)
+        .sort()
+        .map((key) => `${canonicalJson(key)}:${canonicalJson(object[key])}`)
+        .join(',')}}`;
     }
     throw new ValidationError(`canonical JSON 不支持 ${typeof value}`);
   }

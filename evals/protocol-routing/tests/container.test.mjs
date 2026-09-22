@@ -74,7 +74,10 @@ test('容器命令行：不碰 docker.sock、不提权、不共享宿主网络�
   assert.ok(!joined.includes('--cap-add'), '不得加回任何 capability');
   assert.ok(!joined.includes('--security-opt seccomp=unconfined'), '不得关掉 seccomp');
   assert.ok(!/(^|\s)-v\s+[^\s]*\$HOME/u.test(joined), '不得挂载宿主 HOME');
-  assert.ok(!/(^|\s)-v\s+\/(?:Users|home|root)\/[^\s]*:\/(?:root|home)/u.test(joined), '不得把宿主家目录挂进容器家目录');
+  assert.ok(
+    !/(^|\s)-v\s+\/(?:Users|home|root)\/[^\s]*:\/(?:root|home)/u.test(joined),
+    '不得把宿主家目录挂进容器家目录',
+  );
 });
 
 test('容器命令行：token 只以键名出现，取值绝不进 argv', () => {
@@ -97,7 +100,10 @@ test('容器命令行：token 只以键名出现，取值绝不进 argv', () => 
 
 test('容器内脚本：以 run.mjs + claude-headless + --allow-bypass-permissions 起评测，结果写 /out', () => {
   const script = buildEvalScript(['--model', 'some-model-id', '--cases', '7,8', '--runs', '10']);
-  assert.match(script, /node evals\/protocol-routing\/run\.mjs --driver claude-headless --allow-bypass-permissions --out \/out/u);
+  assert.match(
+    script,
+    /node evals\/protocol-routing\/run\.mjs --driver claude-headless --allow-bypass-permissions --out \/out/u,
+  );
   assert.match(script, /'--model' 'some-model-id'/u);
   assert.match(script, /'--cases' '7,8'/u);
   assert.match(script, /'--runs' '10'/u);
@@ -132,7 +138,10 @@ test('容器自检脚本里的平凡基线数字与用例表一致（正向 6 �
   const write = trivialBaseline(CASES, 'WRITE', 3);
   // 自检脚本里那几条 grep 是「README 记载的数字」的唯一机械闸门；
   // 它们和用例表必须由同一个函数算出来，不能各写各的。
-  assert.ok(script.includes(`| 永远 NONE | ${none.positive.k}/${none.positive.n} | ${none.forbidden.k}/${none.forbidden.n} |`), script);
+  assert.ok(
+    script.includes(`| 永远 NONE | ${none.positive.k}/${none.positive.n} | ${none.forbidden.k}/${none.forbidden.n} |`),
+    script,
+  );
   assert.ok(script.includes(`| 正向 | ${none.positive.k}/${none.positive.n} |`));
   assert.ok(script.includes(`| 禁止 | ${none.forbidden.k}/${none.forbidden.n} |`));
   assert.ok(script.includes(`| 正向 | ${write.positive.k}/${write.positive.n} |`));
@@ -149,7 +158,18 @@ test('构建镜像：上下文是 container/ 目录，版本可钉', () => {
 });
 
 test('参数切分：本脚本吃掉自己的选项，其余原样透传给 run.mjs', () => {
-  const { options, passthrough } = parseRunnerArgs(['--out', '/tmp/x', '--engine', 'podman', '--model', 'm', '--cases', '1', '--runs', '1']);
+  const { options, passthrough } = parseRunnerArgs([
+    '--out',
+    '/tmp/x',
+    '--engine',
+    'podman',
+    '--model',
+    'm',
+    '--cases',
+    '1',
+    '--runs',
+    '1',
+  ]);
   assert.equal(options.out, '/tmp/x');
   assert.equal(options.engine, 'podman');
   assert.equal(options.image, DEFAULT_IMAGE);
@@ -170,8 +190,14 @@ test('分片：每片一条命令行、一个独立结果目录，安全面逐�
     options: { memory: '4g', 'pids-limit': '512' },
     authEnvKeys: ['CLAUDE_CODE_OAUTH_TOKEN'],
   });
-  assert.deepEqual(jobs.map((job) => job.index), [1, 2, 3]);
-  assert.deepEqual(jobs.map((job) => job.outDir), ['/host/out/shard-1', '/host/out/shard-2', '/host/out/shard-3']);
+  assert.deepEqual(
+    jobs.map((job) => job.index),
+    [1, 2, 3],
+  );
+  assert.deepEqual(
+    jobs.map((job) => job.outDir),
+    ['/host/out/shard-1', '/host/out/shard-2', '/host/out/shard-3'],
+  );
   for (const job of jobs) {
     const joined = job.args.join(' ');
     // 每片各自挂自己的结果目录；仓库仍然只读，降权项一个都不少。
@@ -186,9 +212,14 @@ test('分片：每片一条命令行、一个独立结果目录，安全面逐�
   }
   // 单片退化成原来那一条：结果直接写 --out，不加 --shard。
   const single = buildShardJobs({
-    shards: 1, selftest: false, passthrough: ['--model', 'm'],
-    image: DEFAULT_IMAGE, repoDir: '/host/agentkit', outDir: '/host/out',
-    options: { memory: '4g', 'pids-limit': '512' }, authEnvKeys: [],
+    shards: 1,
+    selftest: false,
+    passthrough: ['--model', 'm'],
+    image: DEFAULT_IMAGE,
+    repoDir: '/host/agentkit',
+    outDir: '/host/out',
+    options: { memory: '4g', 'pids-limit': '512' },
+    authEnvKeys: [],
   });
   assert.equal(single.length, 1);
   assert.equal(single[0].outDir, '/host/out');
@@ -215,17 +246,23 @@ test('参数切分：缺 --out 或引擎不认识当场报错', () => {
 
 test('认证：两者都空就拒绝启动，报错要说清怎么拿 token', () => {
   assert.deepEqual([...AUTH_ENV_KEYS], ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY']);
-  assert.throws(() => resolveAuthEnvKeys({}), (error) => {
-    assert.equal(/** @type {Error} */ (error).message, MISSING_AUTH_MESSAGE);
-    return true;
-  });
+  assert.throws(
+    () => resolveAuthEnvKeys({}),
+    (error) => {
+      assert.equal(/** @type {Error} */ (error).message, MISSING_AUTH_MESSAGE);
+      return true;
+    },
+  );
   assert.throws(() => resolveAuthEnvKeys({ CLAUDE_CODE_OAUTH_TOKEN: '', ANTHROPIC_API_KEY: '' }), /拒绝启动/u);
   assert.match(MISSING_AUTH_MESSAGE, /claude setup-token/u);
   assert.match(MISSING_AUTH_MESSAGE, /订阅/u);
   // API key 是替代路径，不是必须项。
   assert.deepEqual(resolveAuthEnvKeys({ CLAUDE_CODE_OAUTH_TOKEN: 'tok' }), ['CLAUDE_CODE_OAUTH_TOKEN']);
   assert.deepEqual(resolveAuthEnvKeys({ ANTHROPIC_API_KEY: 'key' }), ['ANTHROPIC_API_KEY']);
-  assert.deepEqual(resolveAuthEnvKeys({ CLAUDE_CODE_OAUTH_TOKEN: 'tok', ANTHROPIC_API_KEY: 'key' }), ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY']);
+  assert.deepEqual(resolveAuthEnvKeys({ CLAUDE_CODE_OAUTH_TOKEN: 'tok', ANTHROPIC_API_KEY: 'key' }), [
+    'CLAUDE_CODE_OAUTH_TOKEN',
+    'ANTHROPIC_API_KEY',
+  ]);
 });
 
 test('透传参数走单引号转义，塞不进额外的 shell 命令', () => {
@@ -251,7 +288,10 @@ test('透传参数走单引号转义，塞不进额外的 shell 命令', () => {
 test('CLAUDE_CODE_OAUTH_TOKEN 进了会话环境白名单，与 ANTHROPIC_API_KEY 同级', () => {
   assert.ok(INHERITED_ENV_KEYS.includes('CLAUDE_CODE_OAUTH_TOKEN'));
   assert.ok(INHERITED_ENV_KEYS.includes('ANTHROPIC_API_KEY'));
-  const env = buildSessionEnv({ PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: FAKE_TOKEN, GH_TOKEN: 'leak' }, { HOME: '/session' });
+  const env = buildSessionEnv(
+    { PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: FAKE_TOKEN, GH_TOKEN: 'leak' },
+    { HOME: '/session' },
+  );
   assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, FAKE_TOKEN, '订阅 token 要能传进被测会话，否则会话起不来');
   assert.ok(!Object.hasOwn(env, 'GH_TOKEN'));
   // 白名单是精确键集合，加一个认证项不等于放开一类前缀。
@@ -271,7 +311,10 @@ test('脱敏：认证取值出现在报告文本里会被替换掉，太短的�
   assert.equal(redactSecrets('xxx', { ANTHROPIC_API_KEY: 'x' }), 'xxx');
   assert.equal(secretValues({ ANTHROPIC_API_KEY: 'x'.repeat(MIN_SECRET_LENGTH - 1) }).length, 0);
   // 一个取值是另一个的前缀时，先替换长的，不留半截。
-  const prefixed = redactSecrets('AAAAAAAABBBB', { ANTHROPIC_API_KEY: 'AAAAAAAA', CLAUDE_CODE_OAUTH_TOKEN: 'AAAAAAAABBBB' });
+  const prefixed = redactSecrets('AAAAAAAABBBB', {
+    ANTHROPIC_API_KEY: 'AAAAAAAA',
+    CLAUDE_CODE_OAUTH_TOKEN: 'AAAAAAAABBBB',
+  });
   assert.equal(prefixed, '«REDACTED:CLAUDE_CODE_OAUTH_TOKEN»');
   // 替换串不含引号与反斜杠，对 JSON 文本替换后仍是合法 JSON。
   JSON.parse(redactSecrets(JSON.stringify({ note: FAKE_TOKEN }), env));
@@ -283,7 +326,17 @@ test('端到端：带着假 token 跑一遍回放路径，扫描整个输出目�
   try {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = FAKE_TOKEN;
     process.env.ANTHROPIC_API_KEY = FAKE_KEY;
-    const code = await main(['--driver', 'replay', '--replay', join(ROOT, 'fixtures', 'replay', 'always-write'), '--runs', '1', '--out', out, '--quiet']);
+    const code = await main([
+      '--driver',
+      'replay',
+      '--replay',
+      join(ROOT, 'fixtures', 'replay', 'always-write'),
+      '--runs',
+      '1',
+      '--out',
+      out,
+      '--quiet',
+    ]);
     assert.equal(code, 0);
     const files = walk(out);
     assert.ok(files.length >= 2, '至少应当产出 report.json 与 report.md');
@@ -293,8 +346,10 @@ test('端到端：带着假 token 跑一遍回放路径，扫描整个输出目�
       assert.ok(!content.includes(FAKE_KEY), `${file} 里出现了 ANTHROPIC_API_KEY 的取值`);
     }
   } finally {
-    if (saved.token === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN; else process.env.CLAUDE_CODE_OAUTH_TOKEN = saved.token;
-    if (saved.key === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = saved.key;
+    if (saved.token === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    else process.env.CLAUDE_CODE_OAUTH_TOKEN = saved.token;
+    if (saved.key === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = saved.key;
     rmSync(out, { recursive: true, force: true });
   }
 });
@@ -303,7 +358,12 @@ test('端到端：会话留档只记环境变量键名，不记取值', () => {
   // 无头驱动器写 command.json 时只落 Object.keys(env)。这里直接钉住那份形状：
   // 取值一旦进了 command.json，整个结果目录就成了凭据外泄面。
   const env = buildSessionEnv({ PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: FAKE_TOKEN }, { HOME: '/session' });
-  const record = JSON.stringify({ bin: 'claude', args: ['-p', 'prompt'], cwd: '/session/repo', env_keys: Object.keys(env).sort() });
+  const record = JSON.stringify({
+    bin: 'claude',
+    args: ['-p', 'prompt'],
+    cwd: '/session/repo',
+    env_keys: Object.keys(env).sort(),
+  });
   assert.ok(record.includes('CLAUDE_CODE_OAUTH_TOKEN'), '键名要留，供复现时核对');
   assert.ok(!record.includes(FAKE_TOKEN), '取值不得进留档');
 });

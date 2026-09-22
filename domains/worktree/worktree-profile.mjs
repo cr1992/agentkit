@@ -223,10 +223,7 @@ export function validateProfile(raw) {
   if (changeRequest.target_branch !== undefined && changeRequest.target_branch !== null) {
     requireNonEmptyString(changeRequest.target_branch, 'profile.change_request.target_branch');
   }
-  if (
-    changeRequest.remove_source_branch !== undefined &&
-    typeof changeRequest.remove_source_branch !== 'boolean'
-  ) {
+  if (changeRequest.remove_source_branch !== undefined && typeof changeRequest.remove_source_branch !== 'boolean') {
     throw new WorktreeProfileError(
       'PROFILE_INVALID_TYPE',
       'profile.change_request.remove_source_branch 必须是 boolean。',
@@ -304,20 +301,14 @@ export function validateProfile(raw) {
 
   const ephemeralPathPatterns = raw.ephemeral_path_patterns ?? [];
   if (!Array.isArray(ephemeralPathPatterns)) {
-    throw new WorktreeProfileError(
-      'PROFILE_INVALID_TYPE',
-      'profile.ephemeral_path_patterns 必须是 string array。',
-    );
+    throw new WorktreeProfileError('PROFILE_INVALID_TYPE', 'profile.ephemeral_path_patterns 必须是 string array。');
   }
   for (const [index, pattern] of ephemeralPathPatterns.entries()) {
     requireNonEmptyString(pattern, `profile.ephemeral_path_patterns[${index}]`);
   }
   const postIntegrateSteps = raw.post_integrate_steps ?? [];
   if (!Array.isArray(postIntegrateSteps)) {
-    throw new WorktreeProfileError(
-      'PROFILE_INVALID_TYPE',
-      'profile.post_integrate_steps 必须是 array。',
-    );
+    throw new WorktreeProfileError('PROFILE_INVALID_TYPE', 'profile.post_integrate_steps 必须是 array。');
   }
   if (postIntegrateSteps.length > POST_INTEGRATE_STEPS_MAX) {
     throw new WorktreeProfileError(
@@ -436,7 +427,11 @@ export function shortenTaskSlug(task) {
 
 /** @param {string} host */
 export function normalizeHostSlug(host) {
-  const normalized = String(host).trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  const normalized = String(host)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
   if (!normalized) throw new WorktreeProfileError('INVALID_HOST_SLUG', 'Agent host 无法生成安全命名 slug。');
   return normalized;
 }
@@ -488,7 +483,10 @@ function selectRepositoryRoot(rootBase, repoName, repositoryId) {
   const fallback = canonicalizeFuturePath(`${preferred}-${repositoryId.slice(0, 8)}`);
   const fallbackStatus = rootAvailability(fallback, repositoryId);
   if (fallbackStatus === 'occupied') {
-    throw new WorktreeProfileError('WORKTREE_ROOT_CONFLICT', `worktree repository root 已被其他 identity 占用: ${fallback}`);
+    throw new WorktreeProfileError(
+      'WORKTREE_ROOT_CONFLICT',
+      `worktree repository root 已被其他 identity 占用: ${fallback}`,
+    );
   }
   return fallback;
 }
@@ -516,7 +514,9 @@ export function claimWorktreeRepositoryRoot(options) {
       const current = readRootMarker(directory);
       if (current?.repository_id === options.repository_id) return realpathSync(directory);
       if (attempt === 0) {
-        directory = canonicalizeFuturePath(join(options.root_base, `${options.repo_name}-${options.repository_id.slice(0, 8)}`));
+        directory = canonicalizeFuturePath(
+          join(options.root_base, `${options.repo_name}-${options.repository_id.slice(0, 8)}`),
+        );
         continue;
       }
       throw new WorktreeProfileError('WORKTREE_ROOT_CONFLICT', `无法认领 worktree repository root: ${directory}`);
@@ -703,9 +703,7 @@ export function resolveSpawnPlan(options) {
   }
   const rootBase = canonicalizeFuturePath(rootCandidate);
   const legacyLayout = renderedPath.startsWith('../');
-  const repositoryRoot = legacyLayout
-    ? rootBase
-    : selectRepositoryRoot(rootBase, context.repo_name, repositoryId);
+  const repositoryRoot = legacyLayout ? rootBase : selectRepositoryRoot(rootBase, context.repo_name, repositoryId);
   const allowedRoot = repositoryRoot;
   const targetCandidate = legacyLayout
     ? resolve(context.primary_worktree, renderedPath)
@@ -746,11 +744,7 @@ export function readRepositoryIdentity(context) {
   if (!existsSync(identityPath)) return null;
   try {
     const value = JSON.parse(readFileSync(identityPath, 'utf8'));
-    if (
-      value &&
-      value.schema_version === PROFILE_SCHEMA_VERSION &&
-      typeof value.repository_id === 'string'
-    ) {
+    if (value && value.schema_version === PROFILE_SCHEMA_VERSION && typeof value.repository_id === 'string') {
       return value;
     }
   } catch {
@@ -794,7 +788,5 @@ export function ensureRepositoryIdentity(context, proposedId = null) {
 /** @param {string} candidate @param {string[]} patterns */
 export function classifyStorage(candidate, patterns = BUILTIN_EPHEMERAL_PATTERNS) {
   const normalized = `${canonicalizeFuturePath(candidate).replaceAll('\\', '/')}/`;
-  return patterns.some((pattern) => normalized.includes(pattern.replaceAll('\\', '/')))
-    ? 'ephemeral'
-    : 'persistent';
+  return patterns.some((pattern) => normalized.includes(pattern.replaceAll('\\', '/'))) ? 'ephemeral' : 'persistent';
 }

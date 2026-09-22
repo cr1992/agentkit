@@ -7,19 +7,35 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { canonicalJson, envelopeDigest, projectContract } from './contract-tool.mjs';
-import { DRIFT_BLOCKED_COMMANDS, FROZEN_AFTER_TERMINAL, LedgerError, main, skillContentDigest } from './orchestration-ledger.mjs';
+import {
+  DRIFT_BLOCKED_COMMANDS,
+  FROZEN_AFTER_TERMINAL,
+  LedgerError,
+  main,
+  skillContentDigest,
+} from './orchestration-ledger.mjs';
 
 const LEDGER_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'orchestration-ledger.mjs');
-const LEDGER_SCHEMA = join(dirname(dirname(dirname(fileURLToPath(import.meta.url)))), 'schemas', 'orchestration-ledger-v1.schema.json');
+const LEDGER_SCHEMA = join(
+  dirname(dirname(dirname(fileURLToPath(import.meta.url)))),
+  'schemas',
+  'orchestration-ledger-v1.schema.json',
+);
 
 const SELF_CHECK = { requirement: 'worker_self_check', provider: 'none', artifact_scope: 'node_output' };
 const CONTROLLER_RECHECK = { requirement: 'controller_recheck', provider: 'none', artifact_scope: 'node_output' };
-const INDEPENDENT_EVIDENCE = { requirement: 'independent_evidence', provider: 'verify-agent-output', artifact_scope: 'integration_candidate' };
+const INDEPENDENT_EVIDENCE = {
+  requirement: 'independent_evidence',
+  provider: 'verify-agent-output',
+  artifact_scope: 'integration_candidate',
+};
 const NOT_APPLICABLE = { requirement: 'not_applicable', provider: 'none', artifact_scope: 'not_applicable' };
 const SHA_A = 'a'.repeat(40);
 const SHA_B = 'b'.repeat(40);
 
-function node(value, verification = SELF_CHECK) { return { ...value, verification }; }
+function node(value, verification = SELF_CHECK) {
+  return { ...value, verification };
+}
 function dispatch(workerId, overrides = {}) {
   return {
     schema_version: 2,
@@ -46,7 +62,17 @@ function dispatch(workerId, overrides = {}) {
     ...overrides,
   };
 }
-function artifactRef(overrides = {}) { return { schema_version: 1, provider: 'caller-supplied', repository_id: 'git:sha1:test', object_format: 'sha1', base_sha: SHA_A, artifact_sha: SHA_B, ...overrides }; }
+function artifactRef(overrides = {}) {
+  return {
+    schema_version: 1,
+    provider: 'caller-supplied',
+    repository_id: 'git:sha1:test',
+    object_format: 'sha1',
+    base_sha: SHA_A,
+    artifact_sha: SHA_B,
+    ...overrides,
+  };
+}
 function evidencePackage(contract, artifact, overrides = {}) {
   const evidence = {
     schema_version: 1,
@@ -60,22 +86,65 @@ function evidencePackage(contract, artifact, overrides = {}) {
     terminal_outcome: 'pass',
     completion_scope: 'verification_only',
     human_gate_required: false,
-    provenance: { provider: 'verify-agent-output', verified_at: '2026-08-12T00:00:00.000Z', verifier_run_id: 'reviewer-run', isolation_assurance: 'host_reported', limitations: [] },
+    provenance: {
+      provider: 'verify-agent-output',
+      verified_at: '2026-08-12T00:00:00.000Z',
+      verifier_run_id: 'reviewer-run',
+      isolation_assurance: 'host_reported',
+      limitations: [],
+    },
     ...overrides,
   };
   evidence.evidence_digest = envelopeDigest(evidence, 'evidence_digest');
   return evidence;
 }
 
-function makeFixture({ independent = false, acceptance = [{ contract_item_id: 'done', requirement: '必要节点均有稳定产物' }], extraFields = {} } = {}) {
+function makeFixture({
+  independent = false,
+  acceptance = [{ contract_item_id: 'done', requirement: '必要节点均有稳定产物' }],
+  extraFields = {},
+} = {}) {
   const root = mkdtempSync(join(tmpdir(), 'ledger-test-'));
-  const skillSet = [{ name: 'orchestrate-subagents', version: '1.1.0', content_digest: skillContentDigest(), provider_mode: 'primary' }];
-  if (independent) skillSet.push({ name: 'verify-agent-output', version: '1.1.0', content_digest: `sha256:${'d'.repeat(64)}`, provider_mode: 'optional' });
-  const contract = { schema_version: 1, contract_id: 'ledger-contract', objective: '编排两个依赖节点', scope: { include: [], exclude: [] }, acceptance, permissions: { mode: 'read_only', writable_paths: [] }, environment: { repository: 'none', isolation: 'caller_supplied' }, skill_set: skillSet, stop_conditions: [], extensions: independent ? { verification: { provider: 'verify-agent-output' } } : {}, ...extraFields };
+  const skillSet = [
+    { name: 'orchestrate-subagents', version: '1.1.0', content_digest: skillContentDigest(), provider_mode: 'primary' },
+  ];
+  if (independent)
+    skillSet.push({
+      name: 'verify-agent-output',
+      version: '1.1.0',
+      content_digest: `sha256:${'d'.repeat(64)}`,
+      provider_mode: 'optional',
+    });
+  const contract = {
+    schema_version: 1,
+    contract_id: 'ledger-contract',
+    objective: '编排两个依赖节点',
+    scope: { include: [], exclude: [] },
+    acceptance,
+    permissions: { mode: 'read_only', writable_paths: [] },
+    environment: { repository: 'none', isolation: 'caller_supplied' },
+    skill_set: skillSet,
+    stop_conditions: [],
+    extensions: independent ? { verification: { provider: 'verify-agent-output' } } : {},
+    ...extraFields,
+  };
   contract.contract_digest = envelopeDigest(contract);
-  const contractPath = join(root, 'contract.json'); writeFileSync(contractPath, JSON.stringify(contract));
-  const input = (name, value) => { const path = join(root, name); writeFileSync(path, JSON.stringify(value)); return path; };
-  const initialized = main(['init', '--contract', contractPath, '--state-root', join(root, 'state'), '--ledger-id', 'ledger']);
+  const contractPath = join(root, 'contract.json');
+  writeFileSync(contractPath, JSON.stringify(contract));
+  const input = (name, value) => {
+    const path = join(root, name);
+    writeFileSync(path, JSON.stringify(value));
+    return path;
+  };
+  const initialized = main([
+    'init',
+    '--contract',
+    contractPath,
+    '--state-root',
+    join(root, 'state'),
+    '--ledger-id',
+    'ledger',
+  ]);
   return { root, contract, input, ...initialized, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -88,146 +157,587 @@ test('init 回显后续 --ledger 应传的绝对路径，误传 state root 时�
 
     // 误把 state root 当 --ledger：恰有一个 ledger 时直接给出应传的路径。
     for (const command of ['status', 'doctor', 'rebuild']) {
-      assert.throws(() => main([command, '--ledger', f.state_root]), /--ledger 需要 ledger 目录而不是 state root；请传 .*ledgers\/ledger$/u, command);
+      assert.throws(
+        () => main([command, '--ledger', f.state_root]),
+        /--ledger 需要 ledger 目录而不是 state root；请传 .*ledgers\/ledger$/u,
+        command,
+      );
     }
 
     // 同一 state root 下有多个 ledger 时列出候选，而不是猜一个。
     main(['init', '--contract', join(f.root, 'contract.json'), '--state-root', f.state_root, '--ledger-id', 'second']);
     assert.throws(() => main(['status', '--ledger', f.state_root]), /请从 .*ledgers 下选一个：ledger, second$/u);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('任务图 barrier、派发回执、稳定产物和终态由 ledger 机械约束', () => {
   const f = makeFixture();
   try {
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('a.json', node({ node_id: 'a', objective: '先完成 A' }))]);
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('b.json', node({ node_id: 'b', objective: '再完成 B' }))]);
-    main(['add-edge', '--ledger', f.ledger_dir, '--input', f.input('edge.json', { from: 'a', to: 'b', kind: 'barrier' })]);
-    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'b', '--input', f.input('dispatch-b-early.json', dispatch('b1'))]), /依赖/);
-    main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'a', '--input', f.input('dispatch-a.json', dispatch('a1'))]);
-    assert.throws(() => main(['update', '--ledger', f.ledger_dir, '--node', 'a', '--input', f.input('pass-a-early.json', { state: 'passed' })]), /稳定交付物/);
-    main(['attach', '--ledger', f.ledger_dir, '--node', 'a', '--type', 'worktree', '--input', f.input('worktree.json', { worktree_id: 'wt-a' })]);
-    assert.throws(() => main(['update', '--ledger', f.ledger_dir, '--node', 'a', '--input', f.input('pass-a-worktree-only.json', { state: 'passed' })]), /稳定交付物/);
-    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'b', '--input', f.input('dispatch-b-still-blocked.json', dispatch('b1'))]), /依赖/);
-    main(['attach', '--ledger', f.ledger_dir, '--node', 'a', '--type', 'artifact', '--input', f.input('artifact.json', artifactRef())]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('a.json', node({ node_id: 'a', objective: '先完成 A' })),
+    ]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('b.json', node({ node_id: 'b', objective: '再完成 B' })),
+    ]);
+    main([
+      'add-edge',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('edge.json', { from: 'a', to: 'b', kind: 'barrier' }),
+    ]);
+    assert.throws(
+      () =>
+        main([
+          'dispatch-record',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'b',
+          '--input',
+          f.input('dispatch-b-early.json', dispatch('b1')),
+        ]),
+      /依赖/,
+    );
+    main([
+      'dispatch-record',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'a',
+      '--input',
+      f.input('dispatch-a.json', dispatch('a1')),
+    ]);
+    assert.throws(
+      () =>
+        main([
+          'update',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'a',
+          '--input',
+          f.input('pass-a-early.json', { state: 'passed' }),
+        ]),
+      /稳定交付物/,
+    );
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'a',
+      '--type',
+      'worktree',
+      '--input',
+      f.input('worktree.json', { worktree_id: 'wt-a' }),
+    ]);
+    assert.throws(
+      () =>
+        main([
+          'update',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'a',
+          '--input',
+          f.input('pass-a-worktree-only.json', { state: 'passed' }),
+        ]),
+      /稳定交付物/,
+    );
+    assert.throws(
+      () =>
+        main([
+          'dispatch-record',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'b',
+          '--input',
+          f.input('dispatch-b-still-blocked.json', dispatch('b1')),
+        ]),
+      /依赖/,
+    );
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'a',
+      '--type',
+      'artifact',
+      '--input',
+      f.input('artifact.json', artifactRef()),
+    ]);
     main(['update', '--ledger', f.ledger_dir, '--node', 'a', '--input', f.input('pass-a.json', { state: 'passed' })]);
-    main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'b', '--input', f.input('dispatch-b.json', dispatch('b1'))]);
-    main(['attach', '--ledger', f.ledger_dir, '--node', 'b', '--type', 'report', '--input', f.input('report.json', { report_id: 'report-b' })]);
+    main([
+      'dispatch-record',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'b',
+      '--input',
+      f.input('dispatch-b.json', dispatch('b1')),
+    ]);
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'b',
+      '--type',
+      'report',
+      '--input',
+      f.input('report.json', { report_id: 'report-b' }),
+    ]);
     main(['update', '--ledger', f.ledger_dir, '--node', 'b', '--input', f.input('pass-b.json', { state: 'passed' })]);
     assert.equal(main(['status', '--ledger', f.ledger_dir]).summary.completion_ready, true);
     assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('派发记录必须完整绑定模型、强度、配置状态与能力证据', () => {
   const f = makeFixture();
   try {
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('node.json', node({ node_id: 'n', objective: 'audit dispatch' }))]);
-    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'n', '--input', f.input('minimal.json', { schema_version: 1, worker_id: 'w', model: 'provider-primary-current', reasoning_effort: 'medium' })]), /字段不完整/);
-    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'n', '--input', f.input('unknown.json', dispatch('w', { unexpected: true }))]), /未知字段/);
-    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'n', '--input', f.input('state.json', dispatch('w', { configuration_state: 'auto-guessed' }))]), /configuration_state/);
-    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'n', '--input', f.input('model-state.json', dispatch('w', { model_resolution_state: 'user-explicit-unverifiable' }))]), /用户当轮显式模型/);
-    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'n', '--input', f.input('host-default-state.json', dispatch('w', { model_resolution_state: 'host-default-unexposed' }))]), /宿主默认派发/);
-    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'n', '--input', f.input('fingerprint.json', dispatch('w', { capability_fingerprint: null }))]), /capability_fingerprint/);
-    const recorded = main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'n', '--input', f.input('valid.json', dispatch('w', { configuration_state: 'session-confirmed', token_budget: 12000, max_attempts: 3 }))]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('node.json', node({ node_id: 'n', objective: 'audit dispatch' })),
+    ]);
+    assert.throws(
+      () =>
+        main([
+          'dispatch-record',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'n',
+          '--input',
+          f.input('minimal.json', {
+            schema_version: 1,
+            worker_id: 'w',
+            model: 'provider-primary-current',
+            reasoning_effort: 'medium',
+          }),
+        ]),
+      /字段不完整/,
+    );
+    assert.throws(
+      () =>
+        main([
+          'dispatch-record',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'n',
+          '--input',
+          f.input('unknown.json', dispatch('w', { unexpected: true })),
+        ]),
+      /未知字段/,
+    );
+    assert.throws(
+      () =>
+        main([
+          'dispatch-record',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'n',
+          '--input',
+          f.input('state.json', dispatch('w', { configuration_state: 'auto-guessed' })),
+        ]),
+      /configuration_state/,
+    );
+    assert.throws(
+      () =>
+        main([
+          'dispatch-record',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'n',
+          '--input',
+          f.input('model-state.json', dispatch('w', { model_resolution_state: 'user-explicit-unverifiable' })),
+        ]),
+      /用户当轮显式模型/,
+    );
+    assert.throws(
+      () =>
+        main([
+          'dispatch-record',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'n',
+          '--input',
+          f.input('host-default-state.json', dispatch('w', { model_resolution_state: 'host-default-unexposed' })),
+        ]),
+      /宿主默认派发/,
+    );
+    assert.throws(
+      () =>
+        main([
+          'dispatch-record',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'n',
+          '--input',
+          f.input('fingerprint.json', dispatch('w', { capability_fingerprint: null })),
+        ]),
+      /capability_fingerprint/,
+    );
+    const recorded = main([
+      'dispatch-record',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'n',
+      '--input',
+      f.input(
+        'valid.json',
+        dispatch('w', { configuration_state: 'session-confirmed', token_budget: 12000, max_attempts: 3 }),
+      ),
+    ]);
     assert.equal(recorded.nodes.n.dispatch.model, 'provider-primary-current');
     assert.equal(recorded.nodes.n.dispatch.reasoning_effort, 'medium');
     assert.equal(recorded.nodes.n.dispatch.configuration_state, 'session-confirmed');
     assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('验收失败后的动态重派必须创建新节点并绑定前序失败证据', () => {
   const f = makeFixture();
   try {
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('attempt-1-node.json', node({ node_id: 'work.attempt-1', objective: '完成实现第一次尝试', required: false }))]);
-    main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'work.attempt-1', '--input', f.input('attempt-1-dispatch.json', dispatch('worker-1', { attempt_id: 'work-attempt-1' }))]);
-    const withFailure = main(['attach', '--ledger', f.ledger_dir, '--node', 'work.attempt-1', '--type', 'report', '--input', f.input('failure-report.json', { report_type: 'acceptance_failure', failure_kind: 'reasoning_gap', summary: '跨模块约束遗漏' })]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input(
+        'attempt-1-node.json',
+        node({ node_id: 'work.attempt-1', objective: '完成实现第一次尝试', required: false }),
+      ),
+    ]);
+    main([
+      'dispatch-record',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'work.attempt-1',
+      '--input',
+      f.input('attempt-1-dispatch.json', dispatch('worker-1', { attempt_id: 'work-attempt-1' })),
+    ]);
+    const withFailure = main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'work.attempt-1',
+      '--type',
+      'report',
+      '--input',
+      f.input('failure-report.json', {
+        report_type: 'acceptance_failure',
+        failure_kind: 'reasoning_gap',
+        summary: '跨模块约束遗漏',
+      }),
+    ]);
     const failureRef = withFailure.attachments.at(-1).digest;
-    main(['update', '--ledger', f.ledger_dir, '--node', 'work.attempt-1', '--input', f.input('attempt-1-failed.json', { state: 'failed', reason: '验收未通过' })]);
+    main([
+      'update',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'work.attempt-1',
+      '--input',
+      f.input('attempt-1-failed.json', { state: 'failed', reason: '验收未通过' }),
+    ]);
 
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('attempt-2-node.json', node({ node_id: 'work.attempt-2', objective: '根据失败证据重新实现' }))]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('attempt-2-node.json', node({ node_id: 'work.attempt-2', objective: '根据失败证据重新实现' })),
+    ]);
     const rerouted = dispatch('worker-2', {
-      attempt_id: 'work-attempt-2', attempt: 2, previous_attempt_id: 'work-attempt-1',
-      tier: 'frontier', model: 'provider-frontier-current', reasoning_effort: 'high',
-      adjustment_action: 'promote_tier', failure_kind: 'reasoning_gap', failure_ref: failureRef,
+      attempt_id: 'work-attempt-2',
+      attempt: 2,
+      previous_attempt_id: 'work-attempt-1',
+      tier: 'frontier',
+      model: 'provider-frontier-current',
+      reasoning_effort: 'high',
+      adjustment_action: 'promote_tier',
+      failure_kind: 'reasoning_gap',
+      failure_ref: failureRef,
       selection_reason: '验收证据显示跨模块推理缺口，提升到本地更高 tier',
     });
-    const result = main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'work.attempt-2', '--input', f.input('attempt-2-dispatch.json', rerouted)]);
+    const result = main([
+      'dispatch-record',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'work.attempt-2',
+      '--input',
+      f.input('attempt-2-dispatch.json', rerouted),
+    ]);
     assert.equal(result.nodes['work.attempt-2'].dispatch.previous_attempt_id, 'work-attempt-1');
     assert.equal(result.nodes['work.attempt-2'].dispatch.failure_ref, failureRef);
 
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('bad-retry-node.json', node({ node_id: 'work.bad', objective: '错误重派', required: false }))]);
-    assert.throws(() => main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'work.bad', '--input', f.input('bad-retry.json', { ...rerouted, attempt_id: 'work-attempt-bad', failure_ref: `sha256:${'f'.repeat(64)}` })]), /failure_ref/);
-  } finally { f.cleanup(); }
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('bad-retry-node.json', node({ node_id: 'work.bad', objective: '错误重派', required: false })),
+    ]);
+    assert.throws(
+      () =>
+        main([
+          'dispatch-record',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'work.bad',
+          '--input',
+          f.input('bad-retry.json', {
+            ...rerouted,
+            attempt_id: 'work-attempt-bad',
+            failure_ref: `sha256:${'f'.repeat(64)}`,
+          }),
+        ]),
+      /failure_ref/,
+    );
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('批级连续相同失败由 orchestrator 熔断，单 Loop 不拥有批队列', () => {
   const f = makeFixture();
   try {
-    main(['batch-init', '--ledger', f.ledger_dir, '--input', f.input('batch.json', { batch_id: 'batch', loop_ids: ['l1', 'l2', 'l3', 'l4'], limits: { max_failures: 4, consecutive_identical_signature: 3 } })]);
-    for (const loop of ['l1', 'l2', 'l3']) main(['batch-record', '--ledger', f.ledger_dir, '--batch', 'batch', '--input', f.input(`${loop}.json`, { loop_id: loop, state: 'stopped', failure_key: 'sha256:same' })]);
+    main([
+      'batch-init',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('batch.json', {
+        batch_id: 'batch',
+        loop_ids: ['l1', 'l2', 'l3', 'l4'],
+        limits: { max_failures: 4, consecutive_identical_signature: 3 },
+      }),
+    ]);
+    for (const loop of ['l1', 'l2', 'l3'])
+      main([
+        'batch-record',
+        '--ledger',
+        f.ledger_dir,
+        '--batch',
+        'batch',
+        '--input',
+        f.input(`${loop}.json`, { loop_id: loop, state: 'stopped', failure_key: 'sha256:same' }),
+      ]);
     const batch = main(['batch-status', '--ledger', f.ledger_dir, '--batch', 'batch']);
     assert.equal(batch.state, 'fused');
     assert.equal(batch.fuse.kind, 'identical_failure_fuse');
-    assert.throws(() => main(['batch-record', '--ledger', f.ledger_dir, '--batch', 'batch', '--input', f.input('l4.json', { loop_id: 'l4', state: 'completed' })]), /无效或重放/);
-  } finally { f.cleanup(); }
+    assert.throws(
+      () =>
+        main([
+          'batch-record',
+          '--ledger',
+          f.ledger_dir,
+          '--batch',
+          'batch',
+          '--input',
+          f.input('l4.json', { loop_id: 'l4', state: 'completed' }),
+        ]),
+      /无效或重放/,
+    );
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('journal 截断和 snapshot 丢失可重建，revision 冲突 fail closed', () => {
   const f = makeFixture();
   try {
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('node.json', node({ node_id: 'n', objective: 'recover' })), '--expected-revision', '0']);
-    assert.throws(() => main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('stale.json', node({ node_id: 'stale', objective: 'stale' })), '--expected-revision', '0']), LedgerError);
-    appendFileSync(join(f.ledger_dir, 'events.ndjson'), '{"partial":'); unlinkSync(join(f.ledger_dir, 'snapshot.json'));
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('node.json', node({ node_id: 'n', objective: 'recover' })),
+      '--expected-revision',
+      '0',
+    ]);
+    assert.throws(
+      () =>
+        main([
+          'add-node',
+          '--ledger',
+          f.ledger_dir,
+          '--input',
+          f.input('stale.json', node({ node_id: 'stale', objective: 'stale' })),
+          '--expected-revision',
+          '0',
+        ]),
+      LedgerError,
+    );
+    appendFileSync(join(f.ledger_dir, 'events.ndjson'), '{"partial":');
+    unlinkSync(join(f.ledger_dir, 'snapshot.json'));
     assert.equal(main(['status', '--ledger', f.ledger_dir]).recovery_needed, true);
     assert.equal(main(['rebuild', '--ledger', f.ledger_dir]).rebuilt, true);
     assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('跨节点 Reflection 与 Proposal 只追加，不改变节点状态', () => {
   const f = makeFixture();
   try {
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('node.json', node({ node_id: 'n', objective: 'reflect' }))]);
-    const reflected = main(['record-reflection', '--ledger', f.ledger_dir, '--input', f.input('reflection.json', { classification: 'inefficiency', observation: '并行没有降低关键路径', impact: 'medium', recommended_disposition: 'continue' })]);
-    const proposal = main(['propose-improvement', '--ledger', f.ledger_dir, '--reflection', reflected.reflection_refs[0].reflection_id, '--input', f.input('proposal.json', { problem_type: 'inefficiency', proposed_change: '缩小无效并行范围', affected_scope: ['routing'], validation_plan: { replay_cases: ['graph'], regression_suites: ['ledger'] } })]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('node.json', node({ node_id: 'n', objective: 'reflect' })),
+    ]);
+    const reflected = main([
+      'record-reflection',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('reflection.json', {
+        classification: 'inefficiency',
+        observation: '并行没有降低关键路径',
+        impact: 'medium',
+        recommended_disposition: 'continue',
+      }),
+    ]);
+    const proposal = main([
+      'propose-improvement',
+      '--ledger',
+      f.ledger_dir,
+      '--reflection',
+      reflected.reflection_refs[0].reflection_id,
+      '--input',
+      f.input('proposal.json', {
+        problem_type: 'inefficiency',
+        proposed_change: '缩小无效并行范围',
+        affected_scope: ['routing'],
+        validation_plan: { replay_cases: ['graph'], regression_suites: ['ledger'] },
+      }),
+    ]);
     assert.equal(proposal.nodes.n.state, 'pending');
     const value = JSON.parse(readFileSync(join(f.ledger_dir, proposal.improvement_proposal_refs[0].ref), 'utf8'));
     assert.equal(value.lifecycle, 'proposed');
     value.lifecycle = 'accepted';
     writeFileSync(join(f.ledger_dir, proposal.improvement_proposal_refs[0].ref), JSON.stringify(value));
-    assert.equal(main(['doctor', '--ledger', f.ledger_dir]).findings.some((item) => item.startsWith('proposal_invalid:')), true);
-  } finally { f.cleanup(); }
+    assert.equal(
+      main(['doctor', '--ledger', f.ledger_dir]).findings.some((item) => item.startsWith('proposal_invalid:')),
+      true,
+    );
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('并发写同一 expected revision 时至多一个成功，journal 不分叉', async () => {
   const f = makeFixture();
   try {
     writeFileSync(join(f.ledger_dir, '.lock'), '{"pid":99999999,"acquired_at":"legacy-stale"}\n');
-    const inputs = [f.input('concurrent-a.json', node({ node_id: 'a', objective: 'concurrent a' })), f.input('concurrent-b.json', node({ node_id: 'b', objective: 'concurrent b' }))];
-    const run = (input) => new Promise((resolvePromise) => execFile(process.execPath, [LEDGER_SCRIPT, 'add-node', '--ledger', f.ledger_dir, '--input', input, '--expected-revision', '0'], { encoding: 'utf8' }, (error, stdout, stderr) => resolvePromise({ error, stdout, stderr })));
+    const inputs = [
+      f.input('concurrent-a.json', node({ node_id: 'a', objective: 'concurrent a' })),
+      f.input('concurrent-b.json', node({ node_id: 'b', objective: 'concurrent b' })),
+    ];
+    const run = (input) =>
+      new Promise((resolvePromise) =>
+        execFile(
+          process.execPath,
+          [LEDGER_SCRIPT, 'add-node', '--ledger', f.ledger_dir, '--input', input, '--expected-revision', '0'],
+          { encoding: 'utf8' },
+          (error, stdout, stderr) => resolvePromise({ error, stdout, stderr }),
+        ),
+      );
     const results = await Promise.all(inputs.map(run));
     assert.equal(results.filter((item) => !item.error).length, 1);
     const status = main(['status', '--ledger', f.ledger_dir]);
     assert.equal(status.revision, 1);
     assert.equal(Object.keys(status.nodes).length, 1);
     assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('node 权限、CLI typo、rebuild revision 与 journal 链均 fail closed', () => {
   const f = makeFixture();
   try {
-    assert.throws(() => main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('escape.json', node({ node_id: 'escape', objective: 'escape', permissions: { mode: 'write', writable_paths: ['~/.ssh'] } }))]), /只读合同/);
-    assert.throws(() => main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('typo.json', node({ node_id: 'typo', objective: 'typo' })), '--expected-revison', '0']), /未知选项/);
+    assert.throws(
+      () =>
+        main([
+          'add-node',
+          '--ledger',
+          f.ledger_dir,
+          '--input',
+          f.input(
+            'escape.json',
+            node({
+              node_id: 'escape',
+              objective: 'escape',
+              permissions: { mode: 'write', writable_paths: ['~/.ssh'] },
+            }),
+          ),
+        ]),
+      /只读合同/,
+    );
+    assert.throws(
+      () =>
+        main([
+          'add-node',
+          '--ledger',
+          f.ledger_dir,
+          '--input',
+          f.input('typo.json', node({ node_id: 'typo', objective: 'typo' })),
+          '--expected-revison',
+          '0',
+        ]),
+      /未知选项/,
+    );
     assert.throws(() => main(['rebuild', '--ledger', f.ledger_dir, '--expected-revision', '1']), /revision conflict/);
     const snapshot = main(['status', '--ledger', f.ledger_dir]);
-    const forged = { schema_version: 1, revision: 1, kind: 'forged', recorded_at: new Date().toISOString(), previous_event_digest: 'sha256:'.concat('0'.repeat(64)), snapshot: { ...snapshot, revision: 1 } };
+    const forged = {
+      schema_version: 1,
+      revision: 1,
+      kind: 'forged',
+      recorded_at: new Date().toISOString(),
+      previous_event_digest: 'sha256:'.concat('0'.repeat(64)),
+      snapshot: { ...snapshot, revision: 1 },
+    };
     forged.event_digest = envelopeDigest(forged, 'event_digest');
     appendFileSync(join(f.ledger_dir, 'events.ndjson'), `${JSON.stringify(forged)}\n`);
     assert.throws(() => main(['doctor', '--ledger', f.ledger_dir]), /journal 链/);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('capabilities --json 保持统一能力发现兼容', () => {
@@ -248,17 +758,50 @@ test('dead owner 遗留的 ledger reclaim 子锁可自愈', () => {
   try {
     writeFileSync(join(f.ledger_dir, '.lock'), '{"pid":99999999,"token":"dead-main"}\n');
     writeFileSync(join(f.ledger_dir, '.lock.reclaim'), '{"pid":99999998,"token":"dead-reclaimer"}\n');
-    const result = main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('recovered.json', node({ node_id: 'recovered', objective: 'recover orphan reclaim' }))]);
+    const result = main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('recovered.json', node({ node_id: 'recovered', objective: 'recover orphan reclaim' })),
+    ]);
     assert.equal(result.revision, 1);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('新节点必须显式声明验收档位，独立 Evidence 还必须在合同中冻结 provider', () => {
   const f = makeFixture();
   try {
-    assert.throws(() => main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('missing.json', { node_id: 'missing', objective: 'missing policy' })]), /必须显式声明/);
-    assert.throws(() => main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('undeclared.json', node({ node_id: 'undeclared', objective: 'undeclared provider' }, INDEPENDENT_EVIDENCE))]), /未声明 verify-agent-output/);
-  } finally { f.cleanup(); }
+    assert.throws(
+      () =>
+        main([
+          'add-node',
+          '--ledger',
+          f.ledger_dir,
+          '--input',
+          f.input('missing.json', { node_id: 'missing', objective: 'missing policy' }),
+        ]),
+      /必须显式声明/,
+    );
+    assert.throws(
+      () =>
+        main([
+          'add-node',
+          '--ledger',
+          f.ledger_dir,
+          '--input',
+          f.input(
+            'undeclared.json',
+            node({ node_id: 'undeclared', objective: 'undeclared provider' }, INDEPENDENT_EVIDENCE),
+          ),
+        ]),
+      /未声明 verify-agent-output/,
+    );
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('只读 critic/scout 节点用 not_applicable 收口，worker/judge 仍被拒绝', () => {
@@ -268,65 +811,253 @@ test('只读 critic/scout 节点用 not_applicable 收口，worker/judge 仍被�
     // 随后 update --state passed 又被"实现节点没有稳定交付物"拒掉。
     for (const role of ['worker', 'judge']) {
       assert.throws(
-        () => main(['add-node', '--ledger', f.ledger_dir, '--input', f.input(`${role}-na.json`, node({ node_id: `${role}-na`, role, objective: '实现节点不能免验' }, NOT_APPLICABLE))]),
+        () =>
+          main([
+            'add-node',
+            '--ledger',
+            f.ledger_dir,
+            '--input',
+            f.input(
+              `${role}-na.json`,
+              node({ node_id: `${role}-na`, role, objective: '实现节点不能免验' }, NOT_APPLICABLE),
+            ),
+          ]),
         /not_applicable 只允许只读评审节点/u,
         role,
       );
     }
     // 默认 role（worker）同样被拒。
-    assert.throws(() => main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('default-na.json', { node_id: 'default-na', objective: '默认角色', verification: NOT_APPLICABLE })]), /not_applicable 只允许只读评审节点/u);
+    assert.throws(
+      () =>
+        main([
+          'add-node',
+          '--ledger',
+          f.ledger_dir,
+          '--input',
+          f.input('default-na.json', { node_id: 'default-na', objective: '默认角色', verification: NOT_APPLICABLE }),
+        ]),
+      /not_applicable 只允许只读评审节点/u,
+    );
     // artifact_scope 必须同步声明 not_applicable。
-    assert.throws(() => main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('scope-na.json', node({ node_id: 'scope-na', role: 'critic', objective: '范围不一致' }, { ...NOT_APPLICABLE, artifact_scope: 'node_output' }))]), /artifact_scope 必须是 not_applicable/u);
+    assert.throws(
+      () =>
+        main([
+          'add-node',
+          '--ledger',
+          f.ledger_dir,
+          '--input',
+          f.input(
+            'scope-na.json',
+            node(
+              { node_id: 'scope-na', role: 'critic', objective: '范围不一致' },
+              { ...NOT_APPLICABLE, artifact_scope: 'node_output' },
+            ),
+          ),
+        ]),
+      /artifact_scope 必须是 not_applicable/u,
+    );
 
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('critic.json', node({ node_id: 'critic', role: 'critic', objective: '独立挑错评审' }, NOT_APPLICABLE))]);
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('scout.json', node({ node_id: 'scout', role: 'scout', objective: '前期摸底' }, NOT_APPLICABLE))]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('critic.json', node({ node_id: 'critic', role: 'critic', objective: '独立挑错评审' }, NOT_APPLICABLE)),
+    ]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('scout.json', node({ node_id: 'scout', role: 'scout', objective: '前期摸底' }, NOT_APPLICABLE)),
+    ]);
 
     // 仍要求一份稳定 report 作为可复核输出；worktree 之类的环境附件不算。
-    assert.throws(() => main(['update', '--ledger', f.ledger_dir, '--node', 'critic', '--input', f.input('critic-early.json', { state: 'passed' })]), /critic\/scout 节点需先 attach report/u);
-    main(['attach', '--ledger', f.ledger_dir, '--node', 'critic', '--type', 'worktree', '--input', f.input('critic-wt.json', { worktree_id: 'wt-critic' })]);
-    assert.throws(() => main(['update', '--ledger', f.ledger_dir, '--node', 'critic', '--input', f.input('critic-wt-pass.json', { state: 'passed' })]), /critic\/scout 节点需先 attach report/u);
+    assert.throws(
+      () =>
+        main([
+          'update',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'critic',
+          '--input',
+          f.input('critic-early.json', { state: 'passed' }),
+        ]),
+      /critic\/scout 节点需先 attach report/u,
+    );
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'critic',
+      '--type',
+      'worktree',
+      '--input',
+      f.input('critic-wt.json', { worktree_id: 'wt-critic' }),
+    ]);
+    assert.throws(
+      () =>
+        main([
+          'update',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'critic',
+          '--input',
+          f.input('critic-wt-pass.json', { state: 'passed' }),
+        ]),
+      /critic\/scout 节点需先 attach report/u,
+    );
 
-    main(['attach', '--ledger', f.ledger_dir, '--node', 'critic', '--type', 'report', '--input', f.input('critic-report.json', { report_type: 'critic_findings', findings: ['处方与裁决真源矛盾'] })]);
-    const passed = main(['update', '--ledger', f.ledger_dir, '--node', 'critic', '--input', f.input('critic-pass.json', { state: 'passed' })]);
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'critic',
+      '--type',
+      'report',
+      '--input',
+      f.input('critic-report.json', { report_type: 'critic_findings', findings: ['处方与裁决真源矛盾'] }),
+    ]);
+    const passed = main([
+      'update',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'critic',
+      '--input',
+      f.input('critic-pass.json', { state: 'passed' }),
+    ]);
     assert.equal(passed.nodes.critic.verification_assurance, 'not_applicable');
     assert.equal(passed.nodes.critic.verification_ref, null);
 
-    main(['attach', '--ledger', f.ledger_dir, '--node', 'scout', '--type', 'report', '--input', f.input('scout-report.json', { report_type: 'scout_inventory', paths: ['a', 'b'] })]);
-    main(['update', '--ledger', f.ledger_dir, '--node', 'scout', '--input', f.input('scout-pass.json', { state: 'passed' })]);
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'scout',
+      '--type',
+      'report',
+      '--input',
+      f.input('scout-report.json', { report_type: 'scout_inventory', paths: ['a', 'b'] }),
+    ]);
+    main([
+      'update',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'scout',
+      '--input',
+      f.input('scout-pass.json', { state: 'passed' }),
+    ]);
 
     const summary = main(['status', '--ledger', f.ledger_dir]).summary;
     assert.equal(summary.verification_assurance.not_applicable, 2);
     assert.equal(summary.verification_assurance.worker_self_check, 0);
     assert.equal(summary.completion_ready, true);
     assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('not_applicable 是追加语义：老的三档输入与 assurance 计数全部照旧', () => {
   const f = makeFixture();
   try {
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('legacy.json', node({ node_id: 'legacy', objective: '老输入不受影响' }))]);
-    main(['attach', '--ledger', f.ledger_dir, '--node', 'legacy', '--type', 'artifact', '--input', f.input('artifact.json', artifactRef())]);
-    main(['update', '--ledger', f.ledger_dir, '--node', 'legacy', '--input', f.input('legacy-pass.json', { state: 'passed' })]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('legacy.json', node({ node_id: 'legacy', objective: '老输入不受影响' })),
+    ]);
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'legacy',
+      '--type',
+      'artifact',
+      '--input',
+      f.input('artifact.json', artifactRef()),
+    ]);
+    main([
+      'update',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'legacy',
+      '--input',
+      f.input('legacy-pass.json', { state: 'passed' }),
+    ]);
     const summary = main(['status', '--ledger', f.ledger_dir]).summary;
     assert.equal(summary.verification_assurance.worker_self_check, 1);
     assert.equal(summary.verification_assurance.not_applicable, 0);
 
     // 实现节点缺稳定交付物的老报错不变。
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('bare.json', node({ node_id: 'bare', objective: '没有交付物' }))]);
-    assert.throws(() => main(['update', '--ledger', f.ledger_dir, '--node', 'bare', '--input', f.input('bare-pass.json', { state: 'passed' })]), /实现节点没有稳定交付物/u);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('bare.json', node({ node_id: 'bare', objective: '没有交付物' })),
+    ]);
+    assert.throws(
+      () =>
+        main([
+          'update',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'bare',
+          '--input',
+          f.input('bare-pass.json', { state: 'passed' }),
+        ]),
+      /实现节点没有稳定交付物/u,
+    );
 
     // doctor 用同一门禁复核：把已 passed 的 critic 节点 report 从 stable_outputs 抹掉即现形。
     assert.equal(main(['doctor', '--ledger', f.ledger_dir]).findings.length, 0);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('doctor 对 passed 的 not_applicable 节点复跑同一门禁', () => {
   const f = makeFixture();
   try {
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('critic.json', node({ node_id: 'critic', role: 'critic', objective: '独立挑错评审' }, NOT_APPLICABLE))]);
-    main(['attach', '--ledger', f.ledger_dir, '--node', 'critic', '--type', 'report', '--input', f.input('report.json', { report_type: 'critic_findings', findings: ['x'] })]);
-    main(['update', '--ledger', f.ledger_dir, '--node', 'critic', '--input', f.input('pass.json', { state: 'passed' })]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('critic.json', node({ node_id: 'critic', role: 'critic', objective: '独立挑错评审' }, NOT_APPLICABLE)),
+    ]);
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'critic',
+      '--type',
+      'report',
+      '--input',
+      f.input('report.json', { report_type: 'critic_findings', findings: ['x'] }),
+    ]);
+    main([
+      'update',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'critic',
+      '--input',
+      f.input('pass.json', { state: 'passed' }),
+    ]);
     assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
 
     // 把 report 附件内容改掉：attachment 摘要与门禁同时现形。
@@ -335,71 +1066,349 @@ test('doctor 对 passed 的 not_applicable 节点复跑同一门禁', () => {
     writeFileSync(join(f.ledger_dir, ref), JSON.stringify({ report_type: 'critic_findings', findings: ['被改写'] }));
     const doctored = main(['doctor', '--ledger', f.ledger_dir]);
     assert.equal(doctored.healthy, false);
-    assert.ok(doctored.findings.some((item) => item.startsWith('attachment_invalid:')), JSON.stringify(doctored.findings));
-  } finally { f.cleanup(); }
+    assert.ok(
+      doctored.findings.some((item) => item.startsWith('attachment_invalid:')),
+      JSON.stringify(doctored.findings),
+    );
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('controller_recheck 必须用复核记录完整绑定当前稳定输出', () => {
   const f = makeFixture();
   try {
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('node.json', node({ node_id: 'reviewed', objective: 'controller reviews output' }, CONTROLLER_RECHECK))]);
-    main(['attach', '--ledger', f.ledger_dir, '--node', 'reviewed', '--type', 'artifact', '--input', f.input('artifact.json', artifactRef())]);
-    assert.throws(() => main(['update', '--ledger', f.ledger_dir, '--node', 'reviewed', '--input', f.input('early.json', { state: 'passed' })]), /verification_ref/);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('node.json', node({ node_id: 'reviewed', objective: 'controller reviews output' }, CONTROLLER_RECHECK)),
+    ]);
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'reviewed',
+      '--type',
+      'artifact',
+      '--input',
+      f.input('artifact.json', artifactRef()),
+    ]);
+    assert.throws(
+      () =>
+        main([
+          'update',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'reviewed',
+          '--input',
+          f.input('early.json', { state: 'passed' }),
+        ]),
+      /verification_ref/,
+    );
     const status = main(['status', '--ledger', f.ledger_dir]);
     const artifactDigest = status.nodes.reviewed.stable_outputs[0].digest;
-    const report = { schema_version: 1, report_type: 'controller_recheck', contract_digest: f.contract.contract_digest, stable_output_digests: [artifactDigest], outcome: 'pass', checked_at: '2026-08-12T00:00:00.000Z' };
-    const attached = main(['attach', '--ledger', f.ledger_dir, '--node', 'reviewed', '--type', 'report', '--input', f.input('controller-report.json', report)]);
+    const report = {
+      schema_version: 1,
+      report_type: 'controller_recheck',
+      contract_digest: f.contract.contract_digest,
+      stable_output_digests: [artifactDigest],
+      outcome: 'pass',
+      checked_at: '2026-08-12T00:00:00.000Z',
+    };
+    const attached = main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'reviewed',
+      '--type',
+      'report',
+      '--input',
+      f.input('controller-report.json', report),
+    ]);
     const reportDigest = attached.nodes.reviewed.stable_outputs.at(-1).digest;
-    main(['attach', '--ledger', f.ledger_dir, '--node', 'reviewed', '--type', 'report', '--input', f.input('late-output.json', { report_id: 'new-output-after-review' })]);
-    assert.throws(() => main(['update', '--ledger', f.ledger_dir, '--node', 'reviewed', '--input', f.input('stale-pass.json', { state: 'passed', verification_ref: reportDigest })]), /未覆盖当前稳定输出/);
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'reviewed',
+      '--type',
+      'report',
+      '--input',
+      f.input('late-output.json', { report_id: 'new-output-after-review' }),
+    ]);
+    assert.throws(
+      () =>
+        main([
+          'update',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'reviewed',
+          '--input',
+          f.input('stale-pass.json', { state: 'passed', verification_ref: reportDigest }),
+        ]),
+      /未覆盖当前稳定输出/,
+    );
     const refreshedStatus = main(['status', '--ledger', f.ledger_dir]);
-    const refreshedReport = { ...report, stable_output_digests: refreshedStatus.nodes.reviewed.stable_outputs.filter((item) => item.digest !== reportDigest).map((item) => item.digest), checked_at: '2026-08-12T00:01:00.000Z' };
-    const refreshed = main(['attach', '--ledger', f.ledger_dir, '--node', 'reviewed', '--type', 'report', '--input', f.input('refreshed-controller-report.json', refreshedReport)]);
+    const refreshedReport = {
+      ...report,
+      stable_output_digests: refreshedStatus.nodes.reviewed.stable_outputs
+        .filter((item) => item.digest !== reportDigest)
+        .map((item) => item.digest),
+      checked_at: '2026-08-12T00:01:00.000Z',
+    };
+    const refreshed = main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'reviewed',
+      '--type',
+      'report',
+      '--input',
+      f.input('refreshed-controller-report.json', refreshedReport),
+    ]);
     const refreshedDigest = refreshed.nodes.reviewed.stable_outputs.at(-1).digest;
-    const passed = main(['update', '--ledger', f.ledger_dir, '--node', 'reviewed', '--input', f.input('pass.json', { state: 'passed', verification_ref: refreshedDigest })]);
+    const passed = main([
+      'update',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'reviewed',
+      '--input',
+      f.input('pass.json', { state: 'passed', verification_ref: refreshedDigest }),
+    ]);
     assert.equal(passed.nodes.reviewed.verification_assurance, 'controller_recheck');
     assert.equal(passed.nodes.reviewed.verification_ref, refreshedDigest);
     assert.equal(main(['status', '--ledger', f.ledger_dir]).summary.verification_assurance.controller_recheck, 1);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('independent_evidence 拒绝错绑、失败与 human gate，只接受同合同同 Artifact 的 pass Evidence', () => {
   const f = makeFixture({ independent: true });
   try {
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('node.json', node({ node_id: 'verified', objective: 'independently verify integration candidate' }, INDEPENDENT_EVIDENCE))]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input(
+        'node.json',
+        node({ node_id: 'verified', objective: 'independently verify integration candidate' }, INDEPENDENT_EVIDENCE),
+      ),
+    ]);
     const artifact = artifactRef();
-    main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'artifact', '--input', f.input('artifact.json', artifact)]);
-    assert.throws(() => main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'artifact', '--input', f.input('artifact-drift.json', artifactRef({ artifact_sha: 'f'.repeat(40) }))]), /只能绑定一个/);
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'verified',
+      '--type',
+      'artifact',
+      '--input',
+      f.input('artifact.json', artifact),
+    ]);
+    assert.throws(
+      () =>
+        main([
+          'attach',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'verified',
+          '--type',
+          'artifact',
+          '--input',
+          f.input('artifact-drift.json', artifactRef({ artifact_sha: 'f'.repeat(40) })),
+        ]),
+      /只能绑定一个/,
+    );
     const wrongArtifact = artifactRef({ artifact_sha: 'e'.repeat(40) });
-    assert.throws(() => main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'evidence', '--input', f.input('wrong-artifact.json', evidencePackage(f.contract, wrongArtifact))]), /Artifact binding/);
+    assert.throws(
+      () =>
+        main([
+          'attach',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'verified',
+          '--type',
+          'evidence',
+          '--input',
+          f.input('wrong-artifact.json', evidencePackage(f.contract, wrongArtifact)),
+        ]),
+      /Artifact binding/,
+    );
     const wrongContract = evidencePackage(f.contract, artifact, { contract_digest: `sha256:${'9'.repeat(64)}` });
-    assert.throws(() => main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'evidence', '--input', f.input('wrong-contract.json', wrongContract)]), /contract\/profile binding/);
+    assert.throws(
+      () =>
+        main([
+          'attach',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'verified',
+          '--type',
+          'evidence',
+          '--input',
+          f.input('wrong-contract.json', wrongContract),
+        ]),
+      /contract\/profile binding/,
+    );
     const wrongDigest = evidencePackage(f.contract, artifact);
     wrongDigest.evidence_digest = `sha256:${'0'.repeat(64)}`;
-    assert.throws(() => main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'evidence', '--input', f.input('wrong-digest.json', wrongDigest)]), /digest 无效/);
+    assert.throws(
+      () =>
+        main([
+          'attach',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'verified',
+          '--type',
+          'evidence',
+          '--input',
+          f.input('wrong-digest.json', wrongDigest),
+        ]),
+      /digest 无效/,
+    );
     const failed = evidencePackage(f.contract, artifact, { terminal_outcome: 'fail' });
-    const failedAttached = main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'evidence', '--input', f.input('failed.json', failed)]);
+    const failedAttached = main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'verified',
+      '--type',
+      'evidence',
+      '--input',
+      f.input('failed.json', failed),
+    ]);
     const failedRef = failedAttached.nodes.verified.evidence.at(-1).digest;
-    assert.throws(() => main(['update', '--ledger', f.ledger_dir, '--node', 'verified', '--input', f.input('fail-pass.json', { state: 'passed', verification_ref: failedRef })]), /terminal_outcome=fail/);
-    const gated = evidencePackage(f.contract, artifact, { run_id: 'gated-run', human_gate_required: true, provenance: { provider: 'verify-agent-output', verified_at: '2026-08-12T00:01:00.000Z', verifier_run_id: 'gated-run', isolation_assurance: 'host_reported', limitations: [] } });
-    const gatedAttached = main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'evidence', '--input', f.input('gated.json', gated)]);
+    assert.throws(
+      () =>
+        main([
+          'update',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'verified',
+          '--input',
+          f.input('fail-pass.json', { state: 'passed', verification_ref: failedRef }),
+        ]),
+      /terminal_outcome=fail/,
+    );
+    const gated = evidencePackage(f.contract, artifact, {
+      run_id: 'gated-run',
+      human_gate_required: true,
+      provenance: {
+        provider: 'verify-agent-output',
+        verified_at: '2026-08-12T00:01:00.000Z',
+        verifier_run_id: 'gated-run',
+        isolation_assurance: 'host_reported',
+        limitations: [],
+      },
+    });
+    const gatedAttached = main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'verified',
+      '--type',
+      'evidence',
+      '--input',
+      f.input('gated.json', gated),
+    ]);
     const gatedRef = gatedAttached.nodes.verified.evidence.at(-1).digest;
-    assert.throws(() => main(['update', '--ledger', f.ledger_dir, '--node', 'verified', '--input', f.input('gated-pass.json', { state: 'passed', verification_ref: gatedRef })]), /human gate/);
+    assert.throws(
+      () =>
+        main([
+          'update',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'verified',
+          '--input',
+          f.input('gated-pass.json', { state: 'passed', verification_ref: gatedRef }),
+        ]),
+      /human gate/,
+    );
     const passedEvidence = evidencePackage(f.contract, artifact);
-    const passedAttached = main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'evidence', '--input', f.input('passed.json', passedEvidence)]);
+    const passedAttached = main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'verified',
+      '--type',
+      'evidence',
+      '--input',
+      f.input('passed.json', passedEvidence),
+    ]);
     const passedRef = passedAttached.nodes.verified.evidence.at(-1).digest;
     const artifactDigest = passedAttached.nodes.verified.stable_outputs.find((item) => item.type === 'artifact').digest;
-    assert.throws(() => main(['update', '--ledger', f.ledger_dir, '--node', 'verified', '--input', f.input('wrong-ref-pass.json', { state: 'passed', verification_ref: artifactDigest })]), /未指向 Evidence/);
-    const passed = main(['update', '--ledger', f.ledger_dir, '--node', 'verified', '--input', f.input('pass.json', { state: 'passed', verification_ref: passedRef })]);
+    assert.throws(
+      () =>
+        main([
+          'update',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'verified',
+          '--input',
+          f.input('wrong-ref-pass.json', { state: 'passed', verification_ref: artifactDigest }),
+        ]),
+      /未指向 Evidence/,
+    );
+    const passed = main([
+      'update',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'verified',
+      '--input',
+      f.input('pass.json', { state: 'passed', verification_ref: passedRef }),
+    ]);
     assert.equal(passed.nodes.verified.verification_assurance, 'independent_evidence');
     assert.equal(passed.nodes.verified.verification_ref, passedRef);
     assert.equal(main(['status', '--ledger', f.ledger_dir]).summary.verification_assurance.independent_evidence, 1);
     assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
-    assert.throws(() => main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'report', '--input', f.input('late.json', { report_id: 'late' })]), /终态 node/);
-  } finally { f.cleanup(); }
+    assert.throws(
+      () =>
+        main([
+          'attach',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'verified',
+          '--type',
+          'report',
+          '--input',
+          f.input('late.json', { report_id: 'late' }),
+        ]),
+      /终态 node/,
+    );
+  } finally {
+    f.cleanup();
+  }
 });
 
-function resign(contract) { const value = structuredClone(contract); delete value.contract_digest; value.contract_digest = envelopeDigest(value); return value; }
+function resign(contract) {
+  const value = structuredClone(contract);
+  delete value.contract_digest;
+  value.contract_digest = envelopeDigest(value);
+  return value;
+}
 
 test('投影合同以血缘 + 条目子集替代全等，反张冠李戴保证不削弱', () => {
   const acceptance = [
@@ -409,54 +1418,209 @@ test('投影合同以血缘 + 条目子集替代全等，反张冠李戴保证�
   ];
   const f = makeFixture({ independent: true, acceptance });
   try {
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('node.json', node({ node_id: 'verified', objective: '独立验收 alpha/beta 产物' }, INDEPENDENT_EVIDENCE))]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('node.json', node({ node_id: 'verified', objective: '独立验收 alpha/beta 产物' }, INDEPENDENT_EVIDENCE)),
+    ]);
     const projected = projectContract(f.contract, ['alpha', 'beta']);
 
     // ① 私造合同：血缘指向别的任务
     const forgedParent = structuredClone(projected);
     forgedParent.extensions.projection.parent_contract_digest = `sha256:${'9'.repeat(64)}`;
-    assert.throws(() => main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'contract', '--input', f.input('forged-parent.json', resign(forgedParent))]), /parent_contract_digest 与 ledger 公共合同不一致/u);
+    assert.throws(
+      () =>
+        main([
+          'attach',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'verified',
+          '--type',
+          'contract',
+          '--input',
+          f.input('forged-parent.json', resign(forgedParent)),
+        ]),
+      /parent_contract_digest 与 ledger 公共合同不一致/u,
+    );
 
     // ② 条目措辞被改写
     const tampered = structuredClone(projected);
     tampered.acceptance[0].requirement = 'alpha 产物能跑起来即可';
-    assert.throws(() => main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'contract', '--input', f.input('tampered-item.json', resign(tampered))]), /acceptance 条目不属于公共合同: alpha/u);
+    assert.throws(
+      () =>
+        main([
+          'attach',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'verified',
+          '--type',
+          'contract',
+          '--input',
+          f.input('tampered-item.json', resign(tampered)),
+        ]),
+      /acceptance 条目不属于公共合同: alpha/u,
+    );
 
     // ③ 夹带公共合同里没有的条目
     const smuggled = structuredClone(projected);
     smuggled.acceptance.push({ contract_item_id: 'delta', requirement: '自造的宽松条目' });
     smuggled.extensions.projection.projected_item_ids = ['alpha', 'beta', 'delta'];
-    assert.throws(() => main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'contract', '--input', f.input('smuggled.json', resign(smuggled))]), /acceptance 条目不属于公共合同: delta/u);
+    assert.throws(
+      () =>
+        main([
+          'attach',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'verified',
+          '--type',
+          'contract',
+          '--input',
+          f.input('smuggled.json', resign(smuggled)),
+        ]),
+      /acceptance 条目不属于公共合同: delta/u,
+    );
 
     // ④ 声明的 projected_item_ids 与实际 acceptance 不一致
     const mismatched = structuredClone(projected);
     mismatched.extensions.projection.projected_item_ids = ['alpha'];
-    assert.throws(() => main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'contract', '--input', f.input('mismatched.json', resign(mismatched))]), /id 集合与 projected_item_ids 不一致/u);
+    assert.throws(
+      () =>
+        main([
+          'attach',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'verified',
+          '--type',
+          'contract',
+          '--input',
+          f.input('mismatched.json', resign(mismatched)),
+        ]),
+      /id 集合与 projected_item_ids 不一致/u,
+    );
 
     // 摘要不自洽的子合同同样拒收
     const unsigned = structuredClone(projected);
     unsigned.contract_digest = `sha256:${'0'.repeat(64)}`;
-    assert.throws(() => main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'contract', '--input', f.input('unsigned.json', unsigned)]), /投影合同结构无效/u);
+    assert.throws(
+      () =>
+        main([
+          'attach',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'verified',
+          '--type',
+          'contract',
+          '--input',
+          f.input('unsigned.json', unsigned),
+        ]),
+      /投影合同结构无效/u,
+    );
 
-    main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'contract', '--input', f.input('projected.json', projected)]);
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'verified',
+      '--type',
+      'contract',
+      '--input',
+      f.input('projected.json', projected),
+    ]);
 
     // ⑤ 第二份投影合同
-    assert.throws(() => main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'contract', '--input', f.input('second.json', projectContract(f.contract, ['gamma']))]), /至多绑定一份投影合同/u);
+    assert.throws(
+      () =>
+        main([
+          'attach',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'verified',
+          '--type',
+          'contract',
+          '--input',
+          f.input('second.json', projectContract(f.contract, ['gamma'])),
+        ]),
+      /至多绑定一份投影合同/u,
+    );
 
     const artifact = artifactRef();
-    main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'artifact', '--input', f.input('artifact.json', artifact)]);
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'verified',
+      '--type',
+      'artifact',
+      '--input',
+      f.input('artifact.json', artifact),
+    ]);
 
     // ⑥ Evidence 绑定的既不是公共合同也不是这份投影合同
-    assert.throws(() => main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'evidence', '--input', f.input('wrong-contract.json', evidencePackage(f.contract, artifact, { contract_digest: `sha256:${'9'.repeat(64)}` }))]), /contract\/profile binding/u);
+    assert.throws(
+      () =>
+        main([
+          'attach',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'verified',
+          '--type',
+          'evidence',
+          '--input',
+          f.input(
+            'wrong-contract.json',
+            evidencePackage(f.contract, artifact, { contract_digest: `sha256:${'9'.repeat(64)}` }),
+          ),
+        ]),
+      /contract\/profile binding/u,
+    );
 
     // ⑦ 全等（legacy）路径在投影登记后依然合法
-    main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'evidence', '--input', f.input('legacy-evidence.json', evidencePackage(f.contract, artifact, { run_id: 'legacy-run' }))]);
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'verified',
+      '--type',
+      'evidence',
+      '--input',
+      f.input('legacy-evidence.json', evidencePackage(f.contract, artifact, { run_id: 'legacy-run' })),
+    ]);
 
     const evidence = evidencePackage(projected, artifact, { run_id: 'projected-run' });
     assert.equal(evidence.contract_digest, projected.contract_digest);
-    const attached = main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'evidence', '--input', f.input('projected-evidence.json', evidence)]);
+    const attached = main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'verified',
+      '--type',
+      'evidence',
+      '--input',
+      f.input('projected-evidence.json', evidence),
+    ]);
     const evidenceRef = attached.nodes.verified.evidence.at(-1).digest;
-    const passed = main(['update', '--ledger', f.ledger_dir, '--node', 'verified', '--input', f.input('pass.json', { state: 'passed', verification_ref: evidenceRef })]);
+    const passed = main([
+      'update',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'verified',
+      '--input',
+      f.input('pass.json', { state: 'passed', verification_ref: evidenceRef }),
+    ]);
     assert.equal(passed.nodes.verified.verification_assurance, 'independent_evidence');
     assert.equal(main(['status', '--ledger', f.ledger_dir]).summary.verification_assurance.independent_evidence, 1);
     assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
@@ -467,14 +1631,22 @@ test('投影合同以血缘 + 条目子集替代全等，反张冠李戴保证�
     const doctored = main(['doctor', '--ledger', f.ledger_dir]);
     assert.equal(doctored.healthy, false);
     assert.deepEqual(doctored.findings, ['verification_gate_invalid:verified']);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('被换掉的 contract.json 不能给投影合同背书：条目集合与快照摘要先互锁', () => {
   const acceptance = [{ contract_item_id: 'alpha', requirement: 'alpha 产物门禁全绿' }];
   const f = makeFixture({ independent: true, acceptance });
   try {
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('node.json', node({ node_id: 'verified', objective: '独立验收 alpha 产物' }, INDEPENDENT_EVIDENCE))]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('node.json', node({ node_id: 'verified', objective: '独立验收 alpha 产物' }, INDEPENDENT_EVIDENCE)),
+    ]);
 
     // 投影仍声明原血缘（parent_contract_digest = 快照摘要），但夹带一条私货
     const smuggled = structuredClone(projectContract(f.contract, ['alpha']));
@@ -489,34 +1661,122 @@ test('被换掉的 contract.json 不能给投影合同背书：条目集合与�
     writeFileSync(join(f.ledger_dir, 'contract.json'), JSON.stringify(polluted));
     assert.notEqual(polluted.contract_digest, main(['status', '--ledger', f.ledger_dir]).contract_digest);
 
-    assert.throws(() => main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'contract', '--input', f.input('forged-projection.json', forgedProjection)]), /ledger contract\.json 与快照合同摘要不一致/u);
+    assert.throws(
+      () =>
+        main([
+          'attach',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'verified',
+          '--type',
+          'contract',
+          '--input',
+          f.input('forged-projection.json', forgedProjection),
+        ]),
+      /ledger contract\.json 与快照合同摘要不一致/u,
+    );
 
     // 还原 contract.json 后，同一份投影改由条目子集校验拦下
     writeFileSync(join(f.ledger_dir, 'contract.json'), JSON.stringify(f.contract));
-    assert.throws(() => main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'contract', '--input', f.input('forged-projection-2.json', forgedProjection)]), /acceptance 条目不属于公共合同: delta/u);
-  } finally { f.cleanup(); }
+    assert.throws(
+      () =>
+        main([
+          'attach',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'verified',
+          '--type',
+          'contract',
+          '--input',
+          f.input('forged-projection-2.json', forgedProjection),
+        ]),
+      /acceptance 条目不属于公共合同: delta/u,
+    );
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('投影只放行 contract_id / acceptance 子集 / projection 三项，其余字段逐字段钉死', () => {
   const f = makeFixture({ independent: true });
-  const attachContract = (name, value) => main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'contract', '--input', f.input(name, value)]);
+  const attachContract = (name, value) =>
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'verified',
+      '--type',
+      'contract',
+      '--input',
+      f.input(name, value),
+    ]);
   try {
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('node.json', node({ node_id: 'verified', objective: '独立验收冻结产物' }, INDEPENDENT_EVIDENCE))]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('node.json', node({ node_id: 'verified', objective: '独立验收冻结产物' }, INDEPENDENT_EVIDENCE)),
+    ]);
     const projected = projectContract(f.contract, ['done'], { contractId: 'node-scoped' });
 
-    assert.throws(() => attachContract('objective.json', resign({ ...projected, objective: '把 README 错别字改掉' })), /投影合同字段 objective 必须与公共合同逐字节相同/u);
-    assert.throws(() => attachContract('scope.json', resign({ ...projected, scope: { include: ['README.md'], exclude: ['src/**'] } })), /投影合同字段 scope 必须与公共合同逐字节相同/u);
-    assert.throws(() => attachContract('permissions.json', resign({ ...projected, permissions: { mode: 'write', writable_paths: ['/', '../../etc'] } })), /投影合同字段 permissions 必须与公共合同逐字节相同/u);
-    assert.throws(() => attachContract('environment.json', resign({ ...projected, environment: { repository: '/other/repo', isolation: 'shared_tree' } })), /投影合同字段 environment 必须与公共合同逐字节相同/u);
-    assert.throws(() => attachContract('skill-set.json', resign({ ...projected, skill_set: [] })), /投影合同字段 skill_set 必须与公共合同逐字节相同/u);
-    assert.throws(() => attachContract('stop.json', resign({ ...projected, stop_conditions: ['随时可以停'] })), /投影合同字段 stop_conditions 必须与公共合同逐字节相同/u);
+    assert.throws(
+      () => attachContract('objective.json', resign({ ...projected, objective: '把 README 错别字改掉' })),
+      /投影合同字段 objective 必须与公共合同逐字节相同/u,
+    );
+    assert.throws(
+      () =>
+        attachContract('scope.json', resign({ ...projected, scope: { include: ['README.md'], exclude: ['src/**'] } })),
+      /投影合同字段 scope 必须与公共合同逐字节相同/u,
+    );
+    assert.throws(
+      () =>
+        attachContract(
+          'permissions.json',
+          resign({ ...projected, permissions: { mode: 'write', writable_paths: ['/', '../../etc'] } }),
+        ),
+      /投影合同字段 permissions 必须与公共合同逐字节相同/u,
+    );
+    assert.throws(
+      () =>
+        attachContract(
+          'environment.json',
+          resign({ ...projected, environment: { repository: '/other/repo', isolation: 'shared_tree' } }),
+        ),
+      /投影合同字段 environment 必须与公共合同逐字节相同/u,
+    );
+    assert.throws(
+      () => attachContract('skill-set.json', resign({ ...projected, skill_set: [] })),
+      /投影合同字段 skill_set 必须与公共合同逐字节相同/u,
+    );
+    assert.throws(
+      () => attachContract('stop.json', resign({ ...projected, stop_conditions: ['随时可以停'] })),
+      /投影合同字段 stop_conditions 必须与公共合同逐字节相同/u,
+    );
 
     // extensions 里除 projection 外的键同样不能改（这里把已冻结的 verifier provider 摘掉）
-    const strippedVerification = resign({ ...projected, extensions: { projection: structuredClone(projected.extensions.projection) } });
-    assert.throws(() => attachContract('extensions.json', strippedVerification), /extensions 除 projection 外必须与公共合同逐字节相同/u);
+    const strippedVerification = resign({
+      ...projected,
+      extensions: { projection: structuredClone(projected.extensions.projection) },
+    });
+    assert.throws(
+      () => attachContract('extensions.json', strippedVerification),
+      /extensions 除 projection 外必须与公共合同逐字节相同/u,
+    );
 
     // repro 场景回归：一次性改掉 contract_id/objective/scope/permissions/environment/stop_conditions
-    const repro = resign({ ...structuredClone(projected), contract_id: 'unrelated-task', objective: '把 README 错别字改掉', scope: { include: ['README.md'], exclude: ['src/**'] }, permissions: { mode: 'write', writable_paths: ['/', '../../etc'] }, environment: { repository: '/other/repo', isolation: 'shared_tree' }, stop_conditions: [] });
+    const repro = resign({
+      ...structuredClone(projected),
+      contract_id: 'unrelated-task',
+      objective: '把 README 错别字改掉',
+      scope: { include: ['README.md'], exclude: ['src/**'] },
+      permissions: { mode: 'write', writable_paths: ['/', '../../etc'] },
+      environment: { repository: '/other/repo', isolation: 'shared_tree' },
+      stop_conditions: [],
+    });
     assert.throws(() => attachContract('repro.json', repro), /投影合同字段 environment 必须与公共合同逐字节相同/u);
 
     // 换 contract_id 是被放行的身份改动；合法投影仍走得通，此前的拒收没有留下任何 attachment
@@ -525,99 +1785,404 @@ test('投影只放行 contract_id / acceptance 子集 / projection 三项，其�
     assert.equal(stored.length, 1);
     assert.equal(JSON.parse(readFileSync(join(f.ledger_dir, stored[0].ref), 'utf8')).contract_id, 'node-scoped');
     assert.notEqual(f.contract.contract_id, 'node-scoped');
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('parent 的额外顶层字段被投影继承，并原样走完独立验收链路', () => {
   const extraFields = { owner_team: 'moii-app', custom_budget: { max_rounds: 3 } };
   const f = makeFixture({ independent: true, extraFields });
   try {
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('node.json', node({ node_id: 'verified', objective: '独立验收冻结产物' }, INDEPENDENT_EVIDENCE))]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('node.json', node({ node_id: 'verified', objective: '独立验收冻结产物' }, INDEPENDENT_EVIDENCE)),
+    ]);
     const projected = projectContract(f.contract, ['done']);
     assert.equal(projected.owner_team, 'moii-app');
     assert.deepEqual(projected.custom_budget, extraFields.custom_budget);
 
     // 丢掉 parent 的额外字段同样算改写，逐字段拦下
-    const dropped = structuredClone(projected); delete dropped.owner_team;
-    assert.throws(() => main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'contract', '--input', f.input('dropped.json', resign(dropped))]), /投影合同字段 owner_team 必须与公共合同逐字节相同/u);
+    const dropped = structuredClone(projected);
+    delete dropped.owner_team;
+    assert.throws(
+      () =>
+        main([
+          'attach',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'verified',
+          '--type',
+          'contract',
+          '--input',
+          f.input('dropped.json', resign(dropped)),
+        ]),
+      /投影合同字段 owner_team 必须与公共合同逐字节相同/u,
+    );
 
-    main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'contract', '--input', f.input('projected.json', projected)]);
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'verified',
+      '--type',
+      'contract',
+      '--input',
+      f.input('projected.json', projected),
+    ]);
     const artifact = artifactRef();
-    main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'artifact', '--input', f.input('artifact.json', artifact)]);
-    const attached = main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'evidence', '--input', f.input('evidence.json', evidencePackage(projected, artifact))]);
-    const passed = main(['update', '--ledger', f.ledger_dir, '--node', 'verified', '--input', f.input('pass.json', { state: 'passed', verification_ref: attached.nodes.verified.evidence.at(-1).digest })]);
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'verified',
+      '--type',
+      'artifact',
+      '--input',
+      f.input('artifact.json', artifact),
+    ]);
+    const attached = main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'verified',
+      '--type',
+      'evidence',
+      '--input',
+      f.input('evidence.json', evidencePackage(projected, artifact)),
+    ]);
+    const passed = main([
+      'update',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'verified',
+      '--input',
+      f.input('pass.json', { state: 'passed', verification_ref: attached.nodes.verified.evidence.at(-1).digest }),
+    ]);
     assert.equal(passed.nodes.verified.verification_assurance, 'independent_evidence');
     assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
-test("Token accounting tracks per-node usage and status aggregates summary", () => {
+test('Token accounting tracks per-node usage and status aggregates summary', () => {
   const f = makeFixture();
   try {
-    main(["add-node", "--ledger", f.ledger_dir, "--input", f.input("n1.json", node({ node_id: "n1", role: "scout", objective: "探索目录" }))]);
-    main(["add-node", "--ledger", f.ledger_dir, "--input", f.input("n2.json", node({ node_id: "n2", role: "worker", objective: "实现功能" }))]);
-    main(["dispatch-record", "--ledger", f.ledger_dir, "--node", "n1", "--input", f.input("d1.json", dispatch("w1"))]);
-    main(["dispatch-record", "--ledger", f.ledger_dir, "--node", "n2", "--input", f.input("d2.json", dispatch("w2"))]);
-    main(["attach", "--ledger", f.ledger_dir, "--node", "n1", "--type", "artifact", "--input", f.input("a1.json", artifactRef())]);
-    main(["attach", "--ledger", f.ledger_dir, "--node", "n2", "--type", "artifact", "--input", f.input("a2.json", artifactRef())]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('n1.json', node({ node_id: 'n1', role: 'scout', objective: '探索目录' })),
+    ]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('n2.json', node({ node_id: 'n2', role: 'worker', objective: '实现功能' })),
+    ]);
+    main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'n1', '--input', f.input('d1.json', dispatch('w1'))]);
+    main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'n2', '--input', f.input('d2.json', dispatch('w2'))]);
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'n1',
+      '--type',
+      'artifact',
+      '--input',
+      f.input('a1.json', artifactRef()),
+    ]);
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'n2',
+      '--type',
+      'artifact',
+      '--input',
+      f.input('a2.json', artifactRef()),
+    ]);
 
-    main(["update", "--ledger", f.ledger_dir, "--node", "n1", "--input", f.input("u1.json", { state: "passed", tokens: { input_tokens: 500, output_tokens: 1000, total_tokens: 1500 }, duration_ms: 1200 })]);
-    main(["update", "--ledger", f.ledger_dir, "--node", "n2", "--input", f.input("u2.json", { state: "passed", tokens: 4200, duration_ms: 3500 })]);
+    main([
+      'update',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'n1',
+      '--input',
+      f.input('u1.json', {
+        state: 'passed',
+        tokens: { input_tokens: 500, output_tokens: 1000, total_tokens: 1500 },
+        duration_ms: 1200,
+      }),
+    ]);
+    main([
+      'update',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'n2',
+      '--input',
+      f.input('u2.json', { state: 'passed', tokens: 4200, duration_ms: 3500 }),
+    ]);
 
-    const status = main(["status", "--ledger", f.ledger_dir]);
+    const status = main(['status', '--ledger', f.ledger_dir]);
     assert.equal(status.summary.token_accounting.total_tokens, 5700);
     assert.equal(status.summary.token_accounting.by_role.scout, 1500);
     assert.equal(status.summary.token_accounting.by_role.worker, 4200);
     assert.equal(status.nodes.n1.tokens.total_tokens, 1500);
     assert.equal(status.nodes.n1.duration_ms, 1200);
     assert.equal(status.nodes.n2.tokens, 4200);
-    assert.equal(main(["doctor", "--ledger", f.ledger_dir]).healthy, true);
-  } finally { f.cleanup(); }
+    assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
+  } finally {
+    f.cleanup();
+  }
 });
 
-test("Token and duration input validation rejects strings, negatives, invalid totals and unknown keys", () => {
+test('Token and duration input validation rejects strings, negatives, invalid totals and unknown keys', () => {
   const f = makeFixture();
   try {
-    main(["add-node", "--ledger", f.ledger_dir, "--input", f.input("n.json", node({ node_id: "n", role: "worker", objective: "测试校验" }))]);
-    main(["dispatch-record", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("d.json", dispatch("w"))]);
-    main(["attach", "--ledger", f.ledger_dir, "--node", "n", "--type", "artifact", "--input", f.input("a.json", artifactRef())]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('n.json', node({ node_id: 'n', role: 'worker', objective: '测试校验' })),
+    ]);
+    main(['dispatch-record', '--ledger', f.ledger_dir, '--node', 'n', '--input', f.input('d.json', dispatch('w'))]);
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'n',
+      '--type',
+      'artifact',
+      '--input',
+      f.input('a.json', artifactRef()),
+    ]);
 
     // String tokens
-    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad1.json", { state: "passed", tokens: { input_tokens: 40, output_tokens: 60, total_tokens: "100" } })]), /必须为非负安全整数/);
-    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad2.json", { state: "passed", tokens: "100" })]), /必须为非负安全整数/);
+    assert.throws(
+      () =>
+        main([
+          'update',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'n',
+          '--input',
+          f.input('bad1.json', {
+            state: 'passed',
+            tokens: { input_tokens: 40, output_tokens: 60, total_tokens: '100' },
+          }),
+        ]),
+      /必须为非负安全整数/,
+    );
+    assert.throws(
+      () =>
+        main([
+          'update',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'n',
+          '--input',
+          f.input('bad2.json', { state: 'passed', tokens: '100' }),
+        ]),
+      /必须为非负安全整数/,
+    );
 
     // Negative tokens or duration
-    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad3.json", { state: "passed", tokens: -50 })]), /必须为非负安全整数/);
-    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad4.json", { state: "passed", duration_ms: -100 })]), /duration_ms 必须为非负安全整数/);
-    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad5.json", { state: "passed", duration_ms: "1.5s" })]), /duration_ms 必须为非负安全整数/);
+    assert.throws(
+      () =>
+        main([
+          'update',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'n',
+          '--input',
+          f.input('bad3.json', { state: 'passed', tokens: -50 }),
+        ]),
+      /必须为非负安全整数/,
+    );
+    assert.throws(
+      () =>
+        main([
+          'update',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'n',
+          '--input',
+          f.input('bad4.json', { state: 'passed', duration_ms: -100 }),
+        ]),
+      /duration_ms 必须为非负安全整数/,
+    );
+    assert.throws(
+      () =>
+        main([
+          'update',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'n',
+          '--input',
+          f.input('bad5.json', { state: 'passed', duration_ms: '1.5s' }),
+        ]),
+      /duration_ms 必须为非负安全整数/,
+    );
 
     // Total mismatch: input (100) + output (200) != total (500)
-    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad6.json", { state: "passed", tokens: { input_tokens: 100, output_tokens: 200, total_tokens: 500 } })]), /total_tokens 必须等于 input_tokens \+ output_tokens/);
+    assert.throws(
+      () =>
+        main([
+          'update',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'n',
+          '--input',
+          f.input('bad6.json', {
+            state: 'passed',
+            tokens: { input_tokens: 100, output_tokens: 200, total_tokens: 500 },
+          }),
+        ]),
+      /total_tokens 必须等于 input_tokens \+ output_tokens/,
+    );
 
     // Unknown keys in tokens
-    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad7.json", { state: "passed", tokens: { input_tokens: 40, output_tokens: 60, total_tokens: 100, cached_tokens: 50 } })]), /必须且只能包含/);
+    assert.throws(
+      () =>
+        main([
+          'update',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'n',
+          '--input',
+          f.input('bad7.json', {
+            state: 'passed',
+            tokens: { input_tokens: 40, output_tokens: 60, total_tokens: 100, cached_tokens: 50 },
+          }),
+        ]),
+      /必须且只能包含/,
+    );
 
     // Partial objects would otherwise be accepted but contribute zero to status.
-    assert.throws(() => main(["update", "--ledger", f.ledger_dir, "--node", "n", "--input", f.input("bad8.json", { state: "passed", tokens: { input_tokens: 100 } })]), /必须且只能包含/);
-  } finally { f.cleanup(); }
+    assert.throws(
+      () =>
+        main([
+          'update',
+          '--ledger',
+          f.ledger_dir,
+          '--node',
+          'n',
+          '--input',
+          f.input('bad8.json', { state: 'passed', tokens: { input_tokens: 100 } }),
+        ]),
+      /必须且只能包含/,
+    );
+  } finally {
+    f.cleanup();
+  }
 });
 
 // 造一个已 passed 的实现节点（默认 worker_self_check 档），overrides 用于传 required 之类的节点字段。
 function passImplementationNode(f, nodeId, overrides = {}) {
-  main(['add-node', '--ledger', f.ledger_dir, '--input', f.input(`${nodeId}.json`, node({ node_id: nodeId, objective: `实现 ${nodeId}`, ...overrides }))]);
-  main(['attach', '--ledger', f.ledger_dir, '--node', nodeId, '--type', 'artifact', '--input', f.input(`${nodeId}-artifact.json`, artifactRef())]);
-  main(['update', '--ledger', f.ledger_dir, '--node', nodeId, '--input', f.input(`${nodeId}-pass.json`, { state: 'passed' })]);
+  main([
+    'add-node',
+    '--ledger',
+    f.ledger_dir,
+    '--input',
+    f.input(`${nodeId}.json`, node({ node_id: nodeId, objective: `实现 ${nodeId}`, ...overrides })),
+  ]);
+  main([
+    'attach',
+    '--ledger',
+    f.ledger_dir,
+    '--node',
+    nodeId,
+    '--type',
+    'artifact',
+    '--input',
+    f.input(`${nodeId}-artifact.json`, artifactRef()),
+  ]);
+  main([
+    'update',
+    '--ledger',
+    f.ledger_dir,
+    '--node',
+    nodeId,
+    '--input',
+    f.input(`${nodeId}-pass.json`, { state: 'passed' }),
+  ]);
 }
 // 造一个已 passed 的集成验证节点：independent_evidence + integration_candidate + pass Evidence。
 function passIntegrationNode(f, nodeId) {
-  main(['add-node', '--ledger', f.ledger_dir, '--input', f.input(`${nodeId}.json`, node({ node_id: nodeId, objective: `独立验收集成候选 ${nodeId}` }, INDEPENDENT_EVIDENCE))]);
+  main([
+    'add-node',
+    '--ledger',
+    f.ledger_dir,
+    '--input',
+    f.input(`${nodeId}.json`, node({ node_id: nodeId, objective: `独立验收集成候选 ${nodeId}` }, INDEPENDENT_EVIDENCE)),
+  ]);
   const artifact = artifactRef();
-  main(['attach', '--ledger', f.ledger_dir, '--node', nodeId, '--type', 'artifact', '--input', f.input(`${nodeId}-artifact.json`, artifact)]);
-  const attached = main(['attach', '--ledger', f.ledger_dir, '--node', nodeId, '--type', 'evidence', '--input', f.input(`${nodeId}-evidence.json`, evidencePackage(f.contract, artifact, { run_id: `${nodeId}-run` }))]);
-  main(['update', '--ledger', f.ledger_dir, '--node', nodeId, '--input', f.input(`${nodeId}-pass.json`, { state: 'passed', verification_ref: attached.nodes[nodeId].evidence.at(-1).digest })]);
+  main([
+    'attach',
+    '--ledger',
+    f.ledger_dir,
+    '--node',
+    nodeId,
+    '--type',
+    'artifact',
+    '--input',
+    f.input(`${nodeId}-artifact.json`, artifact),
+  ]);
+  const attached = main([
+    'attach',
+    '--ledger',
+    f.ledger_dir,
+    '--node',
+    nodeId,
+    '--type',
+    'evidence',
+    '--input',
+    f.input(`${nodeId}-evidence.json`, evidencePackage(f.contract, artifact, { run_id: `${nodeId}-run` })),
+  ]);
+  main([
+    'update',
+    '--ledger',
+    f.ledger_dir,
+    '--node',
+    nodeId,
+    '--input',
+    f.input(`${nodeId}-pass.json`, {
+      state: 'passed',
+      verification_ref: attached.nodes[nodeId].evidence.at(-1).digest,
+    }),
+  ]);
 }
-function edge(f, from, to, kind = 'dependency') { main(['add-edge', '--ledger', f.ledger_dir, '--input', f.input(`edge-${from}-${to}.json`, { from, to, kind })]); }
-function summaryOf(f) { return main(['status', '--ledger', f.ledger_dir]).summary; }
+function edge(f, from, to, kind = 'dependency') {
+  main(['add-edge', '--ledger', f.ledger_dir, '--input', f.input(`edge-${from}-${to}.json`, { from, to, kind })]);
+}
+function summaryOf(f) {
+  return main(['status', '--ledger', f.ledger_dir]).summary;
+}
 
 test('声明 provider 后，实现节点全 passed 但没有集成验证节点时不算完成，未覆盖名单逐个点名', () => {
   const f = makeFixture({ independent: true });
@@ -631,7 +2196,9 @@ test('声明 provider 后，实现节点全 passed 但没有集成验证节点�
     // 声明了 provider 时，未独立验证名单让位给未覆盖名单。
     assert.deepEqual(summary.nodes_without_independent_evidence, []);
     assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('连到已通过的集成验证节点即算覆盖，可达性沿 dependency / barrier 边传递', () => {
@@ -658,7 +2225,9 @@ test('连到已通过的集成验证节点即算覆盖，可达性沿 dependency
     assert.equal(transitive.completion_ready, true);
     assert.deepEqual(transitive.uncovered_implementation_nodes, []);
     assert.equal(main(['doctor', '--ledger', f.ledger_dir]).healthy, true);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('边连到还没 passed 的集成验证节点不算覆盖', () => {
@@ -666,13 +2235,24 @@ test('边连到还没 passed 的集成验证节点不算覆盖', () => {
   try {
     passImplementationNode(f, 'impl');
     // 集成节点设为 required: false 并停在 pending，把覆盖判定与"所有 required 节点已 passed"隔离开。
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('verify.json', node({ node_id: 'verify', objective: '尚未执行的独立验收', required: false }, INDEPENDENT_EVIDENCE))]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input(
+        'verify.json',
+        node({ node_id: 'verify', objective: '尚未执行的独立验收', required: false }, INDEPENDENT_EVIDENCE),
+      ),
+    ]);
     edge(f, 'impl', 'verify');
     const summary = summaryOf(f);
     assert.equal(summary.completion_ready, false);
     assert.deepEqual(summary.uncovered_implementation_nodes, ['impl']);
     assert.deepEqual(summary.non_required_implementation_nodes, ['verify']);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('刚 init 的空 ledger 不算完成', () => {
@@ -686,20 +2266,49 @@ test('刚 init 的空 ledger 不算完成', () => {
     assert.deepEqual(summary.nodes_without_independent_evidence, []);
     // 是否声明 provider 都一样：空真不再被当成完成。
     assert.equal(summaryOf(declared).completion_ready, false);
-  } finally { f.cleanup(); declared.cleanup(); }
+  } finally {
+    f.cleanup();
+    declared.cleanup();
+  }
 });
 
 test('声明 provider 但全图只有 not_applicable 节点时，覆盖规则没有对象，通过即完成', () => {
   const f = makeFixture({ independent: true });
   try {
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('critic.json', node({ node_id: 'critic', role: 'critic', objective: '独立挑错评审' }, NOT_APPLICABLE))]);
-    main(['attach', '--ledger', f.ledger_dir, '--node', 'critic', '--type', 'report', '--input', f.input('critic-report.json', { report_type: 'critic_findings', findings: ['x'] })]);
-    main(['update', '--ledger', f.ledger_dir, '--node', 'critic', '--input', f.input('critic-pass.json', { state: 'passed' })]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('critic.json', node({ node_id: 'critic', role: 'critic', objective: '独立挑错评审' }, NOT_APPLICABLE)),
+    ]);
+    main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'critic',
+      '--type',
+      'report',
+      '--input',
+      f.input('critic-report.json', { report_type: 'critic_findings', findings: ['x'] }),
+    ]);
+    main([
+      'update',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'critic',
+      '--input',
+      f.input('critic-pass.json', { state: 'passed' }),
+    ]);
     const summary = summaryOf(f);
     assert.equal(summary.completion_ready, true);
     assert.deepEqual(summary.uncovered_implementation_nodes, []);
     assert.deepEqual(summary.non_required_implementation_nodes, []);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('required: false 的实现节点只进名单，不参与完成判定', () => {
@@ -709,12 +2318,20 @@ test('required: false 的实现节点只进名单，不参与完成判定', () =
     passIntegrationNode(f, 'verify');
     edge(f, 'impl', 'verify');
     // 非 required 的实现节点既没 passed 也没被覆盖，但不拖住 completion_ready。
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('optional.json', node({ node_id: 'optional', objective: '可选实现节点', required: false }))]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('optional.json', node({ node_id: 'optional', objective: '可选实现节点', required: false })),
+    ]);
     const summary = summaryOf(f);
     assert.equal(summary.completion_ready, true);
     assert.deepEqual(summary.uncovered_implementation_nodes, []);
     assert.deepEqual(summary.non_required_implementation_nodes, ['optional']);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('未声明 provider 的契约逐个列出未经独立验证的节点，assurance 计数照旧', () => {
@@ -723,7 +2340,13 @@ test('未声明 provider 的契约逐个列出未经独立验证的节点，assu
     passImplementationNode(f, 'impl-a');
     passImplementationNode(f, 'impl-b');
     // critic 留在图里：只读评审节点没有交付物，不该出现在"未经独立验证"名单里。
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('critic.json', node({ node_id: 'critic', role: 'critic', objective: '评审' }, NOT_APPLICABLE))]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('critic.json', node({ node_id: 'critic', role: 'critic', objective: '评审' }, NOT_APPLICABLE)),
+    ]);
     const summary = summaryOf(f);
     assert.deepEqual([...summary.nodes_without_independent_evidence].sort(), ['impl-a', 'impl-b']);
     assert.equal(summary.verification_assurance.worker_self_check, 2);
@@ -732,16 +2355,42 @@ test('未声明 provider 的契约逐个列出未经独立验证的节点，assu
     // 覆盖规则只对声明了 provider 的契约生效。
     assert.deepEqual(summary.uncovered_implementation_nodes, []);
     assert.equal(summary.completion_ready, false);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 // ——— ledger 生命周期：终态、drift 下的放弃、status/inspect 报告 drift ———
 
 // 把一个 required 节点推到 passed，使 ledger 达到 completion_ready。
 function passNode(f, id) {
-  main(['add-node', '--ledger', f.ledger_dir, '--input', f.input(`${id}-node.json`, node({ node_id: id, objective: `完成 ${id}` }))]);
-  main(['dispatch-record', '--ledger', f.ledger_dir, '--node', id, '--input', f.input(`${id}-dispatch.json`, dispatch(id))]);
-  main(['attach', '--ledger', f.ledger_dir, '--node', id, '--type', 'report', '--input', f.input(`${id}-report.json`, { report_id: `report-${id}` })]);
+  main([
+    'add-node',
+    '--ledger',
+    f.ledger_dir,
+    '--input',
+    f.input(`${id}-node.json`, node({ node_id: id, objective: `完成 ${id}` })),
+  ]);
+  main([
+    'dispatch-record',
+    '--ledger',
+    f.ledger_dir,
+    '--node',
+    id,
+    '--input',
+    f.input(`${id}-dispatch.json`, dispatch(id)),
+  ]);
+  main([
+    'attach',
+    '--ledger',
+    f.ledger_dir,
+    '--node',
+    id,
+    '--type',
+    'report',
+    '--input',
+    f.input(`${id}-report.json`, { report_id: `report-${id}` }),
+  ]);
   main(['update', '--ledger', f.ledger_dir, '--node', id, '--input', f.input(`${id}-pass.json`, { state: 'passed' })]);
 }
 
@@ -750,10 +2399,17 @@ function passNode(f, id) {
 function driftLedger(f) {
   const frozen = `sha256:${'0'.repeat(64)}`;
   const journalPath = join(f.ledger_dir, 'events.ndjson');
-  const events = readFileSync(journalPath, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  const events = readFileSync(journalPath, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
   let previous = null;
   const rewritten = events.map((event) => {
-    const next = { ...event, previous_event_digest: previous, snapshot: { ...event.snapshot, skill_provenance: { ...event.snapshot.skill_provenance, content_digest: frozen } } };
+    const next = {
+      ...event,
+      previous_event_digest: previous,
+      snapshot: { ...event.snapshot, skill_provenance: { ...event.snapshot.skill_provenance, content_digest: frozen } },
+    };
     delete next.event_digest;
     next.event_digest = envelopeDigest(next, 'event_digest');
     previous = next.event_digest;
@@ -766,7 +2422,11 @@ function driftLedger(f) {
 
 // 只接受"命令确实 fail closed"，并把错误文案交给调用方逐条核对。
 function refusal(argv) {
-  try { main(argv); } catch (error) { return error.message; }
+  try {
+    main(argv);
+  } catch (error) {
+    return error.message;
+  }
   throw new assert.AssertionError({ message: `命令本应 fail closed：${argv.join(' ')}` });
 }
 
@@ -775,8 +2435,20 @@ test('close 之后任务图冻结：冻结集合里每个命令 fail closed，�
   const L = f.ledger_dir;
   try {
     passNode(f, 'done');
-    main(['add-node', '--ledger', L, '--input', f.input('aux.json', node({ node_id: 'aux', objective: '非必要节点', required: false }))]);
-    main(['batch-init', '--ledger', L, '--input', f.input('lifecycle-batch.json', { batch_id: 'batch', loop_ids: ['l1', 'l2'] })]);
+    main([
+      'add-node',
+      '--ledger',
+      L,
+      '--input',
+      f.input('aux.json', node({ node_id: 'aux', objective: '非必要节点', required: false })),
+    ]);
+    main([
+      'batch-init',
+      '--ledger',
+      L,
+      '--input',
+      f.input('lifecycle-batch.json', { batch_id: 'batch', loop_ids: ['l1', 'l2'] }),
+    ]);
 
     assert.equal(main(['status', '--ledger', L]).skill_drift, false);
     const closed = main(['close', '--ledger', L]);
@@ -784,21 +2456,81 @@ test('close 之后任务图冻结：冻结集合里每个命令 fail closed，�
     assert.equal(closed.lifecycle.reason, null);
     assert.equal(closed.lifecycle.skill_drift_at_close, false);
     assert.equal(closed.lifecycle.closed_by_content_digest, skillContentDigest());
-    assert.equal(JSON.parse(readFileSync(join(L, 'events.ndjson'), 'utf8').split('\n').filter(Boolean).at(-1)).kind, 'closed');
+    assert.equal(
+      JSON.parse(readFileSync(join(L, 'events.ndjson'), 'utf8').split('\n').filter(Boolean).at(-1)).kind,
+      'closed',
+    );
 
     // 冻结集合直接取自 runtime（CLI_SPEC 减白名单）：新增修改命令没进这张表时用例先失败，不靠手抄清单。
     const frozen = {
-      'add-node': ['add-node', '--ledger', L, '--input', f.input('late-node.json', node({ node_id: 'late', objective: '终态之后新增' }))],
-      'add-edge': ['add-edge', '--ledger', L, '--input', f.input('late-edge.json', { from: 'done', to: 'aux', kind: 'dependency' })],
-      'dispatch-record': ['dispatch-record', '--ledger', L, '--node', 'aux', '--input', f.input('late-dispatch.json', dispatch('aux'))],
-      update: ['update', '--ledger', L, '--node', 'aux', '--input', f.input('late-update.json', { state: 'cancelled' })],
-      attach: ['attach', '--ledger', L, '--node', 'aux', '--type', 'report', '--input', f.input('late-report.json', { report_id: 'late' })],
-      'batch-init': ['batch-init', '--ledger', L, '--input', f.input('late-batch.json', { batch_id: 'late', loop_ids: ['l9'] })],
-      'batch-record': ['batch-record', '--ledger', L, '--batch', 'batch', '--input', f.input('late-record.json', { loop_id: 'l1', state: 'completed' })],
+      'add-node': [
+        'add-node',
+        '--ledger',
+        L,
+        '--input',
+        f.input('late-node.json', node({ node_id: 'late', objective: '终态之后新增' })),
+      ],
+      'add-edge': [
+        'add-edge',
+        '--ledger',
+        L,
+        '--input',
+        f.input('late-edge.json', { from: 'done', to: 'aux', kind: 'dependency' }),
+      ],
+      'dispatch-record': [
+        'dispatch-record',
+        '--ledger',
+        L,
+        '--node',
+        'aux',
+        '--input',
+        f.input('late-dispatch.json', dispatch('aux')),
+      ],
+      update: [
+        'update',
+        '--ledger',
+        L,
+        '--node',
+        'aux',
+        '--input',
+        f.input('late-update.json', { state: 'cancelled' }),
+      ],
+      attach: [
+        'attach',
+        '--ledger',
+        L,
+        '--node',
+        'aux',
+        '--type',
+        'report',
+        '--input',
+        f.input('late-report.json', { report_id: 'late' }),
+      ],
+      'batch-init': [
+        'batch-init',
+        '--ledger',
+        L,
+        '--input',
+        f.input('late-batch.json', { batch_id: 'late', loop_ids: ['l9'] }),
+      ],
+      'batch-record': [
+        'batch-record',
+        '--ledger',
+        L,
+        '--batch',
+        'batch',
+        '--input',
+        f.input('late-record.json', { loop_id: 'l1', state: 'completed' }),
+      ],
       close: ['close', '--ledger', L],
     };
-    assert.deepEqual(Object.keys(frozen).sort(), [...FROZEN_AFTER_TERMINAL].sort(), 'CLI_SPEC 的冻结集合与用例表不一致');
-    for (const [command, argv] of Object.entries(frozen)) assert.match(refusal(argv), /已处于终态：lifecycle\.state=closed/u, command);
+    assert.deepEqual(
+      Object.keys(frozen).sort(),
+      [...FROZEN_AFTER_TERMINAL].sort(),
+      'CLI_SPEC 的冻结集合与用例表不一致',
+    );
+    for (const [command, argv] of Object.entries(frozen))
+      assert.match(refusal(argv), /已处于终态：lifecycle\.state=closed/u, command);
 
     // 白名单：只读回看、崩溃修复，以及按定义发生在完成之后的反思写入。
     assert.equal(main(['status', '--ledger', L]).lifecycle.state, 'closed');
@@ -810,11 +2542,37 @@ test('close 之后任务图冻结：冻结集合里每个命令 fail closed，�
     const health = main(['doctor', '--ledger', L]);
     assert.deepEqual(health.findings, [], '终态本身不应产生 finding');
     assert.equal(health.healthy, true);
-    const reflected = main(['record-reflection', '--ledger', L, '--input', f.input('post-close-reflection.json', { classification: 'inefficiency', observation: '闭环后复盘发现并行没有降低关键路径', impact: 'medium', recommended_disposition: 'continue' })]);
-    const proposal = main(['propose-improvement', '--ledger', L, '--reflection', reflected.reflection_refs[0].reflection_id, '--input', f.input('post-close-proposal.json', { problem_type: 'inefficiency', proposed_change: '缩小无效并行范围', affected_scope: ['routing'], validation_plan: { replay_cases: ['graph'], regression_suites: ['ledger'] } })]);
+    const reflected = main([
+      'record-reflection',
+      '--ledger',
+      L,
+      '--input',
+      f.input('post-close-reflection.json', {
+        classification: 'inefficiency',
+        observation: '闭环后复盘发现并行没有降低关键路径',
+        impact: 'medium',
+        recommended_disposition: 'continue',
+      }),
+    ]);
+    const proposal = main([
+      'propose-improvement',
+      '--ledger',
+      L,
+      '--reflection',
+      reflected.reflection_refs[0].reflection_id,
+      '--input',
+      f.input('post-close-proposal.json', {
+        problem_type: 'inefficiency',
+        proposed_change: '缩小无效并行范围',
+        affected_scope: ['routing'],
+        validation_plan: { replay_cases: ['graph'], regression_suites: ['ledger'] },
+      }),
+    ]);
     assert.equal(proposal.lifecycle.state, 'closed', '反思写入不得抹掉终态');
     assert.equal(main(['doctor', '--ledger', L]).healthy, true);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('completion_ready 为 false 时 close 逐条列出未满足条件，空 ledger 与未覆盖实现节点同样 fail closed', () => {
@@ -827,13 +2585,21 @@ test('completion_ready 为 false 时 close 逐条列出未满足条件，空 led
     assert.match(empty, /没有任何 required 节点/u);
     assert.match(empty, /close --abandon --reason/u);
 
-    main(['add-node', '--ledger', L, '--input', f.input('waiting.json', node({ node_id: 'waiting', objective: '还没跑完' }))]);
+    main([
+      'add-node',
+      '--ledger',
+      L,
+      '--input',
+      f.input('waiting.json', node({ node_id: 'waiting', objective: '还没跑完' })),
+    ]);
     const pending = refusal(['close', '--ledger', L]);
     assert.match(pending, /nodes\[\]\.state/u);
     assert.ok(pending.includes('waiting(state=pending)'), pending);
     assert.equal(main(['status', '--ledger', L]).summary.unmet_completion_conditions.length, 1);
     assert.equal(main(['status', '--ledger', L]).lifecycle, undefined);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 
   // 声明了 verify-agent-output provider 却没有集成验证节点：required 实现节点未被覆盖。
   const g = makeFixture({ independent: true });
@@ -843,7 +2609,9 @@ test('completion_ready 为 false 时 close 逐条列出未满足条件，空 led
     const uncovered = refusal(['close', '--ledger', g.ledger_dir]);
     assert.match(uncovered, /uncovered_implementation_nodes/u);
     assert.ok(uncovered.includes('impl'), uncovered);
-  } finally { g.cleanup(); }
+  } finally {
+    g.cleanup();
+  }
 });
 
 test('drift 的 ledger 只剩 close --abandon：其余修改命令（含正常 close）全部 fail closed', () => {
@@ -851,8 +2619,20 @@ test('drift 的 ledger 只剩 close --abandon：其余修改命令（含正常 c
   const L = f.ledger_dir;
   try {
     passNode(f, 'done');
-    main(['add-node', '--ledger', L, '--input', f.input('aux.json', node({ node_id: 'aux', objective: '非必要节点', required: false }))]);
-    main(['batch-init', '--ledger', L, '--input', f.input('lifecycle-batch.json', { batch_id: 'batch', loop_ids: ['l1', 'l2'] })]);
+    main([
+      'add-node',
+      '--ledger',
+      L,
+      '--input',
+      f.input('aux.json', node({ node_id: 'aux', objective: '非必要节点', required: false })),
+    ]);
+    main([
+      'batch-init',
+      '--ledger',
+      L,
+      '--input',
+      f.input('lifecycle-batch.json', { batch_id: 'batch', loop_ids: ['l1', 'l2'] }),
+    ]);
     assert.equal(main(['status', '--ledger', L]).summary.completion_ready, true);
     const frozenDigest = driftLedger(f);
 
@@ -866,18 +2646,98 @@ test('drift 的 ledger 只剩 close --abandon：其余修改命令（含正常 c
     assert.ok(main(['doctor', '--ledger', L]).findings.includes('skill_drift'));
 
     const drifted = {
-      'add-node': ['add-node', '--ledger', L, '--input', f.input('drift-node.json', node({ node_id: 'later', objective: 'drift 之后新增' }))],
-      'add-edge': ['add-edge', '--ledger', L, '--input', f.input('drift-edge.json', { from: 'done', to: 'aux', kind: 'dependency' })],
-      'dispatch-record': ['dispatch-record', '--ledger', L, '--node', 'aux', '--input', f.input('drift-dispatch.json', dispatch('aux'))],
-      update: ['update', '--ledger', L, '--node', 'aux', '--input', f.input('drift-update.json', { state: 'cancelled' })],
-      attach: ['attach', '--ledger', L, '--node', 'aux', '--type', 'report', '--input', f.input('drift-report.json', { report_id: 'drift' })],
-      'batch-init': ['batch-init', '--ledger', L, '--input', f.input('drift-batch.json', { batch_id: 'drift', loop_ids: ['l9'] })],
-      'batch-record': ['batch-record', '--ledger', L, '--batch', 'batch', '--input', f.input('drift-record.json', { loop_id: 'l1', state: 'completed' })],
-      'record-reflection': ['record-reflection', '--ledger', L, '--input', f.input('drift-reflection.json', { classification: 'inefficiency', observation: 'drift 之后不该写入', impact: 'medium', recommended_disposition: 'continue' })],
-      'propose-improvement': ['propose-improvement', '--ledger', L, '--reflection', 'missing-reflection', '--input', f.input('drift-proposal.json', { problem_type: 'inefficiency', proposed_change: '缩小无效并行范围', affected_scope: ['routing'], validation_plan: { replay_cases: [], regression_suites: [] } })],
+      'add-node': [
+        'add-node',
+        '--ledger',
+        L,
+        '--input',
+        f.input('drift-node.json', node({ node_id: 'later', objective: 'drift 之后新增' })),
+      ],
+      'add-edge': [
+        'add-edge',
+        '--ledger',
+        L,
+        '--input',
+        f.input('drift-edge.json', { from: 'done', to: 'aux', kind: 'dependency' }),
+      ],
+      'dispatch-record': [
+        'dispatch-record',
+        '--ledger',
+        L,
+        '--node',
+        'aux',
+        '--input',
+        f.input('drift-dispatch.json', dispatch('aux')),
+      ],
+      update: [
+        'update',
+        '--ledger',
+        L,
+        '--node',
+        'aux',
+        '--input',
+        f.input('drift-update.json', { state: 'cancelled' }),
+      ],
+      attach: [
+        'attach',
+        '--ledger',
+        L,
+        '--node',
+        'aux',
+        '--type',
+        'report',
+        '--input',
+        f.input('drift-report.json', { report_id: 'drift' }),
+      ],
+      'batch-init': [
+        'batch-init',
+        '--ledger',
+        L,
+        '--input',
+        f.input('drift-batch.json', { batch_id: 'drift', loop_ids: ['l9'] }),
+      ],
+      'batch-record': [
+        'batch-record',
+        '--ledger',
+        L,
+        '--batch',
+        'batch',
+        '--input',
+        f.input('drift-record.json', { loop_id: 'l1', state: 'completed' }),
+      ],
+      'record-reflection': [
+        'record-reflection',
+        '--ledger',
+        L,
+        '--input',
+        f.input('drift-reflection.json', {
+          classification: 'inefficiency',
+          observation: 'drift 之后不该写入',
+          impact: 'medium',
+          recommended_disposition: 'continue',
+        }),
+      ],
+      'propose-improvement': [
+        'propose-improvement',
+        '--ledger',
+        L,
+        '--reflection',
+        'missing-reflection',
+        '--input',
+        f.input('drift-proposal.json', {
+          problem_type: 'inefficiency',
+          proposed_change: '缩小无效并行范围',
+          affected_scope: ['routing'],
+          validation_plan: { replay_cases: [], regression_suites: [] },
+        }),
+      ],
       close: ['close', '--ledger', L],
     };
-    assert.deepEqual(Object.keys(drifted).sort(), [...DRIFT_BLOCKED_COMMANDS].sort(), 'CLI_SPEC 的 drift 冻结集合与用例表不一致');
+    assert.deepEqual(
+      Object.keys(drifted).sort(),
+      [...DRIFT_BLOCKED_COMMANDS].sort(),
+      'CLI_SPEC 的 drift 冻结集合与用例表不一致',
+    );
     // 报错要给出冻结摘要与当前摘要的可辨识前缀（两者不同），以及唯二剩下的合规路径。
     const frozenPrefix = frozenDigest.slice(0, 19);
     const currentPrefix = skillContentDigest().slice(0, 19);
@@ -909,8 +2769,13 @@ test('drift 的 ledger 只剩 close --abandon：其余修改命令（含正常 c
     assert.equal(main(['status', '--ledger', L]).lifecycle.state, 'abandoned');
     // doctor 只报 drift 这一条，不因终态本身多出 finding。
     assert.deepEqual(main(['doctor', '--ledger', L]).findings, ['skill_drift']);
-    assert.match(refusal(['close', '--ledger', L, '--abandon', '--reason', '再放弃一次']), /已处于终态：lifecycle\.state=abandoned/u);
-  } finally { f.cleanup(); }
+    assert.match(
+      refusal(['close', '--ledger', L, '--abandon', '--reason', '再放弃一次']),
+      /已处于终态：lifecycle\.state=abandoned/u,
+    );
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('--abandon 的 reason 必填非空，--reason 不能脱离 --abandon', () => {
@@ -918,11 +2783,16 @@ test('--abandon 的 reason 必填非空，--reason 不能脱离 --abandon', () =
   const L = f.ledger_dir;
   try {
     assert.match(refusal(['close', '--ledger', L, '--abandon']), /--abandon 必须同时给出非空 --reason/u);
-    assert.match(refusal(['close', '--ledger', L, '--abandon', '--reason', '   ']), /--abandon 必须同时给出非空 --reason/u);
+    assert.match(
+      refusal(['close', '--ledger', L, '--abandon', '--reason', '   ']),
+      /--abandon 必须同时给出非空 --reason/u,
+    );
     assert.match(refusal(['close', '--ledger', L, '--reason', '理由']), /--reason 只属于 --abandon/u);
     assert.equal(main(['status', '--ledger', L]).lifecycle, undefined);
     assert.equal(main(['close', '--ledger', L, '--abandon', '--reason', '需求取消']).lifecycle.state, 'abandoned');
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('lifecycle 是向后兼容的可选新增字段：旧快照没有它仍然合法，终态快照字段落在 schema 内', () => {
@@ -937,7 +2807,8 @@ test('lifecycle 是向后兼容的可选新增字段：旧快照没有它仍然�
   try {
     const legacy = JSON.parse(readFileSync(join(L, 'snapshot.json'), 'utf8'));
     assert.equal(Object.hasOwn(legacy, 'lifecycle'), false);
-    for (const key of Object.keys(legacy)) assert.ok(Object.hasOwn(schema.properties, key), `旧快照字段 ${key} 不在 schema.properties 里`);
+    for (const key of Object.keys(legacy))
+      assert.ok(Object.hasOwn(schema.properties, key), `旧快照字段 ${key} 不在 schema.properties 里`);
     for (const key of schema.required) assert.ok(Object.hasOwn(legacy, key), `旧快照缺少 required 字段 ${key}`);
     assert.equal(main(['status', '--ledger', L]).ledger_id, 'ledger');
     assert.equal(main(['doctor', '--ledger', L]).healthy, true);
@@ -946,8 +2817,13 @@ test('lifecycle 是向后兼容的可选新增字段：旧快照没有它仍然�
     const lifecycle = main(['close', '--ledger', L]).lifecycle;
     assert.deepEqual(Object.keys(lifecycle).sort(), [...schema.$defs.lifecycle.required].sort());
     for (const key of Object.keys(lifecycle)) assert.ok(Object.hasOwn(schema.$defs.lifecycle.properties, key), key);
-    assert.match(lifecycle.closed_by_content_digest, new RegExp(schema.$defs.lifecycle.properties.closed_by_content_digest.pattern, 'u'));
-  } finally { f.cleanup(); }
+    assert.match(
+      lifecycle.closed_by_content_digest,
+      new RegExp(schema.$defs.lifecycle.properties.closed_by_content_digest.pattern, 'u'),
+    );
+  } finally {
+    f.cleanup();
+  }
 });
 
 // #17：现场违规文案——机械拦截点在报错里点名字段路径/节点 id、当前值、要求满足的性质，
@@ -956,12 +2832,36 @@ test('lifecycle 是向后兼容的可选新增字段：旧快照没有它仍然�
 test('independent_evidence 的 verification_ref 违规文案点名节点、字段路径与合规命令名', () => {
   const f = makeFixture({ independent: true });
   try {
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('node.json', node({ node_id: 'verified', objective: '需要独立证据覆盖' }, INDEPENDENT_EVIDENCE))]);
-    const attached = main(['attach', '--ledger', f.ledger_dir, '--node', 'verified', '--type', 'artifact', '--input', f.input('artifact.json', artifactRef())]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('node.json', node({ node_id: 'verified', objective: '需要独立证据覆盖' }, INDEPENDENT_EVIDENCE)),
+    ]);
+    const attached = main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'verified',
+      '--type',
+      'artifact',
+      '--input',
+      f.input('artifact.json', artifactRef()),
+    ]);
     const artifactDigest = attached.nodes.verified.stable_outputs.find((item) => item.type === 'artifact').digest;
 
     // ① 完全没给 verification_ref：只点名 Evidence Package，不与 Controller Recheck Record 并列。
-    const missingRef = refusal(['update', '--ledger', f.ledger_dir, '--node', 'verified', '--input', f.input('missing-ref.json', { state: 'passed' })]);
+    const missingRef = refusal([
+      'update',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'verified',
+      '--input',
+      f.input('missing-ref.json', { state: 'passed' }),
+    ]);
     assert.match(missingRef, /node\[verified\]\.verification_ref/u, missingRef);
     assert.match(missingRef, /independent_evidence/u, missingRef);
     assert.match(missingRef, /Evidence Package/u, missingRef);
@@ -970,22 +2870,56 @@ test('independent_evidence 的 verification_ref 违规文案点名节点、字�
     assert.match(missingRef, /\bupdate\b/u, missingRef);
 
     // ② verification_ref 有效但指向的是已绑定的 Artifact digest，不是 Evidence Package。
-    const wrongRef = refusal(['update', '--ledger', f.ledger_dir, '--node', 'verified', '--input', f.input('wrong-ref.json', { state: 'passed', verification_ref: artifactDigest })]);
+    const wrongRef = refusal([
+      'update',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'verified',
+      '--input',
+      f.input('wrong-ref.json', { state: 'passed', verification_ref: artifactDigest }),
+    ]);
     assert.match(wrongRef, /node\[verified\]\.verification_ref=/u, wrongRef);
     assert.match(wrongRef, /未指向 Evidence Package/u, wrongRef);
     assert.match(wrongRef, /\battach\b/u, wrongRef);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('controller_recheck 的 verification_ref 违规文案点名节点、字段路径与合规命令名', () => {
   const f = makeFixture();
   try {
-    main(['add-node', '--ledger', f.ledger_dir, '--input', f.input('node.json', node({ node_id: 'reviewed', objective: '需要主控复核' }, CONTROLLER_RECHECK))]);
-    const attached = main(['attach', '--ledger', f.ledger_dir, '--node', 'reviewed', '--type', 'artifact', '--input', f.input('artifact.json', artifactRef())]);
+    main([
+      'add-node',
+      '--ledger',
+      f.ledger_dir,
+      '--input',
+      f.input('node.json', node({ node_id: 'reviewed', objective: '需要主控复核' }, CONTROLLER_RECHECK)),
+    ]);
+    const attached = main([
+      'attach',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'reviewed',
+      '--type',
+      'artifact',
+      '--input',
+      f.input('artifact.json', artifactRef()),
+    ]);
     const artifactDigest = attached.nodes.reviewed.stable_outputs.find((item) => item.type === 'artifact').digest;
 
     // ① 完全没给 verification_ref：只点名 Controller Recheck Record，不与 Evidence Package 并列。
-    const missingRef = refusal(['update', '--ledger', f.ledger_dir, '--node', 'reviewed', '--input', f.input('missing-ref.json', { state: 'passed' })]);
+    const missingRef = refusal([
+      'update',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'reviewed',
+      '--input',
+      f.input('missing-ref.json', { state: 'passed' }),
+    ]);
     assert.match(missingRef, /node\[reviewed\]\.verification_ref/u, missingRef);
     assert.match(missingRef, /controller_recheck/u, missingRef);
     assert.match(missingRef, /Controller Recheck Record/u, missingRef);
@@ -994,11 +2928,21 @@ test('controller_recheck 的 verification_ref 违规文案点名节点、字段�
     assert.match(missingRef, /\bupdate\b/u, missingRef);
 
     // ② verification_ref 有效但指向的是已绑定的 Artifact digest，不是 Controller Recheck Record。
-    const wrongRef = refusal(['update', '--ledger', f.ledger_dir, '--node', 'reviewed', '--input', f.input('wrong-ref.json', { state: 'passed', verification_ref: artifactDigest })]);
+    const wrongRef = refusal([
+      'update',
+      '--ledger',
+      f.ledger_dir,
+      '--node',
+      'reviewed',
+      '--input',
+      f.input('wrong-ref.json', { state: 'passed', verification_ref: artifactDigest }),
+    ]);
     assert.match(wrongRef, /node\[reviewed\]\.verification_ref=/u, wrongRef);
     assert.match(wrongRef, /未指向 Controller Recheck Record/u, wrongRef);
     assert.match(wrongRef, /\battach\b/u, wrongRef);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });
 
 test('completion_ready 未满足时的每条 unmet condition 都点名合规命令名', () => {
@@ -1013,14 +2957,22 @@ test('completion_ready 未满足时的每条 unmet condition 都点名合规命�
     assert.doesNotMatch(empty, /不要把 required/u, empty);
     assert.doesNotMatch(empty, /默认.{0,4}true/u, empty);
 
-    main(['add-node', '--ledger', L, '--input', f.input('waiting.json', node({ node_id: 'waiting', objective: '还没跑完' }))]);
+    main([
+      'add-node',
+      '--ledger',
+      L,
+      '--input',
+      f.input('waiting.json', node({ node_id: 'waiting', objective: '还没跑完' })),
+    ]);
     const pending = refusal(['close', '--ledger', L]);
     assert.match(pending, /nodes\[\]\.state/u, pending);
     assert.ok(pending.includes('waiting(state=pending)'), pending);
     // 条件在前、动作在后：先说明必须先满足验证要求的证据，再说明满足之后才能 update。
     assert.match(pending, /要求的证据，才能用 update 把 state 改为 passed/u, pending);
     assert.doesNotMatch(pending, /逐个推进为 passed/u, pending);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 
   const g = makeFixture({ independent: true });
   try {
@@ -1030,17 +2982,39 @@ test('completion_ready 未满足时的每条 unmet condition 都点名合规命�
     assert.ok(uncovered.includes('impl'), uncovered);
     assert.match(uncovered, /independent_evidence/u, uncovered);
     assert.match(uncovered, /\badd-edge\b/u, uncovered);
-  } finally { g.cleanup(); }
+  } finally {
+    g.cleanup();
+  }
 });
 
 test('CLI 走一遍 controller_recheck 违规：stderr JSON 形态与退出码不变，只是 message 更详细', () => {
   const f = makeFixture();
   const L = f.ledger_dir;
   try {
-    main(['add-node', '--ledger', L, '--input', f.input('node.json', node({ node_id: 'reviewed', objective: '需要主控复核' }, CONTROLLER_RECHECK))]);
-    main(['attach', '--ledger', L, '--node', 'reviewed', '--type', 'artifact', '--input', f.input('artifact.json', artifactRef())]);
+    main([
+      'add-node',
+      '--ledger',
+      L,
+      '--input',
+      f.input('node.json', node({ node_id: 'reviewed', objective: '需要主控复核' }, CONTROLLER_RECHECK)),
+    ]);
+    main([
+      'attach',
+      '--ledger',
+      L,
+      '--node',
+      'reviewed',
+      '--type',
+      'artifact',
+      '--input',
+      f.input('artifact.json', artifactRef()),
+    ]);
     const inputPath = f.input('pass.json', { state: 'passed' });
-    const cli = spawnSync(process.execPath, [LEDGER_SCRIPT, 'update', '--ledger', L, '--node', 'reviewed', '--input', inputPath], { encoding: 'utf8' });
+    const cli = spawnSync(
+      process.execPath,
+      [LEDGER_SCRIPT, 'update', '--ledger', L, '--node', 'reviewed', '--input', inputPath],
+      { encoding: 'utf8' },
+    );
     assert.equal(cli.status, 2, cli.stderr);
     assert.equal(cli.stdout, '');
     const payload = JSON.parse(cli.stderr);
@@ -1049,5 +3023,7 @@ test('CLI 走一遍 controller_recheck 违规：stderr JSON 形态与退出码�
     assert.match(payload.message, /node\[reviewed\]\.verification_ref/u, payload.message);
     assert.match(payload.message, /controller_recheck/u, payload.message);
     assert.match(payload.message, /\battach\b/u, payload.message);
-  } finally { f.cleanup(); }
+  } finally {
+    f.cleanup();
+  }
 });

@@ -28,21 +28,47 @@ const CAPABILITY_PATTERN = /^worker\.[a-z][a-z0-9_.-]{0,63}$/u;
 const SESSION_BINDING_PATTERN = /^session:[A-Za-z0-9._-]{1,128}$/u;
 const CONFIG_BINDING_PATTERN = /^config:sha256:[0-9a-f]{64}$/u;
 const ISO_TZ_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/u;
-const OUTCOMES = new Set(['allowed', 'denied_by_policy', 'unavailable_or_unproven', 'approval_channel_fault', 'execution_fault']);
-const EFFECTIVE_KEYS = new Set(['schema_version', 'host', 'worker_profile', 'capability_fingerprint', 'binding', 'observed_at', 'expires_at', 'outcomes', 'evidence_refs']);
-const REQUIREMENT_KEYS = new Set(['schema_version', 'host', 'worker_profile', 'capability_fingerprint', 'binding', 'required']);
+const OUTCOMES = new Set([
+  'allowed',
+  'denied_by_policy',
+  'unavailable_or_unproven',
+  'approval_channel_fault',
+  'execution_fault',
+]);
+const EFFECTIVE_KEYS = new Set([
+  'schema_version',
+  'host',
+  'worker_profile',
+  'capability_fingerprint',
+  'binding',
+  'observed_at',
+  'expires_at',
+  'outcomes',
+  'evidence_refs',
+]);
+const REQUIREMENT_KEYS = new Set([
+  'schema_version',
+  'host',
+  'worker_profile',
+  'capability_fingerprint',
+  'binding',
+  'required',
+]);
 const EVIDENCE_KEYS = new Set(['type', 'id', 'digest']);
 const EVIDENCE_TYPES = new Set(['probe', 'schema', 'observation']);
 
 export class WorkerCapabilityError extends Error {}
 
 function checkKeys(value, allowed, label) {
-  const unknown = Object.keys(value).filter((key) => !allowed.has(key)).sort();
+  const unknown = Object.keys(value)
+    .filter((key) => !allowed.has(key))
+    .sort();
   if (unknown.length) throw new WorkerCapabilityError(`${label} has unknown keys: ${unknown.join(', ')}`);
 }
 
 function object(value, label) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new WorkerCapabilityError(`${label} must be a JSON object`);
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new WorkerCapabilityError(`${label} must be a JSON object`);
   return value;
 }
 
@@ -62,8 +88,10 @@ function binding(value) {
 
 function metadata(value, label) {
   if (!HOST_PATTERN.test(String(value.host ?? ''))) throw new WorkerCapabilityError(`${label}.host is invalid`);
-  if (!PROFILE_PATTERN.test(String(value.worker_profile ?? ''))) throw new WorkerCapabilityError(`${label}.worker_profile is invalid`);
-  if (!DIGEST_PATTERN.test(String(value.capability_fingerprint ?? ''))) throw new WorkerCapabilityError(`${label}.capability_fingerprint is invalid`);
+  if (!PROFILE_PATTERN.test(String(value.worker_profile ?? '')))
+    throw new WorkerCapabilityError(`${label}.worker_profile is invalid`);
+  if (!DIGEST_PATTERN.test(String(value.capability_fingerprint ?? '')))
+    throw new WorkerCapabilityError(`${label}.capability_fingerprint is invalid`);
   return {
     host: value.host,
     worker_profile: value.worker_profile,
@@ -74,7 +102,9 @@ function metadata(value, label) {
 
 function capabilityList(value, label) {
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || !CAPABILITY_PATTERN.test(item))) {
-    throw new WorkerCapabilityError(`${label} must be an array of worker.* capability keys (required prefix: "worker.", e.g. "worker.read.cwd"); other prefixes are rejected`);
+    throw new WorkerCapabilityError(
+      `${label} must be an array of worker.* capability keys (required prefix: "worker.", e.g. "worker.read.cwd"); other prefixes are rejected`,
+    );
   }
   return [...new Set(value)].sort();
 }
@@ -82,25 +112,35 @@ function capabilityList(value, label) {
 export function normalizeEffective(value) {
   object(value, 'effective capability descriptor');
   checkKeys(value, EFFECTIVE_KEYS, 'effective capability descriptor');
-  if (value.schema_version !== SCHEMA_VERSION) throw new WorkerCapabilityError(`effective capability descriptor must declare schema_version ${SCHEMA_VERSION}`);
+  if (value.schema_version !== SCHEMA_VERSION)
+    throw new WorkerCapabilityError(`effective capability descriptor must declare schema_version ${SCHEMA_VERSION}`);
   const common = metadata(value, 'effective capability descriptor');
   const observedAt = timestamp(value.observed_at, 'observed_at');
   const expiresAt = timestamp(value.expires_at, 'expires_at');
   const maxHours = common.binding.startsWith('session:') ? 24 : 168;
-  if (expiresAt.getTime() <= observedAt.getTime() || expiresAt.getTime() - observedAt.getTime() > maxHours * 3600 * 1000) {
+  if (
+    expiresAt.getTime() <= observedAt.getTime() ||
+    expiresAt.getTime() - observedAt.getTime() > maxHours * 3600 * 1000
+  ) {
     throw new WorkerCapabilityError(`effective capability validity must be within ${maxHours} hours`);
   }
   object(value.outcomes, 'outcomes');
   const outcomes = {};
   for (const key of Object.keys(value.outcomes).sort()) {
-    if (!CAPABILITY_PATTERN.test(key) || !OUTCOMES.has(value.outcomes[key])) throw new WorkerCapabilityError(`outcomes.${key} is invalid`);
+    if (!CAPABILITY_PATTERN.test(key) || !OUTCOMES.has(value.outcomes[key]))
+      throw new WorkerCapabilityError(`outcomes.${key} is invalid`);
     outcomes[key] = value.outcomes[key];
   }
   if (!Array.isArray(value.evidence_refs)) throw new WorkerCapabilityError('evidence_refs must be an array');
   const evidenceRefs = value.evidence_refs.map((item, index) => {
     object(item, `evidence_refs[${index}]`);
     checkKeys(item, EVIDENCE_KEYS, `evidence_refs[${index}]`);
-    if (!EVIDENCE_TYPES.has(item.type) || typeof item.id !== 'string' || !item.id || !DIGEST_PATTERN.test(String(item.digest ?? ''))) {
+    if (
+      !EVIDENCE_TYPES.has(item.type) ||
+      typeof item.id !== 'string' ||
+      !item.id ||
+      !DIGEST_PATTERN.test(String(item.digest ?? ''))
+    ) {
       throw new WorkerCapabilityError(`evidence_refs[${index}] is invalid`);
     }
     return { type: item.type, id: item.id, digest: item.digest };
@@ -121,14 +161,26 @@ export function normalizeEffective(value) {
 export function normalizeRequirements(value) {
   object(value, 'capability requirements');
   checkKeys(value, REQUIREMENT_KEYS, 'capability requirements');
-  if (value.schema_version !== SCHEMA_VERSION) throw new WorkerCapabilityError(`capability requirements must declare schema_version ${SCHEMA_VERSION}`);
-  return { schema_version: SCHEMA_VERSION, ...metadata(value, 'capability requirements'), required: capabilityList(value.required, 'required') };
+  if (value.schema_version !== SCHEMA_VERSION)
+    throw new WorkerCapabilityError(`capability requirements must declare schema_version ${SCHEMA_VERSION}`);
+  return {
+    schema_version: SCHEMA_VERSION,
+    ...metadata(value, 'capability requirements'),
+    required: capabilityList(value.required, 'required'),
+  };
 }
 
 export function checkCapabilities(effectiveValue, requirementValue, now = new Date()) {
   const requirements = normalizeRequirements(requirementValue);
   if (requirements.required.length === 0) {
-    return { ready: true, required: [], allowed: [], blocked: [], action: 'dispatch', effective_status: effectiveValue ? 'not-required' : 'absent-not-required' };
+    return {
+      ready: true,
+      required: [],
+      allowed: [],
+      blocked: [],
+      action: 'dispatch',
+      effective_status: effectiveValue ? 'not-required' : 'absent-not-required',
+    };
   }
   if (!effectiveValue) {
     return {
@@ -141,7 +193,9 @@ export function checkCapabilities(effectiveValue, requirementValue, now = new Da
     };
   }
   const effective = normalizeEffective(effectiveValue);
-  const mismatches = ['host', 'worker_profile', 'capability_fingerprint', 'binding'].filter((key) => effective[key] !== requirements[key]);
+  const mismatches = ['host', 'worker_profile', 'capability_fingerprint', 'binding'].filter(
+    (key) => effective[key] !== requirements[key],
+  );
   if (mismatches.length) {
     return {
       ready: false,
@@ -177,7 +231,14 @@ export function checkCapabilities(effectiveValue, requirementValue, now = new Da
   else if (blocked.some((item) => item.outcome === 'execution_fault')) action = 'stop_same_class_and_diagnose';
   else if (blocked.some((item) => item.outcome === 'denied_by_policy')) action = 'replan_or_controller';
   else if (blocked.length) action = 'scoped_probe_or_replan';
-  return { ready: blocked.length === 0, required: requirements.required, allowed, blocked, action, effective_status: 'fresh' };
+  return {
+    ready: blocked.length === 0,
+    required: requirements.required,
+    allowed,
+    blocked,
+    action,
+    effective_status: 'fresh',
+  };
 }
 
 function readJson(path) {
@@ -187,11 +248,23 @@ function readJson(path) {
 export function main(argv = process.argv.slice(2)) {
   if (isHelpRequest(argv)) return { help: renderCliHelp('worker-capability-preflight.mjs', CLI_SPEC, CLI_NOTES) };
   const command = argv[0];
-  if (command === 'capabilities') return { protocol_version: ORCHESTRATION_PROTOCOL_VERSION, runtime_version: RUNTIME_VERSION, schemas: { effective_worker_capability: [1], worker_capability_requirements: [1] }, outcomes: [...OUTCOMES] };
+  if (command === 'capabilities')
+    return {
+      protocol_version: ORCHESTRATION_PROTOCOL_VERSION,
+      runtime_version: RUNTIME_VERSION,
+      schemas: { effective_worker_capability: [1], worker_capability_requirements: [1] },
+      outcomes: [...OUTCOMES],
+    };
   const options = {};
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index];
-    if (!token.startsWith('--') || !CLI_OPTIONS.has(token.slice(2)) || argv[index + 1] === undefined || argv[index + 1].startsWith('--')) throw new WorkerCapabilityError(`unknown or incomplete option: ${token}`);
+    if (
+      !token.startsWith('--') ||
+      !CLI_OPTIONS.has(token.slice(2)) ||
+      argv[index + 1] === undefined ||
+      argv[index + 1].startsWith('--')
+    )
+      throw new WorkerCapabilityError(`unknown or incomplete option: ${token}`);
     options[token.slice(2)] = argv[++index];
   }
   if (command === 'normalize') {

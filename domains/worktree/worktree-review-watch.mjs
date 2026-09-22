@@ -67,14 +67,13 @@ export function createCommands(deps) {
    * @param {{head:string|null}} snapshot
    */
   function reviewWatchIntent(loaded, record, args, snapshot) {
-    const previous = record.review_watch?.policy === 'auto'
-      ? record.review_watch
-      : record.auto_reclaim ?? null;
-    const targetRef = aliasedFlag(args.flags, 'target', 'watch-target')
-      ?? previous?.target_ref
-      ?? record.base_ref
-      ?? loaded.profile.default_base
-      ?? null;
+    const previous = record.review_watch?.policy === 'auto' ? record.review_watch : (record.auto_reclaim ?? null);
+    const targetRef =
+      aliasedFlag(args.flags, 'target', 'watch-target') ??
+      previous?.target_ref ??
+      record.base_ref ??
+      loaded.profile.default_base ??
+      null;
     const changeRefValue = aliasedFlag(args.flags, 'change-ref', 'mr');
     return {
       policy: 'auto',
@@ -82,9 +81,7 @@ export function createCommands(deps) {
       target_ref: targetRef,
       head_sha: snapshot.head,
       interval_ms: parseWatchInterval(flag(args.flags, 'interval-ms') ?? previous?.interval_ms),
-      change_ref: changeRefValue
-        ? oneLine(changeRefValue, 'change-ref', 1000)
-        : previous?.change_ref ?? null,
+      change_ref: changeRefValue ? oneLine(changeRefValue, 'change-ref', 1000) : (previous?.change_ref ?? null),
       notify: parseNotifyMode(flag(args.flags, 'notify') ?? previous?.notify),
       reason: null,
       source: 'auto_touch',
@@ -115,11 +112,17 @@ export function createCommands(deps) {
       },
       mutate(current) {
         if (current.worktree_state === 'reclaimed' || current.worktree_state === 'archived') {
-          throw new WorktreeTraceError('WATCH_INTENT_SETTLED', `已结算 record 不能更新 watch intent: ${record.worktree_id}`);
+          throw new WorktreeTraceError(
+            'WATCH_INTENT_SETTLED',
+            `已结算 record 不能更新 watch intent: ${record.worktree_id}`,
+          );
         }
         const next = structuredClone(current);
         if (disarmToken) {
-          if (next.auto_reclaim?.token !== disarmToken || ['disarmed', 'reclaimed'].includes(next.auto_reclaim?.state)) {
+          if (
+            next.auto_reclaim?.token !== disarmToken ||
+            ['disarmed', 'reclaimed'].includes(next.auto_reclaim?.state)
+          ) {
             throw new WorktreeTraceError('WATCHER_CHANGED', `watch token 已被并发更新或解除: ${record.worktree_id}`);
           }
           next.auto_reclaim.state = 'disarmed';
@@ -164,23 +167,35 @@ export function createCommands(deps) {
       skip(`无法确定远端主干 target（Profile default_base=${loaded.profile.default_base ?? 'null'}）`);
       return;
     }
-    if (!snapshot.present) { skip('worktree 不存在'); return; }
-    if (snapshot.dirty !== false) { skip('工作树非干净'); return; }
-    if (!snapshot.head) { skip('无法读取 HEAD'); return; }
+    if (!snapshot.present) {
+      skip('worktree 不存在');
+      return;
+    }
+    if (snapshot.dirty !== false) {
+      skip('工作树非干净');
+      return;
+    }
+    if (!snapshot.head) {
+      skip('无法读取 HEAD');
+      return;
+    }
     const upstream = gitTry(['rev-parse', '@{upstream}^{commit}'], record.path);
     if (!upstream.ok || upstream.out !== snapshot.head) {
       skip('当前 HEAD 尚未完整 push 到 upstream');
       return;
     }
     const refreshedTarget = refreshTargetRef(targetRef, loaded.context.current_worktree);
-    if (!refreshedTarget.ok) { skip(`目标 ref 不存在或无法刷新: ${targetRef}`); return; }
+    if (!refreshedTarget.ok) {
+      skip(`目标 ref 不存在或无法刷新: ${targetRef}`);
+      return;
+    }
     // auto_touch 是可重算的默认动作，可在当轮直接改 target；人工显式 watch（以及没有来源字段的
     // legacy watcher）是用户指令，touch 不能静默改写。即使它刚因 HEAD 漂移被原子撤防，也保留
     // 这条 provenance 边界；此时改目标应显式执行 watch --target 重新建立指令。
     if (previous && previous.target_ref !== targetRef && previous.armed_by !== 'auto_touch') {
       skip(
         `人工武装 target=${previous.target_ref} 与请求的 ${targetRef} 不同；` +
-        `${previous.state === 'disarmed' ? '请显式执行 watch --target 建立新监听' : '换目标请先 unwatch'}`,
+          `${previous.state === 'disarmed' ? '请显式执行 watch --target 建立新监听' : '换目标请先 unwatch'}`,
       );
       return;
     }
@@ -204,40 +219,57 @@ export function createCommands(deps) {
         previousHealth: health.reason,
         armedBy: 'auto_touch',
       });
-      const rearming = Boolean(existing) || (
-        previous?.state === 'disarmed' && previous.disarm_reason === 'stale_frozen_head'
-      );
+      const rearming =
+        Boolean(existing) || (previous?.state === 'disarmed' && previous.disarm_reason === 'stale_frozen_head');
       const refroze = rearming && previous?.head_sha !== snapshot.head;
       log(
         `watch 已${rearming ? '重新' : ''}武装 pid=${started.pid} target=${targetRef} head=${snapshot.head.slice(0, 12)}` +
-        `${refroze ? `（HEAD 变化，已从 ${previous.head_sha.slice(0, 12)} 重冻结）` : ''}`,
+          `${refroze ? `（HEAD 变化，已从 ${previous.head_sha.slice(0, 12)} 重冻结）` : ''}`,
       );
     } catch (error) {
       skip(`watcher 启动失败: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-
   function appendAutoStatus(commonDir, record, token, eventType, targetSha) {
-    return appendWatchedEvent(commonDir, record, token, eventType, (next) => {
-      next.task_status = eventType === 'auto_integrating' ? 'integrating' : 'done';
-      next.last_seen_at = new Date().toISOString();
-    }, { source: 'auto_reclaim_watcher', target_sha: targetSha });
+    return appendWatchedEvent(
+      commonDir,
+      record,
+      token,
+      eventType,
+      (next) => {
+        next.task_status = eventType === 'auto_integrating' ? 'integrating' : 'done';
+        next.last_seen_at = new Date().toISOString();
+      },
+      { source: 'auto_reclaim_watcher', target_sha: targetSha },
+    );
   }
 
   /**
    * @param {ReturnType<typeof loadRepositoryProfile>} loaded
    * @param {Record<string,any>} initialRecord
-   * @param {{targetRef:string,targetSha?:string|null,headSha:string,intervalMs:number,changeRef:string|null,notifyMode:string,explicitConfig:string|null,previousHealth:string|null,armedBy?:string}} options
+   * @param {{
+   *   targetRef:string,
+   *   targetSha?:string|null,
+   *   headSha:string,
+   *   intervalMs:number,
+   *   changeRef:string|null,
+   *   notifyMode:string,
+   *   explicitConfig:string|null,
+   *   previousHealth:string|null,
+   *   armedBy?:string
+   * }} options
    */
   function startWatcher(loaded, initialRecord, options) {
     let record = initialRecord;
-    const reviveStaleAutoTouch = options.armedBy === 'auto_touch'
-      && record.auto_reclaim?.state === 'disarmed'
-      && record.auto_reclaim?.disarm_reason === 'stale_frozen_head';
-    const existing = record.auto_reclaim && (
-      !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state) || reviveStaleAutoTouch
-    ) ? record.auto_reclaim : null;
+    const reviveStaleAutoTouch =
+      options.armedBy === 'auto_touch' &&
+      record.auto_reclaim?.state === 'disarmed' &&
+      record.auto_reclaim?.disarm_reason === 'stale_frozen_head';
+    const existing =
+      record.auto_reclaim && (!['disarmed', 'reclaimed'].includes(record.auto_reclaim.state) || reviveStaleAutoTouch)
+        ? record.auto_reclaim
+        : null;
     const token = randomUUID();
     const now = new Date().toISOString();
     const eventType = existing ? 'auto_reclaim_rearmed' : 'auto_reclaim_armed';
@@ -257,13 +289,14 @@ export function createCommands(deps) {
       },
       mutate(current) {
         if (existing) {
-          const revivableCurrent = reviveStaleAutoTouch
-            && current.auto_reclaim?.state === 'disarmed'
-            && current.auto_reclaim?.disarm_reason === 'stale_frozen_head';
+          const revivableCurrent =
+            reviveStaleAutoTouch &&
+            current.auto_reclaim?.state === 'disarmed' &&
+            current.auto_reclaim?.disarm_reason === 'stale_frozen_head';
           if (
-            current.auto_reclaim?.token !== existing.token
-            || current.auto_reclaim?.state === 'reclaimed'
-            || (current.auto_reclaim?.state === 'disarmed' && !revivableCurrent)
+            current.auto_reclaim?.token !== existing.token ||
+            current.auto_reclaim?.state === 'reclaimed' ||
+            (current.auto_reclaim?.state === 'disarmed' && !revivableCurrent)
           ) {
             throw new WorktreeTraceError('WATCHER_CANCELLED', `watch token 已被并发更新或解除: ${record.worktree_id}`);
           }
@@ -317,13 +350,22 @@ export function createCommands(deps) {
     });
     if (!child.pid) throw new WorktreeTraceError('WATCHER_START_FAILED', '无法启动 auto-reclaim watcher。');
     try {
-      record = appendWatchedEvent(loaded.context.common_dir, record, token, 'auto_reclaim_watcher_started', (next) => {
-        next.auto_reclaim.state = resumeAfterMerge ? 'merge_detected' : 'watching';
-        next.auto_reclaim.pid = child.pid;
-        next.auto_reclaim.started_at = new Date().toISOString();
-      }, { pid: child.pid, token });
+      record = appendWatchedEvent(
+        loaded.context.common_dir,
+        record,
+        token,
+        'auto_reclaim_watcher_started',
+        (next) => {
+          next.auto_reclaim.state = resumeAfterMerge ? 'merge_detected' : 'watching';
+          next.auto_reclaim.pid = child.pid;
+          next.auto_reclaim.started_at = new Date().toISOString();
+        },
+        { pid: child.pid, token },
+      );
     } catch (error) {
-      try { process.kill(child.pid, 'SIGTERM'); } catch {}
+      try {
+        process.kill(child.pid, 'SIGTERM');
+      } catch {}
       throw error;
     }
     writeWatcherHeartbeat(loaded.context.common_dir, {
@@ -364,7 +406,11 @@ export function createCommands(deps) {
     if (provider.provider !== 'gitlab') {
       die('当前 Profile 未启用 GitLab change_request provider；请配置 provider=gitlab 或继续人工创建 MR。');
     }
-    let record = selectRecord(loadRecords(loaded.context.common_dir), args.positionals[0] ?? null, flag(args.flags, 'id'));
+    let record = selectRecord(
+      loadRecords(loaded.context.common_dir),
+      args.positionals[0] ?? null,
+      flag(args.flags, 'id'),
+    );
     assertHistoryOperationIdle(record, 'submit');
     if (!['active', 'ready_for_review'].includes(record.task_status)) {
       die(`submit 只接受 active/ready_for_review，当前为 ${record.task_status}。`);
@@ -379,7 +425,9 @@ export function createCommands(deps) {
     if (!record.branch || !snapshot.head) die('submit 不支持 detached HEAD，且必须能解析有效 HEAD。');
     const currentBranch = gitTry(['branch', '--show-current'], record.path);
     if (!currentBranch.ok || currentBranch.out !== record.branch) {
-      die(`worktree 当前 branch 与 record 不一致: current=${currentBranch.out || '(detached)'} record=${record.branch}`);
+      die(
+        `worktree 当前 branch 与 record 不一致: current=${currentBranch.out || '(detached)'} record=${record.branch}`,
+      );
     }
     if (!gitTry(['check-ref-format', '--branch', record.branch], record.path).ok) {
       die(`非法 source branch: ${record.branch}`);
@@ -400,14 +448,14 @@ export function createCommands(deps) {
     if (!refreshed.ok) die(`目标 ref 不存在或 fetch 失败: ${targetRef}`);
 
     const upstreamHead = gitTry(['rev-parse', '@{upstream}^{commit}'], record.path);
-    const remoteHead = gitTry(
-      ['ls-remote', '--heads', remote, `refs/heads/${record.branch}`],
-      record.path,
-      { timeoutMs: FETCH_TIMEOUT_MS },
-    );
+    const remoteHead = gitTry(['ls-remote', '--heads', remote, `refs/heads/${record.branch}`], record.path, {
+      timeoutMs: FETCH_TIMEOUT_MS,
+    });
     const remoteHeadSha = remoteHead.ok && remoteHead.out ? remoteHead.out.split(/\s+/)[0] : null;
     if ((upstreamHead.ok && upstreamHead.out === snapshot.head) || remoteHeadSha === snapshot.head) {
-      die('当前 HEAD 已完整存在于 remote；GitLab 只在实际 push 时处理 MR push-options。请使用 API/UI 创建 MR 后运行 watch，工具不会为触发 push-option 改写历史或 force push。');
+      die(
+        '当前 HEAD 已完整存在于 remote；GitLab 只在实际 push 时处理 MR push-options。请使用 API/UI 创建 MR 后运行 watch，工具不会为触发 push-option 改写历史或 force push。',
+      );
     }
 
     const title = flag(args.flags, 'title')
@@ -485,9 +533,13 @@ export function createCommands(deps) {
         armedBy: 'explicit',
       });
       log(`GitLab MR 已提交: ${changeRef}`);
-      log(`auto-reclaim watcher 已启动 pid=${started.pid} id=${record.worktree_id.slice(0, 8)} head=${snapshot.head.slice(0, 12)} target=${targetRef}`);
+      log(
+        `auto-reclaim watcher 已启动 pid=${started.pid} id=${record.worktree_id.slice(0, 8)} head=${snapshot.head.slice(0, 12)} target=${targetRef}`,
+      );
     } catch (error) {
-      console.error(`${PREFIX} MR 已成功 push 且 trace 已标记 ready_for_review，但 watcher 启动失败；请运行 watch/resume-all 恢复。`);
+      console.error(
+        `${PREFIX} MR 已成功 push 且 trace 已标记 ready_for_review，但 watcher 启动失败；请运行 watch/resume-all 恢复。`,
+      );
       throw error;
     }
   }
@@ -497,12 +549,20 @@ export function createCommands(deps) {
   function cmdWatch(args) {
     rejectUnknownFlags(args.flags, ['target', 'interval-ms', 'change-ref', 'notify', 'id', 'config']);
     const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
-    let record = selectRecord(loadRecords(loaded.context.common_dir), args.positionals[0] ?? null, flag(args.flags, 'id'));
+    let record = selectRecord(
+      loadRecords(loaded.context.common_dir),
+      args.positionals[0] ?? null,
+      flag(args.flags, 'id'),
+    );
     assertHistoryOperationIdle(record, 'watch');
-    if (record.worktree_state === 'reclaimed') { log(`已回收，无需 watch: ${record.worktree_id}`); return; }
-    const existing = record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
-      ? record.auto_reclaim
-      : null;
+    if (record.worktree_state === 'reclaimed') {
+      log(`已回收，无需 watch: ${record.worktree_id}`);
+      return;
+    }
+    const existing =
+      record.auto_reclaim && !['disarmed', 'reclaimed'].includes(record.auto_reclaim.state)
+        ? record.auto_reclaim
+        : null;
     if (!existing && record.task_status !== 'ready_for_review') {
       die(`首次 watch 要求 task_status=ready_for_review，当前为 ${record.task_status}。`);
     }
@@ -536,14 +596,21 @@ export function createCommands(deps) {
     const intervalMs = parseWatchInterval(flag(args.flags, 'interval-ms') ?? existing?.interval_ms);
     const changeRef = flag(args.flags, 'change-ref')
       ? oneLine(flag(args.flags, 'change-ref'), 'change-ref', 240)
-      : existing?.change_ref ?? null;
+      : (existing?.change_ref ?? null);
     const notifyMode = parseNotifyMode(flag(args.flags, 'notify') ?? existing?.notify);
     const refreshed = refreshTargetRef(targetRef, loaded.context.current_worktree);
     if (!refreshed.ok) die(`目标 ref 不存在: ${targetRef}`);
 
     const heartbeat = readWatcherHeartbeat(loaded.context.common_dir, record.worktree_id);
     const health = watcherHealth(record, heartbeat);
-    if (existing && health.healthy && existing.head_sha === headSha && existing.target_ref === targetRef && (existing.change_ref ?? null) === changeRef && (existing.notify ?? 'auto') === notifyMode) {
+    if (
+      existing &&
+      health.healthy &&
+      existing.head_sha === headSha &&
+      existing.target_ref === targetRef &&
+      (existing.change_ref ?? null) === changeRef &&
+      (existing.notify ?? 'auto') === notifyMode
+    ) {
       log(`watcher 已运行 pid=${heartbeat.state.pid} id=${record.worktree_id.slice(0, 8)} target=${targetRef}`);
       return;
     }
@@ -560,7 +627,9 @@ export function createCommands(deps) {
         armedBy: 'explicit',
       });
       record = started.record;
-      log(`auto-reclaim watcher 已启动 pid=${started.pid} id=${record.worktree_id.slice(0, 8)} head=${headSha.slice(0, 12)} target=${targetRef}`);
+      log(
+        `auto-reclaim watcher 已启动 pid=${started.pid} id=${record.worktree_id.slice(0, 8)} head=${headSha.slice(0, 12)} target=${targetRef}`,
+      );
     } catch (error) {
       if (error instanceof WorktreeTraceError && error.code === 'WATCHER_CANCELLED') {
         die('watcher 启动期间被另一进程解除，请重新检查 record 状态。');
@@ -586,7 +655,11 @@ export function createCommands(deps) {
       if (!existing) {
         const intent = record.review_watch;
         if (!intent) {
-          result.skipped.push({ worktree_id: record.worktree_id, task: record.task, reason: 'review watch intent missing; touch ready_for_review again' });
+          result.skipped.push({
+            worktree_id: record.worktree_id,
+            task: record.task,
+            reason: 'review watch intent missing; touch ready_for_review again',
+          });
           continue;
         }
         const snapshot = liveGitSnapshot(record);
@@ -600,7 +673,8 @@ export function createCommands(deps) {
         }
         if (!intent.target_ref || typeof intent.target_ref !== 'string') reason ??= 'target ref missing';
         const intervalMs = Number(intent.interval_ms);
-        if (!Number.isInteger(intervalMs) || intervalMs < WATCH_MIN_INTERVAL_MS || intervalMs > WATCH_MAX_INTERVAL_MS) reason ??= 'interval invalid';
+        if (!Number.isInteger(intervalMs) || intervalMs < WATCH_MIN_INTERVAL_MS || intervalMs > WATCH_MAX_INTERVAL_MS)
+          reason ??= 'interval invalid';
         let refreshed = null;
         if (!reason) {
           refreshed = refreshTargetRef(intent.target_ref, loaded.context.current_worktree);
@@ -622,9 +696,19 @@ export function createCommands(deps) {
             previousHealth: intent.reason ?? 'pending intent',
             armedBy: intent.source ?? 'auto_touch',
           });
-          result.resumed.push({ worktree_id: record.worktree_id, task: record.task, pid: started.pid, previous_health: intent.reason ?? 'pending intent', dirty: false });
+          result.resumed.push({
+            worktree_id: record.worktree_id,
+            task: record.task,
+            pid: started.pid,
+            previous_health: intent.reason ?? 'pending intent',
+            dirty: false,
+          });
         } catch (error) {
-          result.skipped.push({ worktree_id: record.worktree_id, task: record.task, reason: error instanceof Error ? error.message : String(error) });
+          result.skipped.push({
+            worktree_id: record.worktree_id,
+            task: record.task,
+            reason: error instanceof Error ? error.message : String(error),
+          });
         }
         continue;
       }
@@ -638,11 +722,21 @@ export function createCommands(deps) {
       const intervalMs = Number(auto.interval_ms);
       const snapshot = liveGitSnapshot(record);
       let reason = null;
-      if (!['ready_for_review', 'integrating', 'done'].includes(record.task_status)) reason = `task_status=${record.task_status}`;
+      if (!['ready_for_review', 'integrating', 'done'].includes(record.task_status))
+        reason = `task_status=${record.task_status}`;
       else if (!snapshot.present && record.worktree_state !== 'reclaim_ready') reason = 'worktree missing';
-      else if (!auto.head_sha || !gitTry(['cat-file', '-e', `${auto.head_sha}^{commit}`], loaded.context.current_worktree).ok) reason = 'frozen head unreachable';
+      else if (
+        !auto.head_sha ||
+        !gitTry(['cat-file', '-e', `${auto.head_sha}^{commit}`], loaded.context.current_worktree).ok
+      )
+        reason = 'frozen head unreachable';
       else if (!auto.target_ref || typeof auto.target_ref !== 'string') reason = 'target ref missing';
-      else if (!Number.isInteger(intervalMs) || intervalMs < WATCH_MIN_INTERVAL_MS || intervalMs > WATCH_MAX_INTERVAL_MS) reason = 'interval invalid';
+      else if (
+        !Number.isInteger(intervalMs) ||
+        intervalMs < WATCH_MIN_INTERVAL_MS ||
+        intervalMs > WATCH_MAX_INTERVAL_MS
+      )
+        reason = 'interval invalid';
       if (reason) {
         result.skipped.push({ worktree_id: record.worktree_id, task: record.task, reason });
         continue;
@@ -659,9 +753,19 @@ export function createCommands(deps) {
           previousHealth: health.reason,
           armedBy: auto.armed_by ?? 'explicit',
         });
-        result.resumed.push({ worktree_id: record.worktree_id, task: record.task, pid: started.pid, previous_health: health.reason, dirty: snapshot.dirty });
+        result.resumed.push({
+          worktree_id: record.worktree_id,
+          task: record.task,
+          pid: started.pid,
+          previous_health: health.reason,
+          dirty: snapshot.dirty,
+        });
       } catch (error) {
-        result.skipped.push({ worktree_id: record.worktree_id, task: record.task, reason: error instanceof Error ? error.message : String(error) });
+        result.skipped.push({
+          worktree_id: record.worktree_id,
+          task: record.task,
+          reason: error instanceof Error ? error.message : String(error),
+        });
       }
     }
     if (args.flags.get('quiet')) return;
@@ -669,16 +773,27 @@ export function createCommands(deps) {
       console.log(JSON.stringify(result, null, 2));
       return;
     }
-    log(`resume-all resumed=${result.resumed.length} healthy=${result.healthy.length} skipped=${result.skipped.length}`);
-    for (const item of result.resumed) console.log(`  [RESUMED] ${item.worktree_id.slice(0, 8)} ${item.task} pid=${item.pid} previous=${item.previous_health}${item.dirty ? ' dirty=blocked-until-clean' : ''}`);
-    for (const item of result.healthy) console.log(`  [HEALTHY] ${item.worktree_id.slice(0, 8)} ${item.task} pid=${item.pid}`);
-    for (const item of result.skipped) console.log(`  [SKIPPED] ${item.worktree_id.slice(0, 8)} ${item.task} ${item.reason}`);
+    log(
+      `resume-all resumed=${result.resumed.length} healthy=${result.healthy.length} skipped=${result.skipped.length}`,
+    );
+    for (const item of result.resumed)
+      console.log(
+        `  [RESUMED] ${item.worktree_id.slice(0, 8)} ${item.task} pid=${item.pid} previous=${item.previous_health}${item.dirty ? ' dirty=blocked-until-clean' : ''}`,
+      );
+    for (const item of result.healthy)
+      console.log(`  [HEALTHY] ${item.worktree_id.slice(0, 8)} ${item.task} pid=${item.pid}`);
+    for (const item of result.skipped)
+      console.log(`  [SKIPPED] ${item.worktree_id.slice(0, 8)} ${item.task} ${item.reason}`);
   }
 
   function cmdUnwatch(args) {
     rejectUnknownFlags(args.flags, ['id', 'config']);
     const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
-    let record = selectRecord(loadRecords(loaded.context.common_dir), args.positionals[0] ?? null, flag(args.flags, 'id'));
+    let record = selectRecord(
+      loadRecords(loaded.context.common_dir),
+      args.positionals[0] ?? null,
+      flag(args.flags, 'id'),
+    );
     if (record.worktree_state === 'reclaimed' || record.worktree_state === 'archived') {
       log(`已结算，无需 unwatch: ${record.worktree_id.slice(0, 8)}`);
       return;
@@ -724,9 +839,10 @@ export function createCommands(deps) {
     removeWatcherHeartbeat(loaded.context.common_dir, record.worktree_id, token);
     // 判定不成立时不发信号；登记的 pid 若仍存活，如实报 unverified，而不是 not-running。
     const registeredPid = Number(record.auto_reclaim?.pid);
-    const stop = watcherPid === 0 && processIsAlive(registeredPid)
-      ? { stopped: false, reason: 'unverified' }
-      : stopWatcherProcessGroup(watcherPid);
+    const stop =
+      watcherPid === 0 && processIsAlive(registeredPid)
+        ? { stopped: false, reason: 'unverified' }
+        : stopWatcherProcessGroup(watcherPid);
     log(`auto-reclaim watcher 已解除: ${record.worktree_id.slice(0, 8)} watcher=${stop.reason}`);
     if (!stop.stopped) log(`WARN ${unstoppedWatcherReason(stop.reason, watcherPid || registeredPid)}`);
   }
@@ -734,9 +850,11 @@ export function createCommands(deps) {
   /** @param {string} reason @param {number} pid */
   function unstoppedWatcherReason(reason, pid) {
     const tail = '删除或移动该 worktree 前请先确认它已结束。';
-    if (reason === 'unverified') return `登记的 watcher pid ${pid} 仍存活，但心跳不足以证明它属于本次租约，没有向它发信号；若它确是 watcher，会在下一轮轮询时自行退出，${tail}`;
+    if (reason === 'unverified')
+      return `登记的 watcher pid ${pid} 仍存活，但心跳不足以证明它属于本次租约，没有向它发信号；若它确是 watcher，会在下一轮轮询时自行退出，${tail}`;
     if (reason === 'signal-denied') return `无权向 watcher 进程组 ${pid} 发信号，它没有被终止；${tail}`;
-    if (reason === 'unsupported-platform') return `当前平台不支持按进程组终止 watcher，进程组 ${pid} 仍在运行；它会在下一轮轮询时自行退出，${tail}`;
+    if (reason === 'unsupported-platform')
+      return `当前平台不支持按进程组终止 watcher，进程组 ${pid} 仍在运行；它会在下一轮轮询时自行退出，${tail}`;
     return `watcher 进程组 ${pid} 未在 ${WATCHER_STOP_TIMEOUT_MS}ms 内退出；${tail}`;
   }
 
@@ -762,7 +880,12 @@ export function createCommands(deps) {
     while (true) {
       const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
       let record = loadRecords(loaded.context.common_dir).find((candidate) => candidate.worktree_id === worktreeId);
-      if (!record || record.worktree_state === 'reclaimed' || record.auto_reclaim?.token !== token || record.auto_reclaim?.state === 'disarmed') {
+      if (
+        !record ||
+        record.worktree_state === 'reclaimed' ||
+        record.auto_reclaim?.token !== token ||
+        record.auto_reclaim?.state === 'disarmed'
+      ) {
         removeWatcherHeartbeat(loaded.context.common_dir, worktreeId, token);
         return;
       }
@@ -775,35 +898,63 @@ export function createCommands(deps) {
         head_sha: record.auto_reclaim.head_sha,
         started_at: record.auto_reclaim.started_at ?? record.auto_reclaim.armed_at,
       };
-      const cacheMaxAgeMs = Math.min(WATCH_TARGET_CACHE_MAX_AGE_MS, Math.max(Math.floor(record.auto_reclaim.interval_ms / 2), WATCH_MIN_INTERVAL_MS));
-      const refreshed = refreshTargetRefCached(loaded.context.common_dir, record.auto_reclaim.target_ref, loaded.context.current_worktree, cacheMaxAgeMs);
+      const cacheMaxAgeMs = Math.min(
+        WATCH_TARGET_CACHE_MAX_AGE_MS,
+        Math.max(Math.floor(record.auto_reclaim.interval_ms / 2), WATCH_MIN_INTERVAL_MS),
+      );
+      const refreshed = refreshTargetRefCached(
+        loaded.context.common_dir,
+        record.auto_reclaim.target_ref,
+        loaded.context.current_worktree,
+        cacheMaxAgeMs,
+      );
       if (!refreshed.fetch_ok || !refreshed.ok) {
-        writeWatcherHeartbeat(loaded.context.common_dir, { ...baseHeartbeat, state: 'waiting', blocked_reason: 'target fetch/ref unavailable', fetch_cache_hit: refreshed.cache_hit ?? false });
+        writeWatcherHeartbeat(loaded.context.common_dir, {
+          ...baseHeartbeat,
+          state: 'waiting',
+          blocked_reason: 'target fetch/ref unavailable',
+          fetch_cache_hit: refreshed.cache_hit ?? false,
+        });
         sleep(record.auto_reclaim.interval_ms);
         continue;
       }
-      const headMerged = gitTry(['merge-base', '--is-ancestor', record.auto_reclaim.head_sha, refreshed.target_sha], loaded.context.current_worktree).ok;
+      const headMerged = gitTry(
+        ['merge-base', '--is-ancestor', record.auto_reclaim.head_sha, refreshed.target_sha],
+        loaded.context.current_worktree,
+      ).ok;
       if (!headMerged) {
         const targetBaseSha = record.auto_reclaim.target_base_sha ?? record.base_sha ?? null;
         const targetAdvanced = refreshed.target_sha !== targetBaseSha;
         let advance = record.auto_reclaim.target_advance ?? null;
         if (targetAdvanced && advance?.target_sha !== refreshed.target_sha) {
-          const prediction = predictReviewRefresh(record.path, targetBaseSha, refreshed.target_sha, record.auto_reclaim.head_sha);
+          const prediction = predictReviewRefresh(
+            record.path,
+            targetBaseSha,
+            refreshed.target_sha,
+            record.auto_reclaim.head_sha,
+          );
           try {
-            record = appendWatchedEvent(loaded.context.common_dir, record, token, 'target_advanced', (next) => {
-              next.auto_reclaim.target_advance = {
+            record = appendWatchedEvent(
+              loaded.context.common_dir,
+              record,
+              token,
+              'target_advanced',
+              (next) => {
+                next.auto_reclaim.target_advance = {
+                  target_sha: refreshed.target_sha,
+                  recorded_base_sha: targetBaseSha,
+                  prediction,
+                  detected_at: new Date().toISOString(),
+                };
+              },
+              {
+                target_ref: record.auto_reclaim.target_ref,
                 target_sha: refreshed.target_sha,
                 recorded_base_sha: targetBaseSha,
+                head_sha: record.auto_reclaim.head_sha,
                 prediction,
-                detected_at: new Date().toISOString(),
-              };
-            }, {
-              target_ref: record.auto_reclaim.target_ref,
-              target_sha: refreshed.target_sha,
-              recorded_base_sha: targetBaseSha,
-              head_sha: record.auto_reclaim.head_sha,
-              prediction,
-            });
+              },
+            );
             advance = record.auto_reclaim.target_advance;
           } catch (error) {
             if (error instanceof WorktreeTraceError && error.code === 'WATCHER_CANCELLED') {
@@ -814,23 +965,42 @@ export function createCommands(deps) {
           }
         }
         const predictionState = advance?.prediction?.state ?? null;
-        const blockedReason = predictionState
-          ? `target advanced; refresh prediction=${predictionState}`
-          : null;
-        writeWatcherHeartbeat(loaded.context.common_dir, { ...baseHeartbeat, state: 'waiting', blocked_reason: blockedReason, target_sha: refreshed.target_sha, refresh_prediction: predictionState, fetch_cache_hit: refreshed.cache_hit ?? false, fetch_count: refreshed.fetch_count ?? null });
+        const blockedReason = predictionState ? `target advanced; refresh prediction=${predictionState}` : null;
+        writeWatcherHeartbeat(loaded.context.common_dir, {
+          ...baseHeartbeat,
+          state: 'waiting',
+          blocked_reason: blockedReason,
+          target_sha: refreshed.target_sha,
+          refresh_prediction: predictionState,
+          fetch_cache_hit: refreshed.cache_hit ?? false,
+          fetch_count: refreshed.fetch_count ?? null,
+        });
         sleep(record.auto_reclaim.interval_ms);
         continue;
       }
       try {
         if (record.auto_reclaim.state !== 'merge_detected') {
-          record = appendWatchedEvent(loaded.context.common_dir, record, token, 'merge_detected', (next) => {
-            next.auto_reclaim.state = 'merge_detected';
-            next.auto_reclaim.target_sha = refreshed.target_sha;
-            next.auto_reclaim.detected_at = new Date().toISOString();
-          }, { target_ref: record.auto_reclaim.target_ref, target_sha: refreshed.target_sha, head_sha: record.auto_reclaim.head_sha });
+          record = appendWatchedEvent(
+            loaded.context.common_dir,
+            record,
+            token,
+            'merge_detected',
+            (next) => {
+              next.auto_reclaim.state = 'merge_detected';
+              next.auto_reclaim.target_sha = refreshed.target_sha;
+              next.auto_reclaim.detected_at = new Date().toISOString();
+            },
+            {
+              target_ref: record.auto_reclaim.target_ref,
+              target_sha: refreshed.target_sha,
+              head_sha: record.auto_reclaim.head_sha,
+            },
+          );
         }
-        if (record.task_status === 'ready_for_review') record = appendAutoStatus(loaded.context.common_dir, record, token, 'auto_integrating', refreshed.target_sha);
-        if (record.task_status === 'integrating') record = appendAutoStatus(loaded.context.common_dir, record, token, 'auto_done', refreshed.target_sha);
+        if (record.task_status === 'ready_for_review')
+          record = appendAutoStatus(loaded.context.common_dir, record, token, 'auto_integrating', refreshed.target_sha);
+        if (record.task_status === 'integrating')
+          record = appendAutoStatus(loaded.context.common_dir, record, token, 'auto_done', refreshed.target_sha);
       } catch (error) {
         if (error instanceof WorktreeTraceError && error.code === 'WATCHER_CANCELLED') {
           removeWatcherHeartbeat(loaded.context.common_dir, worktreeId, token);
@@ -839,13 +1009,25 @@ export function createCommands(deps) {
         throw error;
       }
       if (record.task_status !== 'done') {
-        writeWatcherHeartbeat(loaded.context.common_dir, { ...baseHeartbeat, state: 'blocked', blocked_reason: `task_status=${record.task_status}`, target_sha: refreshed.target_sha, fetch_cache_hit: refreshed.cache_hit ?? false });
+        writeWatcherHeartbeat(loaded.context.common_dir, {
+          ...baseHeartbeat,
+          state: 'blocked',
+          blocked_reason: `task_status=${record.task_status}`,
+          target_sha: refreshed.target_sha,
+          fetch_cache_hit: refreshed.cache_hit ?? false,
+        });
         sleep(record.auto_reclaim.interval_ms);
         continue;
       }
       const preflight = reclaimPreflight(loaded, record, refreshed.target_sha);
       if (preflight.reason) {
-        writeWatcherHeartbeat(loaded.context.common_dir, { ...baseHeartbeat, state: 'blocked', blocked_reason: preflight.reason, target_sha: refreshed.target_sha, fetch_cache_hit: refreshed.cache_hit ?? false });
+        writeWatcherHeartbeat(loaded.context.common_dir, {
+          ...baseHeartbeat,
+          state: 'blocked',
+          blocked_reason: preflight.reason,
+          target_sha: refreshed.target_sha,
+          fetch_cache_hit: refreshed.cache_hit ?? false,
+        });
         sleep(record.auto_reclaim.interval_ms);
         continue;
       }
@@ -854,12 +1036,16 @@ export function createCommands(deps) {
         removeWatcherHeartbeat(loaded.context.common_dir, worktreeId, token);
         return;
       }
-      writeWatcherHeartbeat(loaded.context.common_dir, { ...baseHeartbeat, state: 'blocked', blocked_reason: result.reason, target_sha: refreshed.target_sha, fetch_cache_hit: refreshed.cache_hit ?? false });
+      writeWatcherHeartbeat(loaded.context.common_dir, {
+        ...baseHeartbeat,
+        state: 'blocked',
+        blocked_reason: result.reason,
+        target_sha: refreshed.target_sha,
+        fetch_cache_hit: refreshed.cache_hit ?? false,
+      });
       sleep(record.auto_reclaim.interval_ms);
     }
   }
-
-
 
   return {
     autoArmReviewWatch,

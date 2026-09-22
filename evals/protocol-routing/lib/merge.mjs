@@ -27,12 +27,19 @@ export function mergeReports(inputs) {
 
   const head = reports[0];
   for (let i = 1; i < reports.length; i += 1) {
-    if (reports[i].schema_version !== head.schema_version) throw new Error(`${label(i)} 的 schema_version 与 ${label(0)} 不同，拒绝合并`);
-    if (reports[i].requested_runs !== head.requested_runs) throw new Error(`${label(i)} 的 --runs 是 ${reports[i].requested_runs}，${label(0)} 是 ${head.requested_runs}，拒绝合并`);
+    if (reports[i].schema_version !== head.schema_version)
+      throw new Error(`${label(i)} 的 schema_version 与 ${label(0)} 不同，拒绝合并`);
+    if (reports[i].requested_runs !== head.requested_runs)
+      throw new Error(
+        `${label(i)} 的 --runs 是 ${reports[i].requested_runs}，${label(0)} 是 ${head.requested_runs}，拒绝合并`,
+      );
     for (const key of MUST_MATCH) {
       const a = head.driver?.[key] ?? null;
       const b = reports[i].driver?.[key] ?? null;
-      if (a !== b) throw new Error(`${label(i)} 的 driver.${key}=${JSON.stringify(b)} 与 ${label(0)} 的 ${JSON.stringify(a)} 不同，拒绝合并`);
+      if (a !== b)
+        throw new Error(
+          `${label(i)} 的 driver.${key}=${JSON.stringify(b)} 与 ${label(0)} 的 ${JSON.stringify(a)} 不同，拒绝合并`,
+        );
     }
     // skill 的 content_digest 是报告里唯一能回溯到源码的锚点；分片之间对不上，
     // 说明各片测的不是同一份 skill，合起来的数字没有意义。
@@ -73,10 +80,18 @@ export function mergeReports(inputs) {
     schema_version: head.schema_version,
     generated_at: new Date().toISOString(),
     requested_runs: head.requested_runs,
-    driver: { ...head.driver, merged_from: inputs.map((item, i) => ({ source: item.path ?? null, cases: (reports[i].cases ?? []).map((c) => c.id) })) },
+    driver: {
+      ...head.driver,
+      merged_from: inputs.map((item, i) => ({
+        source: item.path ?? null,
+        cases: (reports[i].cases ?? []).map((c) => c.id),
+      })),
+    },
     cases,
     columns,
-    invalid_runs: reports.flatMap((report) => report.invalid_runs ?? []).sort((a, b) => a.case_id - b.case_id || a.run - b.run),
+    invalid_runs: reports
+      .flatMap((report) => report.invalid_runs ?? [])
+      .sort((a, b) => a.case_id - b.case_id || a.run - b.run),
     trivial_baselines: {
       always_none: trivialBaseline(caseDefs, 'NONE', validNByCase),
       always_write: trivialBaseline(caseDefs, 'WRITE', validNByCase),

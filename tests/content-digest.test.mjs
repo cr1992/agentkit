@@ -7,7 +7,10 @@ import test from 'node:test';
 
 import { distributionDigest, skillDistributionRoots } from '../core/content-digest.mjs';
 import { canonicalJson, envelopeDigest } from '../domains/orchestrate/contract-tool.mjs';
-import { main as ledgerMain, skillContentDigest as ledgerDigest } from '../domains/orchestrate/orchestration-ledger.mjs';
+import {
+  main as ledgerMain,
+  skillContentDigest as ledgerDigest,
+} from '../domains/orchestrate/orchestration-ledger.mjs';
 import { skillContentDigest as loopDigest } from '../domains/loop/loop-runtime.mjs';
 import { skillContentDigest as verifyDigest } from '../domains/verify/verification-runtime.mjs';
 import { worktreeSkillDigest } from '../domains/worktree/worktree-core.mjs';
@@ -51,7 +54,9 @@ test('摘要覆盖 Skill、domain 依赖、共享 core、schema 与 shell manife
     const beforeRouter = distributionDigest(roots);
     writeFileSync(join(sandbox, 'pkg', 'bin', 'agentkit.mjs'), 'router changed\n');
     assert.equal(distributionDigest(roots), beforeRouter, 'CLI 路由不应进入域级摘要');
-  } finally { rmSync(sandbox, { recursive: true, force: true }); }
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
 });
 
 test('摘要与安装绝对路径无关', () => {
@@ -60,7 +65,9 @@ test('摘要与安装绝对路径无关', () => {
     const one = fakePackage(join(sandbox, 'install-one'), 'same');
     const two = fakePackage(join(sandbox, 'a', 'deeper', 'install-two'), 'same');
     assert.equal(distributionDigest(two), distributionDigest(one));
-  } finally { rmSync(sandbox, { recursive: true, force: true }); }
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
 });
 
 test('四个域使用同一套摘要口径', () => {
@@ -72,10 +79,14 @@ test('四个域使用同一套摘要口径', () => {
     [ledgerDigest, 'orchestrate-subagents', 'orchestrate'],
     [worktreeSkillDigest, 'manage-worktrees', 'worktree'],
   ]) {
-    const expected = distributionDigest(skillDistributionRoots({
-      packageRoot: ROOT, skillRoot: join(ROOT, skill), domainRoot: join(ROOT, 'domains', domain),
-      docsRoot: join(ROOT, 'docs', domain),
-    }));
+    const expected = distributionDigest(
+      skillDistributionRoots({
+        packageRoot: ROOT,
+        skillRoot: join(ROOT, skill),
+        domainRoot: join(ROOT, 'domains', domain),
+        docsRoot: join(ROOT, 'docs', domain),
+      }),
+    );
     assert.equal(digest(), expected, `${skill} 的摘要不是由共享实现算出`);
   }
   // 四者互不相同：各自覆盖了不同的 domain。
@@ -94,7 +105,9 @@ test('摘要漂移后：旧 ledger 只读可检查并同时报告两个摘要，
       acceptance: [{ contract_item_id: 'item-1', requirement: 'result.txt 非空' }],
       permissions: { mode: 'read_only', writable_paths: [] },
       environment: { repository: join(sandbox, 'repo'), isolation: 'caller_supplied' },
-      skill_set: [{ name: 'orchestrate-subagents', version: '1.0.0', content_digest: ledgerDigest(), provider_mode: 'primary' }],
+      skill_set: [
+        { name: 'orchestrate-subagents', version: '1.0.0', content_digest: ledgerDigest(), provider_mode: 'primary' },
+      ],
       stop_conditions: [],
       extensions: {},
     };
@@ -108,10 +121,20 @@ test('摘要漂移后：旧 ledger 只读可检查并同时报告两个摘要，
     // 把冻结摘要改成一个不同的值，模拟「这份状态是在旧代码上冻结的」。
     const drifted = `sha256:${'0'.repeat(64)}`;
     const journalPath = join(dir, 'events.ndjson');
-    const events = readFileSync(journalPath, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    const events = readFileSync(journalPath, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
     let previous = null;
     const rewritten = events.map((event) => {
-      const next = { ...event, previous_event_digest: previous, snapshot: { ...event.snapshot, skill_provenance: { ...event.snapshot.skill_provenance, content_digest: drifted } } };
+      const next = {
+        ...event,
+        previous_event_digest: previous,
+        snapshot: {
+          ...event.snapshot,
+          skill_provenance: { ...event.snapshot.skill_provenance, content_digest: drifted },
+        },
+      };
       delete next.event_digest;
       next.event_digest = envelopeDigest(next, 'event_digest');
       previous = next.event_digest;
@@ -131,5 +154,7 @@ test('摘要漂移后：旧 ledger 只读可检查并同时报告两个摘要，
     const nodePath = join(sandbox, 'node.json');
     writeFileSync(nodePath, `${JSON.stringify({ node_id: 'n1', title: 'x', contract_items: ['item-1'] }, null, 2)}\n`);
     assert.throws(() => ledgerMain(['add-node', '--ledger', dir, '--input', nodePath]), /skill_drift/u);
-  } finally { rmSync(sandbox, { recursive: true, force: true }); }
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
 });

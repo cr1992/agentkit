@@ -8,12 +8,13 @@ import test from 'node:test';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const manifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
-const npm = (args, cache, options = {}) => spawnSync('npm', args, {
-  cwd: ROOT,
-  encoding: 'utf8',
-  ...options,
-  env: { ...process.env, NPM_CONFIG_CACHE: cache, ...options.env },
-});
+const npm = (args, cache, options = {}) =>
+  spawnSync('npm', args, {
+    cwd: ROOT,
+    encoding: 'utf8',
+    ...options,
+    env: { ...process.env, NPM_CONFIG_CACHE: cache, ...options.env },
+  });
 
 test('package.json 保持零依赖、显式 bin 映射与 Node 下限', () => {
   assert.deepEqual(manifest.dependencies, {});
@@ -68,12 +69,26 @@ test('npm pack 内容清单只含运行时与四个 Skill，不含内部计划�
       assert.ok(files.includes(required), `发布物缺少 ${required}`);
     }
     // 内部计划文档与跨 Skill 共享测试不进发布物。
-    assert.deepEqual(files.filter((path) => path.startsWith('docs/plans/')), []);
-    assert.deepEqual(files.filter((path) => path.startsWith('tests/')), []);
-    assert.deepEqual(files.filter((path) => path.endsWith('.test.mjs')), []);
+    assert.deepEqual(
+      files.filter((path) => path.startsWith('docs/plans/')),
+      [],
+    );
+    assert.deepEqual(
+      files.filter((path) => path.startsWith('tests/')),
+      [],
+    );
+    assert.deepEqual(
+      files.filter((path) => path.endsWith('.test.mjs')),
+      [],
+    );
     // 没有编译产物或第三方运行时。
-    assert.deepEqual(files.filter((path) => path.startsWith('node_modules/') || path.endsWith('.map')), []);
-  } finally { rmSync(sandbox, { recursive: true, force: true }); }
+    assert.deepEqual(
+      files.filter((path) => path.startsWith('node_modules/') || path.endsWith('.map')),
+      [],
+    );
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
 });
 
 test('真实 tarball 装进临时 prefix 后 agentkit 命令可用', () => {
@@ -87,7 +102,10 @@ test('真实 tarball 装进临时 prefix 后 agentkit 命令可用', () => {
 
     const prefix = join(sandbox, 'prefix');
     // --offline：零依赖包不该访问 registry，一旦访问就说明依赖闭包出了问题。
-    const installed = npm(['install', '-g', '--prefix', prefix, '--no-audit', '--no-fund', '--offline', tarball], cache);
+    const installed = npm(
+      ['install', '-g', '--prefix', prefix, '--no-audit', '--no-fund', '--offline', tarball],
+      cache,
+    );
     assert.equal(installed.status, 0, installed.stderr);
 
     const env = { ...process.env, PATH: `${join(prefix, 'bin')}${delimiter}${process.env.PATH}` };
@@ -100,7 +118,12 @@ test('真实 tarball 装进临时 prefix 后 agentkit 命令可用', () => {
     assert.equal(capabilities.status, 0, capabilities.stderr);
     const payload = JSON.parse(capabilities.stdout);
     assert.deepEqual(Object.keys(payload.skills).sort(), [
-      'manage-worktrees', 'orchestrate-subagents', 'run-agent-verify-loop', 'verify-agent-output',
+      'manage-worktrees',
+      'orchestrate-subagents',
+      'run-agent-verify-loop',
+      'verify-agent-output',
     ]);
-  } finally { rmSync(sandbox, { recursive: true, force: true }); }
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
 });

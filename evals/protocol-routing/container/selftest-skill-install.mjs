@@ -25,7 +25,9 @@ try {
   // 2) 第二次准备必须命中缓存：一个子进程都不该再起。安装器换成「一被调用就抛」的哨兵。
   const again = prepareSkillCache({
     cacheDir: join(base, 'skill-cache'),
-    install: () => { throw new Error('缓存已完整时不该再调用安装器'); },
+    install: () => {
+      throw new Error('缓存已完整时不该再调用安装器');
+    },
   });
   if (!again.reused) throw new Error('第二次准备没有命中缓存');
 

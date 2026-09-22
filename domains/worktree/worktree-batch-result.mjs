@@ -47,13 +47,19 @@ export function createCommands(deps) {
     const bytes = readFileSync(path);
     if (bytes.length > 128 * 1024) die('--evidence 最大 128 KiB；原始日志应放在外部证据存储。', 2);
     let parsed;
-    try { parsed = JSON.parse(bytes.toString('utf8')); } catch (error) {
+    try {
+      parsed = JSON.parse(bytes.toString('utf8'));
+    } catch (error) {
       die(`--evidence 文件不是合法 JSON: ${error instanceof Error ? error.message : String(error)}`, 2);
     }
     const root = plainObject(parsed, '--evidence 根节点');
     rejectUnknownJsonKeys(root, ['schema_version', 'contract_digest', 'checks'], '--evidence');
     if (root.schema_version !== 1) die('--evidence schema_version 必须是 1。', 2);
-    if (root.contract_digest !== undefined && root.contract_digest !== null && !DIGEST_PATTERN.test(root.contract_digest)) {
+    if (
+      root.contract_digest !== undefined &&
+      root.contract_digest !== null &&
+      !DIGEST_PATTERN.test(root.contract_digest)
+    ) {
       die('--evidence contract_digest 必须是 sha256 digest 或 null。', 2);
     }
     if (!Array.isArray(root.checks) || root.checks.length === 0 || root.checks.length > 100) {
@@ -62,22 +68,35 @@ export function createCommands(deps) {
     const names = new Set();
     const checks = root.checks.map((raw, index) => {
       const check = plainObject(raw, `checks[${index}]`);
-      rejectUnknownJsonKeys(check, ['name', 'environment', 'argv', 'outcome', 'exit_code', 'evidence_refs'], `checks[${index}]`);
+      rejectUnknownJsonKeys(
+        check,
+        ['name', 'environment', 'argv', 'outcome', 'exit_code', 'evidence_refs'],
+        `checks[${index}]`,
+      );
       const name = oneLine(String(check.name ?? ''), `checks[${index}].name`, 120);
       if (names.has(name)) die(`--evidence check name 重复: ${name}`, 2);
       names.add(name);
       const environment = plainObject(check.environment, `checks[${index}].environment`);
       const environmentEntries = Object.entries(environment);
-      if (environmentEntries.length > 50 || environmentEntries.some(([key, value]) => (
-        !/^[a-z][a-z0-9_.-]{0,63}$/u.test(key) ||
-        /(?:secret|token|password|credential|private[_-]?key|api[_-]?key)/u.test(key) ||
-        !['string', 'number', 'boolean'].includes(typeof value) ||
-        (typeof value === 'number' && !Number.isFinite(value)) ||
-        (typeof value === 'string' && (value.length > 500 || /[\u0000\r\n]/u.test(value)))
-      ))) {
+      if (
+        environmentEntries.length > 50 ||
+        environmentEntries.some(
+          ([key, value]) =>
+            !/^[a-z][a-z0-9_.-]{0,63}$/u.test(key) ||
+            /(?:secret|token|password|credential|private[_-]?key|api[_-]?key)/u.test(key) ||
+            !['string', 'number', 'boolean'].includes(typeof value) ||
+            (typeof value === 'number' && !Number.isFinite(value)) ||
+            (typeof value === 'string' && (value.length > 500 || /[\u0000\r\n]/u.test(value))),
+        )
+      ) {
         die(`checks[${index}].environment 只接受不含敏感键的有界标量元数据。`, 2);
       }
-      if (!Array.isArray(check.argv) || check.argv.length === 0 || check.argv.length > 100 || check.argv.some((item) => typeof item !== 'string' || !item || item.length > 1000 || /[\u0000\r\n]/u.test(item))) {
+      if (
+        !Array.isArray(check.argv) ||
+        check.argv.length === 0 ||
+        check.argv.length > 100 ||
+        check.argv.some((item) => typeof item !== 'string' || !item || item.length > 1000 || /[\u0000\r\n]/u.test(item))
+      ) {
         die(`checks[${index}].argv 必须是 1-100 个安全字符串组成的 argv。`, 2);
       }
       if (!['passed', 'failed', 'undecidable'].includes(check.outcome)) {
@@ -86,8 +105,10 @@ export function createCommands(deps) {
       if (!Number.isInteger(check.exit_code) || check.exit_code < 0 || check.exit_code > 255) {
         die(`checks[${index}].exit_code 必须是 0-255 整数。`, 2);
       }
-      if (check.outcome === 'passed' && check.exit_code !== 0) die(`checks[${index}] passed 时 exit_code 必须为 0。`, 2);
-      if (check.outcome === 'failed' && check.exit_code === 0) die(`checks[${index}] failed 时 exit_code 不能为 0。`, 2);
+      if (check.outcome === 'passed' && check.exit_code !== 0)
+        die(`checks[${index}] passed 时 exit_code 必须为 0。`, 2);
+      if (check.outcome === 'failed' && check.exit_code === 0)
+        die(`checks[${index}] failed 时 exit_code 不能为 0。`, 2);
       if (!Array.isArray(check.evidence_refs) || check.evidence_refs.length === 0 || check.evidence_refs.length > 20) {
         die(`checks[${index}].evidence_refs 必须包含 1-20 项。`, 2);
       }
@@ -96,10 +117,18 @@ export function createCommands(deps) {
         rejectUnknownJsonKeys(ref, ['kind', 'id', 'digest'], `checks[${index}].evidence_refs[${refIndex}]`);
         const kind = oneLine(String(ref.kind ?? ''), 'evidence kind', 40);
         const id = oneLine(String(ref.id ?? ''), 'evidence id', 1000);
-        if (!DIGEST_PATTERN.test(ref.digest ?? '')) die(`checks[${index}].evidence_refs[${refIndex}].digest 必须是 sha256 digest。`, 2);
+        if (!DIGEST_PATTERN.test(ref.digest ?? ''))
+          die(`checks[${index}].evidence_refs[${refIndex}].digest 必须是 sha256 digest。`, 2);
         return { kind, id, digest: ref.digest };
       });
-      return { name, environment: canonicalJson(environment), argv: check.argv, outcome: check.outcome, exit_code: check.exit_code, evidence_refs: evidenceRefs };
+      return {
+        name,
+        environment: canonicalJson(environment),
+        argv: check.argv,
+        outcome: check.outcome,
+        exit_code: check.exit_code,
+        evidence_refs: evidenceRefs,
+      };
     });
     const manifest = canonicalJson({ schema_version: 1, contract_digest: root.contract_digest ?? null, checks });
     return { manifest, digest: contentDigest(Buffer.from(JSON.stringify(manifest))) };
@@ -112,7 +141,11 @@ export function createCommands(deps) {
   function cmdBatchStep(args) {
     rejectUnknownFlags(args.flags, ['step', 'state', 'note', 'id', 'json', 'config']);
     const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
-    const record = selectRecord(loadRecords(loaded.context.common_dir), args.positionals[0] ?? null, flag(args.flags, 'id'));
+    const record = selectRecord(
+      loadRecords(loaded.context.common_dir),
+      args.positionals[0] ?? null,
+      flag(args.flags, 'id'),
+    );
     const stepName = flag(args.flags, 'step');
     const state = flag(args.flags, 'state');
     if (!stepName) die('batch-step 需要 --step <name>。', 2);
@@ -125,29 +158,41 @@ export function createCommands(deps) {
     if (!target) {
       die(
         `未声明的步骤名: ${stepName}；当前候选只登记 Profile 声明过的步骤` +
-        `${steps.length ? `：${steps.map((step) => step.name).join(', ')}` : '（该 Profile 未声明任何步骤）'}。`,
+          `${steps.length ? `：${steps.map((step) => step.name).join(', ')}` : '（该 Profile 未声明任何步骤）'}。`,
         2,
       );
     }
     const note = flag(args.flags, 'note') ? oneLine(flag(args.flags, 'note'), 'note', 240) : null;
     const now = new Date().toISOString();
-    const updated = updateRecord(record, 'batch_post_step_recorded', (next) => {
-      const step = next.batch_integration.post_integrate_steps.find((item) => item.name === stepName);
-      step.state = state;
-      step.note = note;
-      step.recorded_at = now;
-      next.last_seen_at = now;
-    }, { step: stepName, state, note, fingerprint: batch.fingerprint }, loaded.context.common_dir);
+    const updated = updateRecord(
+      record,
+      'batch_post_step_recorded',
+      (next) => {
+        const step = next.batch_integration.post_integrate_steps.find((item) => item.name === stepName);
+        step.state = state;
+        step.note = note;
+        step.recorded_at = now;
+        next.last_seen_at = now;
+      },
+      { step: stepName, state, note, fingerprint: batch.fingerprint },
+      loaded.context.common_dir,
+    );
     const recorded = updated.batch_integration.post_integrate_steps;
     if (args.flags.get('json')) {
-      console.log(JSON.stringify({ schema_version: 1, worktree_id: updated.worktree_id, post_integrate_steps: recorded }, null, 2));
+      console.log(
+        JSON.stringify(
+          { schema_version: 1, worktree_id: updated.worktree_id, post_integrate_steps: recorded },
+          null,
+          2,
+        ),
+      );
       return;
     }
     log(`已登记 ${stepName} -> ${state}`);
     const pending = recorded.filter((step) => step.state === 'pending');
-    console.log(pending.length === 0
-      ? '  合成后步骤已全部登记。'
-      : `  仍待登记: ${pending.map((step) => step.name).join(', ')}`);
+    console.log(
+      pending.length === 0 ? '  合成后步骤已全部登记。' : `  仍待登记: ${pending.map((step) => step.name).join(', ')}`,
+    );
   }
 
   /**
@@ -157,7 +202,11 @@ export function createCommands(deps) {
   function cmdBatchResult(args) {
     rejectUnknownFlags(args.flags, ['state', 'candidate', 'evidence', 'reason', 'id', 'json', 'config']);
     const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
-    let record = selectRecord(loadRecords(loaded.context.common_dir), args.positionals[0] ?? null, flag(args.flags, 'id'));
+    let record = selectRecord(
+      loadRecords(loaded.context.common_dir),
+      args.positionals[0] ?? null,
+      flag(args.flags, 'id'),
+    );
     const outcome = flag(args.flags, 'state');
     if (!['passed', 'failed', 'stale'].includes(outcome ?? '')) die('--state 只接受 passed / failed / stale。', 2);
     const candidateInput = flag(args.flags, 'candidate');
@@ -179,7 +228,8 @@ export function createCommands(deps) {
     }
     const batch = record.batch_integration;
     if (!batch || batch.state !== 'composed') die(`${record.task} 不是已合成的集成候选。`, 2);
-    if (!['integrating', 'done'].includes(record.task_status)) die(`batch-result 不接受 ${record.task_status} 候选。`, 2);
+    if (!['integrating', 'done'].includes(record.task_status))
+      die(`batch-result 不接受 ${record.task_status} 候选。`, 2);
     const requested = canonicalJson({
       schema_version: 1,
       outcome,
@@ -194,12 +244,14 @@ export function createCommands(deps) {
     });
     const requestedDigest = contentDigest(Buffer.from(JSON.stringify(requested)));
     if (record.batch_result) {
-      if (record.batch_result.result_digest !== requestedDigest) die('batch_result 已冻结且与本次输入不同；不得覆盖终态结果。', 2);
+      if (record.batch_result.result_digest !== requestedDigest)
+        die('batch_result 已冻结且与本次输入不同；不得覆盖终态结果。', 2);
       if (args.flags.get('json')) console.log(JSON.stringify(record.batch_result, null, 2));
       else log(`批次结果已冻结（幂等） ${record.task} ${outcome} ${candidateSha.slice(0, 12)}`);
       return;
     }
-    if (record.worktree_state !== 'present') die(`batch-result 只接受 present 候选；当前 ${record.worktree_state}。`, 2);
+    if (record.worktree_state !== 'present')
+      die(`batch-result 只接受 present 候选；当前 ${record.worktree_state}。`, 2);
     const live = liveGitSnapshot(record);
     if (!live.present) die(`候选 worktree missing: ${record.path}`, 2);
     if (live.dirty !== false) die(`候选 worktree 必须干净：${record.path}`, 2);
@@ -211,28 +263,37 @@ export function createCommands(deps) {
     }
     if (outcome === 'passed') {
       const incomplete = (batch.post_integrate_steps ?? []).filter((step) => !['done', 'skipped'].includes(step.state));
-      if (incomplete.length) die(`passed 前仍有未通过的合成后步骤: ${incomplete.map((step) => `${step.name}=${step.state}`).join(', ')}`, 2);
+      if (incomplete.length)
+        die(`passed 前仍有未通过的合成后步骤: ${incomplete.map((step) => `${step.name}=${step.state}`).join(', ')}`, 2);
     }
     const recordedAt = new Date().toISOString();
-    record = updateRecord(record, 'batch_result_recorded', (next) => {
-      next.batch_result = { ...requested, result_digest: requestedDigest, recorded_at: recordedAt };
-      next.task_status = 'done';
-      next.last_head = candidateSha;
-      next.last_seen_at = recordedAt;
-    }, {
-      outcome,
-      candidate_sha: candidateSha,
-      fingerprint: batch.fingerprint,
-      result_digest: requestedDigest,
-      evidence_manifest_digest: evidence?.digest ?? null,
-      reason,
-    }, loaded.context.common_dir);
+    record = updateRecord(
+      record,
+      'batch_result_recorded',
+      (next) => {
+        next.batch_result = { ...requested, result_digest: requestedDigest, recorded_at: recordedAt };
+        next.task_status = 'done';
+        next.last_head = candidateSha;
+        next.last_seen_at = recordedAt;
+      },
+      {
+        outcome,
+        candidate_sha: candidateSha,
+        fingerprint: batch.fingerprint,
+        result_digest: requestedDigest,
+        evidence_manifest_digest: evidence?.digest ?? null,
+        reason,
+      },
+      loaded.context.common_dir,
+    );
     if (args.flags.get('json')) console.log(JSON.stringify(record.batch_result, null, 2));
-    else log(`已冻结批次结果 ${record.task} ${outcome} sha=${candidateSha.slice(0, 12)} evidence=${evidence?.digest ?? 'none'}`);
+    else
+      log(
+        `已冻结批次结果 ${record.task} ${outcome} sha=${candidateSha.slice(0, 12)} evidence=${evidence?.digest ?? 'none'}`,
+      );
   }
 
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded */
-
 
   return {
     cmdBatchStep,

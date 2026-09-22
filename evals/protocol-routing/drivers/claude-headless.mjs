@@ -53,8 +53,11 @@ export const BYPASS_REFUSAL = [
 
 /** 宿主版本：只读一次，写进每份结果。 */
 function hostVersion(bin) {
-  try { return execFileSync(bin, ['--version'], { encoding: 'utf8' }).trim(); }
-  catch (error) { throw new Error(`无法执行宿主 CLI「${bin}」：${/** @type {Error} */ (error).message}`); }
+  try {
+    return execFileSync(bin, ['--version'], { encoding: 'utf8' }).trim();
+  } catch (error) {
+    throw new Error(`无法执行宿主 CLI「${bin}」：${/** @type {Error} */ (error).message}`);
+  }
 }
 
 /**
@@ -78,12 +81,20 @@ function parseStream(text) {
     const trimmed = line.trim();
     if (!trimmed.startsWith('{')) continue;
     let record;
-    try { record = JSON.parse(trimmed); } catch { continue; }
-    if (record.type === 'system' && record.subtype === 'init') { model = record.model ?? model; sessionId = record.session_id ?? sessionId; }
+    try {
+      record = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    if (record.type === 'system' && record.subtype === 'init') {
+      model = record.model ?? model;
+      sessionId = record.session_id ?? sessionId;
+    }
     if (record.type === 'assistant' && Array.isArray(record.message?.content)) {
       model = record.message.model ?? model;
       for (const block of record.message.content) {
-        if (block?.type === 'tool_use') uses.push({ id: block.id ?? null, tool_name: block.name, tool_input: block.input });
+        if (block?.type === 'tool_use')
+          uses.push({ id: block.id ?? null, tool_name: block.name, tool_input: block.input });
       }
     }
     if (record.type === 'result') {
@@ -123,10 +134,17 @@ export function createToolUseScanner() {
         index = pending.indexOf('\n');
         if (!line.startsWith('{')) continue;
         let record;
-        try { record = JSON.parse(line); } catch { continue; }
+        try {
+          record = JSON.parse(line);
+        } catch {
+          continue;
+        }
         if (record.type !== 'assistant' || !Array.isArray(record.message?.content)) continue;
         for (const block of record.message.content) {
-          if (block?.type === 'tool_use') { uses.push({ id: block.id ?? null, tool_name: block.name, tool_input: block.input }); added += 1; }
+          if (block?.type === 'tool_use') {
+            uses.push({ id: block.id ?? null, tool_name: block.name, tool_input: block.input });
+            added += 1;
+          }
         }
       }
       return added;
@@ -146,11 +164,24 @@ function pairEvents(uses, probes) {
   const positional = probes.filter((probe) => !probe.tool_use_id || !uses.some((use) => use.id === probe.tool_use_id));
   let cursor = 0;
   /** @type {{ events: any[], pairing: 'tool_use_id' | 'positional' | 'mixed', unpaired: number }} */
-  const out = { events: [], pairing: byId.size ? (positional.length ? 'mixed' : 'tool_use_id') : 'positional', unpaired: 0 };
+  const out = {
+    events: [],
+    pairing: byId.size ? (positional.length ? 'mixed' : 'tool_use_id') : 'positional',
+    unpaired: 0,
+  };
   uses.forEach((use, index) => {
     const probe = (use.id && byId.get(use.id)) || positional[cursor++];
-    if (!probe) { out.unpaired += 1; return; }
-    out.events.push({ seq: index + 1, tool_name: use.tool_name, tool_input: use.tool_input, repo: probe.repo, ledger: probe.ledger ?? null });
+    if (!probe) {
+      out.unpaired += 1;
+      return;
+    }
+    out.events.push({
+      seq: index + 1,
+      tool_name: use.tool_name,
+      tool_input: use.tool_input,
+      repo: probe.repo,
+      ledger: probe.ledger ?? null,
+    });
   });
   return out;
 }
@@ -179,8 +210,11 @@ export function canTerminateEarly(evalCase) {
  */
 function initialLedgerSnapshot(ledgerDir) {
   if (!ledgerDir) return null;
-  try { return summarizeLedgerStatus(agentkitJson(['orchestrate', 'ledger', 'status', '--ledger', ledgerDir])); }
-  catch { return null; }
+  try {
+    return summarizeLedgerStatus(agentkitJson(['orchestrate', 'ledger', 'status', '--ledger', ledgerDir]));
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -197,7 +231,11 @@ function collectPayloads(events) {
     for (const match of command.matchAll(/--(?:input|contract|profile|artifact|review)[=\s]+(\S+)/gu)) {
       const candidate = match[1].replace(/^['"]|['"]$/gu, '');
       if (Object.hasOwn(payloads, candidate) || !candidate.startsWith('/') || !existsSync(candidate)) continue;
-      try { payloads[candidate] = JSON.parse(readFileSync(candidate, 'utf8')); } catch { /* 读不到就留空 */ }
+      try {
+        payloads[candidate] = JSON.parse(readFileSync(candidate, 'utf8'));
+      } catch {
+        /* 读不到就留空 */
+      }
     }
   }
   return payloads;
@@ -207,7 +245,15 @@ function collectPayloads(events) {
  * @param {{ bin?: string, model: string, outDir: string, allowBypassPermissions?: boolean, timeoutMs?: number, budgetUsd?: number | null, extraArgs?: string[] }} options
  * @returns {import('./index.mjs').Driver}
  */
-export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allowBypassPermissions = false, timeoutMs = 900000, budgetUsd = null, extraArgs = [] }) {
+export function createHeadlessClaudeDriver({
+  bin = 'claude',
+  model,
+  outDir,
+  allowBypassPermissions = false,
+  timeoutMs = 900000,
+  budgetUsd = null,
+  extraArgs = [],
+}) {
   // 在建驱动器的时候就拒绝，而不是等第一个会话——那时已经建过 fixture 仓、装过 skill 了。
   if (!allowBypassPermissions) throw new Error(BYPASS_REFUSAL);
   const version = hostVersion(bin);
@@ -223,14 +269,25 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
      */
     async prepare() {
       skillCache = prepareSkillCache({ cacheDir: join(outDir, 'skill-cache') });
-      return { skill_cache: { dir: skillCache.dir, reused: skillCache.reused, installer_exit_code: skillCache.installer?.exit_code ?? null } };
+      return {
+        skill_cache: {
+          dir: skillCache.dir,
+          reused: skillCache.reused,
+          installer_exit_code: skillCache.installer?.exit_code ?? null,
+        },
+      };
     },
     async runSession({ evalCase, runIndex, attempt = 1 }) {
       // 正常路径上 run.mjs 已经调过 prepare()；这里兜底，让驱动器单独被调用时也成立。
       if (!skillCache) skillCache = prepareSkillCache({ cacheDir: join(outDir, 'skill-cache') });
       // 重试落在自己的目录里，不覆盖上一次的留档——无效运行的现场是排障材料，不能被冲掉。
       // 第 1 次尝试仍然叫 `run-<n>`，README 里那几条冒烟检查命令因此不用改。
-      const session = join(outDir, 'sessions', `case-${evalCase.id}`, attempt > 1 ? `run-${runIndex}-attempt-${attempt}` : `run-${runIndex}`);
+      const session = join(
+        outDir,
+        'sessions',
+        `case-${evalCase.id}`,
+        attempt > 1 ? `run-${runIndex}-attempt-${attempt}` : `run-${runIndex}`,
+      );
       mkdirSync(session, { recursive: true });
       const { repo, head } = createFixtureRepo({ parent: session });
       const precondition = buildPrecondition(evalCase.setup, { repo, head, session });
@@ -245,11 +302,23 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
       const probeFile = join(session, 'probe.jsonl');
       writeFileSync(probeFile, '');
       const settingsPath = join(session, 'settings.json');
-      writeFileSync(settingsPath, `${JSON.stringify({
-        hooks: {
-          PostToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: `${process.execPath} ${PROBE} ${repo} ${probeFile}` }] }],
-        },
-      }, null, 2)}\n`);
+      writeFileSync(
+        settingsPath,
+        `${JSON.stringify(
+          {
+            hooks: {
+              PostToolUse: [
+                {
+                  matcher: '*',
+                  hooks: [{ type: 'command', command: `${process.execPath} ${PROBE} ${repo} ${probeFile}` }],
+                },
+              ],
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
 
       const prompt = renderPrompt(evalCase.prompt, precondition.vars);
       writeFileSync(join(session, 'prompt.txt'), `${prompt}\n`);
@@ -260,12 +329,17 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
       // 与 skill 安装目录，那会把探针本身变成上下文的一部分。
       const extraDirs = precondition.vars.STATE_ROOT ? ['--add-dir', precondition.vars.STATE_ROOT] : [];
       const args = [
-        '-p', prompt,
-        '--output-format', 'stream-json',
+        '-p',
+        prompt,
+        '--output-format',
+        'stream-json',
         '--verbose',
-        '--model', model,
-        '--permission-mode', 'bypassPermissions',
-        '--settings', settingsPath,
+        '--model',
+        model,
+        '--permission-mode',
+        'bypassPermissions',
+        '--settings',
+        settingsPath,
         ...extraDirs,
         ...(budgetUsd === null ? [] : ['--max-budget-usd', String(budgetUsd)]),
         ...extraArgs,
@@ -281,10 +355,15 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
         PROTOCOL_ROUTING_REPO: repo,
         PROTOCOL_ROUTING_PROBE: probeFile,
         // 探针要对台账取快照的现场（第 7、10、11 条）才有这两项；没有台账时探针写 null。
-        ...(precondition.vars.LEDGER_DIR ? { PROTOCOL_ROUTING_LEDGER: precondition.vars.LEDGER_DIR, PROTOCOL_ROUTING_AGENTKIT: AGENTKIT_BIN } : {}),
+        ...(precondition.vars.LEDGER_DIR
+          ? { PROTOCOL_ROUTING_LEDGER: precondition.vars.LEDGER_DIR, PROTOCOL_ROUTING_AGENTKIT: AGENTKIT_BIN }
+          : {}),
       });
       // 留档只记键名，不记取值——ANTHROPIC_API_KEY 之类的值不进会话目录。
-      writeFileSync(join(session, 'command.json'), `${JSON.stringify({ bin, args, cwd: repo, env_keys: Object.keys(env).sort() }, null, 2)}\n`);
+      writeFileSync(
+        join(session, 'command.json'),
+        `${JSON.stringify({ bin, args, cwd: repo, env_keys: Object.keys(env).sort() }, null, 2)}\n`,
+      );
 
       // 提前终止：正向且只看第一个观测量的用例，判定一旦成立就没有再跑下去的理由。
       // 判据和最终判定**用的是同一个 assert**，只是喂给它一份截止到此刻的分类结果。
@@ -313,26 +392,44 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
           if (!earlyEligible || early || scanner.push(String(chunk)) === 0) return;
           // 探针文件按事件追加；还没落盘的 tool_use 在这里配不上，下一个 chunk 再看。
           let probes = [];
-          try { probes = readFileSync(probeFile, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line)); }
-          catch { return; }
+          try {
+            probes = readFileSync(probeFile, 'utf8')
+              .split('\n')
+              .filter(Boolean)
+              .map((line) => JSON.parse(line));
+          } catch {
+            return;
+          }
           const paired = pairEvents(scanner.uses, probes);
           if (!paired.events.length) return;
-          const verdict = evalCase.assert(classify({ initial_repo: initialRepo, initial_ledger: initialLedger, events: paired.events }), {});
+          const verdict = evalCase.assert(
+            classify({ initial_repo: initialRepo, initial_ledger: initialLedger, events: paired.events }),
+            {},
+          );
           if (!verdict.satisfied) return;
           early = { at_seq: paired.events.at(-1).seq, reason: verdict.reason };
           // 先 SIGTERM 给宿主一个收尾的机会（它要写自己的会话记录），再补一刀。
           child.kill('SIGTERM');
           hardKill = setTimeout(() => child.kill('SIGKILL'), 5000);
         });
-        child.stderr.on('data', (chunk) => { stderr += chunk; });
-        child.on('close', (code) => { finish(code); });
-        child.on('error', (error) => { finish(null, `\n${error.message}`); });
+        child.stderr.on('data', (chunk) => {
+          stderr += chunk;
+        });
+        child.on('close', (code) => {
+          finish(code);
+        });
+        child.on('error', (error) => {
+          finish(null, `\n${error.message}`);
+        });
       });
       writeFileSync(join(session, 'stream.jsonl'), run.stdout);
       if (run.stderr) writeFileSync(join(session, 'stderr.log'), run.stderr);
 
       const { uses, model: reportedModel, sessionId, hostResult } = parseStream(run.stdout);
-      const probes = readFileSync(probeFile, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
+      const probes = readFileSync(probeFile, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
       const paired = pairEvents(uses, probes);
 
       const observation = {
@@ -372,7 +469,12 @@ export function createHeadlessClaudeDriver({ bin = 'claude', model, outDir, allo
         // host_result 是「这次算不算数据点」的唯一可靠信号，见 lib/run-validity.mjs。
         // early_terminated 非空时这次会话是被 harness 主动掐掉的，不是故障——
         // 那种情况下拿不到 result 事件，退出码也不是 0，判据必须先看它。
-        end: { exit_code: run.code, error: run.stderr ? run.stderr.slice(0, 2000) : null, host_result: hostResult, early_terminated: run.early ?? null },
+        end: {
+          exit_code: run.code,
+          error: run.stderr ? run.stderr.slice(0, 2000) : null,
+          host_result: hostResult,
+          early_terminated: run.early ?? null,
+        },
       };
       writeFileSync(join(session, 'observation.jsonl'), serializeObservation(observation));
       return { ...observation, source: join(session, 'observation.jsonl') };

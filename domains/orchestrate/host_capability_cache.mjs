@@ -2,7 +2,16 @@
 // @ts-check
 
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseJsonStrict } from './contract-tool.mjs';
@@ -14,7 +23,16 @@ const HOST_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 const KEY_PATTERN = /^[a-z][a-z0-9_.-]{0,63}$/u;
 const OBSERVED_KEYS = new Set(['schema_version', 'host', 'host_version', 'tools', 'capabilities', 'limits', 'unknown']);
 const TOOL_KEYS = new Set(['name', 'parameters', 'returns']);
-const SNAPSHOT_KEYS = new Set(['schema_version', 'host', 'host_version', 'generated_at', 'expires_at', 'capability_fingerprint', 'source', 'observed']);
+const SNAPSHOT_KEYS = new Set([
+  'schema_version',
+  'host',
+  'host_version',
+  'generated_at',
+  'expires_at',
+  'capability_fingerprint',
+  'source',
+  'observed',
+]);
 const EVENT_KEYS = new Set(['schema_version', 'category', 'summary', 'confidence', 'evidence', 'portable']);
 const CONFIDENCE_VALUES = new Set(['observed-once', 'reproduced', 'schema-confirmed']);
 const MODEL_DISCOVERY_VALUES = new Set(['available', 'unavailable']);
@@ -23,7 +41,9 @@ const ISO_TZ_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\
 export class CapabilityCacheError extends Error {}
 
 function checkKeys(value, allowed, label) {
-  const unknown = Object.keys(value).filter((k) => !allowed.has(k)).sort();
+  const unknown = Object.keys(value)
+    .filter((k) => !allowed.has(k))
+    .sort();
   if (unknown.length) {
     throw new CapabilityCacheError(`${label} has unknown keys: ${unknown.join(', ')}`);
   }
@@ -166,7 +186,9 @@ export function atomicWrite(path, value) {
 
 export function parseTime(value, label) {
   if (typeof value !== 'string' || !ISO_TZ_PATTERN.test(value)) {
-    throw new CapabilityCacheError(`${label} must be a valid ISO-8601 string with timezone (e.g. 2026-08-01T12:00:00Z)`);
+    throw new CapabilityCacheError(
+      `${label} must be a valid ISO-8601 string with timezone (e.g. 2026-08-01T12:00:00Z)`,
+    );
   }
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) {
@@ -245,7 +267,10 @@ export function inspectSnapshot(root, host, observedValue, now = null) {
     if (generatedAt.getTime() > current.getTime() + 5 * 60 * 1000) {
       throw new CapabilityCacheError('snapshot generated_at is in the future');
     }
-    if (expiresAt.getTime() <= generatedAt.getTime() || expiresAt.getTime() - generatedAt.getTime() > 24 * 90 * 3600 * 1000) {
+    if (
+      expiresAt.getTime() <= generatedAt.getTime() ||
+      expiresAt.getTime() - generatedAt.getTime() > 24 * 90 * 3600 * 1000
+    ) {
       throw new CapabilityCacheError('snapshot validity window is invalid');
     }
     const reasons = [];
@@ -301,7 +326,11 @@ export function recordObservation(root, host, value, now = null) {
   if (existsSync(snapshotFile)) {
     try {
       const cached = readJsonFile(snapshotFile);
-      if (cached && typeof cached.capability_fingerprint === 'string' && /^sha256:[0-9a-f]{64}$/u.test(cached.capability_fingerprint)) {
+      if (
+        cached &&
+        typeof cached.capability_fingerprint === 'string' &&
+        /^sha256:[0-9a-f]{64}$/u.test(cached.capability_fingerprint)
+      ) {
         fingerprint = cached.capability_fingerprint;
       }
     } catch {}
@@ -343,7 +372,16 @@ export function parseCli(argv = process.argv.slice(2)) {
   if (!['status', 'refresh', 'observe'].includes(command)) {
     throw new CapabilityCacheError('command must be status, refresh, or observe');
   }
-  const options = { command, host: '', repo: '.', scope: 'global', config_dir: null, observed: null, ttl_hours: 168, event: null };
+  const options = {
+    command,
+    host: '',
+    repo: '.',
+    scope: 'global',
+    config_dir: null,
+    observed: null,
+    ttl_hours: 168,
+    event: null,
+  };
   for (let i = 1; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--host') {
@@ -356,13 +394,16 @@ export function parseCli(argv = process.argv.slice(2)) {
       if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw new CapabilityCacheError('缺少 --scope 参数值');
       options.scope = argv[++i];
     } else if (arg === '--config-dir') {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw new CapabilityCacheError('缺少 --config-dir 参数值');
+      if (i + 1 >= argv.length || argv[i + 1].startsWith('--'))
+        throw new CapabilityCacheError('缺少 --config-dir 参数值');
       options.config_dir = argv[++i];
     } else if (arg === '--observed') {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw new CapabilityCacheError('缺少 --observed 参数值');
+      if (i + 1 >= argv.length || argv[i + 1].startsWith('--'))
+        throw new CapabilityCacheError('缺少 --observed 参数值');
       options.observed = argv[++i];
     } else if (arg === '--ttl-hours') {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw new CapabilityCacheError('缺少 --ttl-hours 参数值');
+      if (i + 1 >= argv.length || argv[i + 1].startsWith('--'))
+        throw new CapabilityCacheError('缺少 --ttl-hours 参数值');
       const raw = argv[++i];
       const parsed = Number(raw);
       if (!Number.isInteger(parsed) || !/^-?\d+$/u.test(raw)) {

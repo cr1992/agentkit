@@ -12,7 +12,9 @@ import { writeNewJson } from '../../core/atomic-fs.mjs';
 import { createReflectionKit, safeRelative } from '../../core/reflection.mjs';
 
 // 严格度保持本 Skill 现状（严格版：拒绝未知字段、\S+ 脱敏、evidence ref realpath 越界检查）。
-const { buildProposal, buildReflection, readAndValidateReflection, verifyEvidenceRefs } = createReflectionKit({ strict: true });
+const { buildProposal, buildReflection, readAndValidateReflection, verifyEvidenceRefs } = createReflectionKit({
+  strict: true,
+});
 
 // CLI 命令与参数的唯一真源：选项白名单、`--help` 清单和命令错误信息都从这里推导。
 const CLI_SPEC = {
@@ -35,12 +37,17 @@ function readJson(path) {
 }
 
 function skillProvenance() {
-  return { name: 'orchestrate-subagents', version: ORCHESTRATION_PROTOCOL_VERSION, content_digest: skillContentDigest() };
+  return {
+    name: 'orchestrate-subagents',
+    version: ORCHESTRATION_PROTOCOL_VERSION,
+    content_digest: skillContentDigest(),
+  };
 }
 
 export function recordStandalone(stateRoot, input) {
   const root = resolvePath(stateRoot);
-  if (!DIGEST_PATTERN.test(String(input.contract_digest ?? ''))) throw new OrchestrationReflectionError('contract_digest 无效');
+  if (!DIGEST_PATTERN.test(String(input.contract_digest ?? '')))
+    throw new OrchestrationReflectionError('contract_digest 无效');
   mkdirSync(join(root, 'reflections'), { recursive: true, mode: 0o700 });
   const value = buildReflection({
     input,
@@ -61,7 +68,12 @@ export function proposeStandalone(stateRoot, reflectionRef, input) {
   const relative = safeRelative(reflectionRef);
   const reflectionPath = join(root, relative);
   if (!existsSync(reflectionPath)) throw new OrchestrationReflectionError('Reflection 文件不存在');
-  const reflection = readAndValidateReflection(reflectionPath, 'orchestrate-subagents', parseJsonStrict, envelopeDigest);
+  const reflection = readAndValidateReflection(
+    reflectionPath,
+    'orchestrate-subagents',
+    parseJsonStrict,
+    envelopeDigest,
+  );
   verifyEvidenceRefs(root, reflection.evidence_refs, parseJsonStrict, canonicalJson);
   const value = buildProposal({ input, reflections: [reflection], skill: reflection.affected_skill, envelopeDigest });
   mkdirSync(join(root, 'proposals'), { recursive: true, mode: 0o700 });
@@ -75,7 +87,13 @@ function parseCli(argv) {
   const options = {};
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index];
-    if (!token.startsWith('--') || !CLI_OPTIONS.has(token.slice(2)) || argv[index + 1] === undefined || argv[index + 1].startsWith('--')) throw new OrchestrationReflectionError(`unknown or incomplete option: ${token}`);
+    if (
+      !token.startsWith('--') ||
+      !CLI_OPTIONS.has(token.slice(2)) ||
+      argv[index + 1] === undefined ||
+      argv[index + 1].startsWith('--')
+    )
+      throw new OrchestrationReflectionError(`unknown or incomplete option: ${token}`);
     options[token.slice(2)] = argv[++index];
   }
   return { command, options };
@@ -84,15 +102,32 @@ function parseCli(argv) {
 export function main(argv = process.argv.slice(2)) {
   if (isHelpRequest(argv)) return { help: renderCliHelp('orchestration-reflection.mjs', CLI_SPEC, CLI_NOTES) };
   const { command, options } = parseCli(argv);
-  if (command === 'capabilities') return { skill: 'orchestrate-subagents', protocol_version: ORCHESTRATION_PROTOCOL_VERSION, runtime_version: RUNTIME_VERSION, contracts: { reflection_record: [1], improvement_proposal: [1] }, modes: ['lightweight', 'full-reference'], content_digest: skillContentDigest() };
+  if (command === 'capabilities')
+    return {
+      skill: 'orchestrate-subagents',
+      protocol_version: ORCHESTRATION_PROTOCOL_VERSION,
+      runtime_version: RUNTIME_VERSION,
+      contracts: { reflection_record: [1], improvement_proposal: [1] },
+      modes: ['lightweight', 'full-reference'],
+      content_digest: skillContentDigest(),
+    };
   if (!options['state-root']) throw new OrchestrationReflectionError('缺少 --state-root');
   if (command === 'record') {
     if (!options.input) throw new OrchestrationReflectionError('record requires --input');
-    try { return recordStandalone(options['state-root'], readJson(options.input)); } catch (error) { throw error instanceof OrchestrationReflectionError ? error : new OrchestrationReflectionError(error.message); }
+    try {
+      return recordStandalone(options['state-root'], readJson(options.input));
+    } catch (error) {
+      throw error instanceof OrchestrationReflectionError ? error : new OrchestrationReflectionError(error.message);
+    }
   }
   if (command === 'propose') {
-    if (!options.reflection || !options.input) throw new OrchestrationReflectionError('propose requires --reflection and --input');
-    try { return proposeStandalone(options['state-root'], options.reflection, readJson(options.input)); } catch (error) { throw error instanceof OrchestrationReflectionError ? error : new OrchestrationReflectionError(error.message); }
+    if (!options.reflection || !options.input)
+      throw new OrchestrationReflectionError('propose requires --reflection and --input');
+    try {
+      return proposeStandalone(options['state-root'], options.reflection, readJson(options.input));
+    } catch (error) {
+      throw error instanceof OrchestrationReflectionError ? error : new OrchestrationReflectionError(error.message);
+    }
   }
   throw new OrchestrationReflectionError(`command must be one of: ${Object.keys(CLI_SPEC).join(', ')}`);
 }

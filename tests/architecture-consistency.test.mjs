@@ -39,7 +39,13 @@ function tableRows(body, index = 0) {
   if (current) tables.push(current);
   const table = tables[index];
   assert.ok(table && table.length > 2, `小节里没有第 ${index + 1} 张可解析的 Markdown 表格`);
-  return table.slice(2).map((line) => line.trim().replace(/^\||\|$/gu, '').split('|').map((cell) => cell.trim()));
+  return table.slice(2).map((line) =>
+    line
+      .trim()
+      .replace(/^\||\|$/gu, '')
+      .split('|')
+      .map((cell) => cell.trim()),
+  );
 }
 
 /** 单元格里反引号包起来的记号，按出现顺序返回。 */
@@ -70,7 +76,9 @@ function directoryNames(path) {
 }
 
 test('架构真源中的相对 Markdown 链接都指向现存文件', () => {
-  const broken = relativeLinkTargets().filter(({ resolved }) => !existsSync(resolved)).map(({ target }) => target);
+  const broken = relativeLinkTargets()
+    .filter(({ resolved }) => !existsSync(resolved))
+    .map(({ target }) => target);
   assert.deepEqual(broken, []);
 });
 
@@ -103,7 +111,10 @@ test('跨域运行时概念指向各自的真源文件，而不是在文档里�
 
 test('架构真源不再引用已迁走的 references runtime', () => {
   const text = readFileSync(ARCHITECTURE, 'utf8');
-  assert.doesNotMatch(text, /(?:orchestrate-subagents|verify-agent-output|run-agent-verify-loop|manage-worktrees)\/references\//u);
+  assert.doesNotMatch(
+    text,
+    /(?:orchestrate-subagents|verify-agent-output|run-agent-verify-loop|manage-worktrees)\/references\//u,
+  );
   assert.doesNotMatch(text, /run-agent-verify-loop\/scripts\/loop-runtime\.mjs/u);
 });
 
@@ -120,7 +131,10 @@ test('架构真源 §3.8 预算表的数字与 BUDGETS 真源一致', () => {
   assert.ok(text.includes(`<= ${TOTAL_BUDGET}\``), `架构真源里的合计预算应为 ${TOTAL_BUDGET}`);
 
   const skillCount = Object.keys(BUDGETS).length;
-  assert.ok(text.includes(`\`<= ${DESCRIPTION_LIMIT_PER_SKILL}\``), `架构真源里 description 单项上限应为 ${DESCRIPTION_LIMIT_PER_SKILL}`);
+  assert.ok(
+    text.includes(`\`<= ${DESCRIPTION_LIMIT_PER_SKILL}\``),
+    `架构真源里 description 单项上限应为 ${DESCRIPTION_LIMIT_PER_SKILL}`,
+  );
   assert.ok(
     text.includes(`${skillCount} × ${DESCRIPTION_LIMIT_PER_SKILL} = ${DESCRIPTION_LIMIT_TOTAL}`),
     `架构真源里 description 合计上限应为 ${skillCount} × ${DESCRIPTION_LIMIT_PER_SKILL} = ${DESCRIPTION_LIMIT_TOTAL}`,
@@ -159,7 +173,11 @@ test('架构真源 §6.2 的 capabilities 字段表与真实输出双向一致',
 
   for (const [field, scope] of documented) {
     const actual = SKILL_NAMES.filter((name) => Object.hasOwn(live.skills[name], field)).sort();
-    assert.deepEqual(actual, scope, `§6.2 记录 ${field} 出现在 ${scope.join('、')}，实际是 ${actual.join('、') || '（无）'}`);
+    assert.deepEqual(
+      actual,
+      scope,
+      `§6.2 记录 ${field} 出现在 ${scope.join('、')}，实际是 ${actual.join('、') || '（无）'}`,
+    );
   }
 
   const actualFields = new Set(SKILL_NAMES.flatMap((name) => Object.keys(live.skills[name])));
@@ -181,13 +199,21 @@ function knownExtensionKeys() {
   const walk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
-      if (entry.isDirectory()) { walk(path); continue; }
+      if (entry.isDirectory()) {
+        walk(path);
+        continue;
+      }
       if (!entry.name.endsWith('.mjs') || entry.name.endsWith('.test.mjs')) continue;
-      for (const match of readFileSync(path, 'utf8').matchAll(/\.extensions\.([a-z_][a-z0-9_]*)\s*=[^=]/gu)) keys.add(match[1]);
+      for (const match of readFileSync(path, 'utf8').matchAll(/\.extensions\.([a-z_][a-z0-9_]*)\s*=[^=]/gu))
+        keys.add(match[1]);
     }
   };
   walk(resolve(ROOT, 'domains'));
-  return { contractSchema, schemaKeys: Object.keys(contractSchema.properties.extensions.properties).sort(), allKeys: keys };
+  return {
+    contractSchema,
+    schemaKeys: Object.keys(contractSchema.properties.extensions.properties).sort(),
+    allKeys: keys,
+  };
 }
 
 // 反查：架构真源里出现的 extensions 键必须真实存在（schema 定义或运行时写入），schema 定义过的
@@ -198,7 +224,11 @@ test('架构真源 §6.3 的合同 provider 字段与 schema、validateContract 
 
   // 全文口径：任何一节重新引入 `extensions.orchestration` 这类不存在的键都会被这里抓到。
   // 负向断言的边界：`extensions.worktreeConfig` 是 Git 配置键，不是合同字段，靠后瞻断言排除。
-  const mentioned = new Set([...readFileSync(ARCHITECTURE, 'utf8').matchAll(/extensions\.([a-z_][a-z0-9_]*)(?![A-Za-z0-9])/gu)].map((match) => match[1]));
+  const mentioned = new Set(
+    [...readFileSync(ARCHITECTURE, 'utf8').matchAll(/extensions\.([a-z_][a-z0-9_]*)(?![A-Za-z0-9])/gu)].map(
+      (match) => match[1],
+    ),
+  );
   assert.deepEqual(
     [...mentioned].filter((key) => !allKeys.has(key)).sort(),
     [],
@@ -221,7 +251,10 @@ test('架构真源 §6.3 的合同 provider 字段与 schema、validateContract 
   const source = readFileSync(resolve(ROOT, 'domains', 'orchestrate', 'contract-tool.mjs'), 'utf8');
   const literal = /\[([^\]]+)\]\.includes\(contract\.environment\?\.isolation\)/u.exec(source);
   assert.ok(literal, 'contract-tool.mjs 里找不到 environment.isolation 的取值域字面量');
-  const isolation = literal[1].split(',').map((item) => item.trim().replace(/^'|'$/gu, '')).sort();
+  const isolation = literal[1]
+    .split(',')
+    .map((item) => item.trim().replace(/^'|'$/gu, ''))
+    .sort();
   assert.deepEqual(rows.get('environment.isolation'), isolation);
 
   const { validateContract } = await import('../domains/orchestrate/contract-tool.mjs');
@@ -237,7 +270,8 @@ test('架构真源 §6.3 的合同 provider 字段与 schema、validateContract 
     stop_conditions: [],
     extensions: {},
   });
-  for (const value of isolation) assert.doesNotThrow(() => validateContract(contract(value), { requireDigest: false }), value);
+  for (const value of isolation)
+    assert.doesNotThrow(() => validateContract(contract(value), { requireDigest: false }), value);
   assert.throws(() => validateContract(contract('managed_worktree'), { requireDigest: false }), /environment/u);
 });
 
@@ -264,9 +298,16 @@ test('架构真源 §13.1 的 glob 表与 package.json 的 test 脚本逐字相�
   const body = section('### 13.1 门禁入口');
   const script = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')).scripts.test;
   assert.ok(script.includes('tools/validate-skills.mjs'), 'test 脚本不再先跑 validate-skills');
-  assert.deepEqual(tableRows(body).map((row) => codeSpans(row[0])[0]), TEST_GLOBS);
+  assert.deepEqual(
+    tableRows(body).map((row) => codeSpans(row[0])[0]),
+    TEST_GLOBS,
+  );
   for (const glob of TEST_GLOBS) assert.ok(script.includes(glob), `test 脚本缺少 glob ${glob}`);
-  assert.deepEqual(script.slice(script.indexOf('--test')).trim().split(/\s+/u).slice(1), TEST_GLOBS, 'test 脚本的 glob 集合与 §13.1 不一致');
+  assert.deepEqual(
+    script.slice(script.indexOf('--test')).trim().split(/\s+/u).slice(1),
+    TEST_GLOBS,
+    'test 脚本的 glob 集合与 §13.1 不一致',
+  );
 });
 
 test('架构真源 §13.2 指向全部含用例的目录，且没有跑不到的用例文件', () => {
@@ -292,7 +333,10 @@ test('架构真源 §13.3 的评测用例数量与 cases.mjs 一致', async () =
   const body = section('### 13.3 协议路由评测');
   const { CASES, POSITIVE_CASES, FORBIDDEN_CASES } = await import('../evals/protocol-routing/cases.mjs');
   assert.ok(body.includes(`共 \`${CASES.length}\` 条`), `§13.3 的用例总数应为 ${CASES.length}`);
-  assert.ok(body.includes(`正向\n\`${POSITIVE_CASES.length}\` 条`) || body.includes(`正向 \`${POSITIVE_CASES.length}\` 条`), `§13.3 的正向用例数应为 ${POSITIVE_CASES.length}`);
+  assert.ok(
+    body.includes(`正向\n\`${POSITIVE_CASES.length}\` 条`) || body.includes(`正向 \`${POSITIVE_CASES.length}\` 条`),
+    `§13.3 的正向用例数应为 ${POSITIVE_CASES.length}`,
+  );
   assert.ok(body.includes(`禁止 \`${FORBIDDEN_CASES.length}\` 条`), `§13.3 的禁止用例数应为 ${FORBIDDEN_CASES.length}`);
   assert.equal(POSITIVE_CASES.length + FORBIDDEN_CASES.length, CASES.length);
 });
@@ -313,25 +357,47 @@ test('架构真源 §11 的保证等级字段与 schema、运行时取值域双�
 
   // verify 与 loop 必须对同一个 snapshot 字段给出同一个取值域，否则两侧记录的保证等级不可比。
   const networkValues = runtimeTernaryValues('domains/loop/loop-runtime.mjs', 'network_isolation_assurance');
-  assert.deepEqual(runtimeTernaryValues('domains/verify/verification-runtime.mjs', 'network_isolation_assurance'), networkValues);
+  assert.deepEqual(
+    runtimeTernaryValues('domains/verify/verification-runtime.mjs', 'network_isolation_assurance'),
+    networkValues,
+  );
 
   const expected = new Map([
-    ['environment.isolation', (() => {
-      const source = readFileSync(resolve(ROOT, 'domains', 'orchestrate', 'contract-tool.mjs'), 'utf8');
-      const literal = /\[([^\]]+)\]\.includes\(contract\.environment\?\.isolation\)/u.exec(source);
-      assert.ok(literal, 'contract-tool.mjs 里找不到 environment.isolation 的取值域字面量');
-      return literal[1].split(',').map((item) => item.trim().replace(/^'|'$/gu, '')).sort();
-    })()],
-    ['provenance.isolation_assurance', [...schema('evidence-package').properties.provenance.properties.isolation_assurance.enum].sort()],
-    ['independent_context.assurance', [...schema('embedded-verification-record').properties.independent_context.properties.assurance.enum].sort()],
-    ['verification_assurance', [...schema('orchestration-ledger').$defs.node.properties.verification_assurance.enum].sort()],
+    [
+      'environment.isolation',
+      (() => {
+        const source = readFileSync(resolve(ROOT, 'domains', 'orchestrate', 'contract-tool.mjs'), 'utf8');
+        const literal = /\[([^\]]+)\]\.includes\(contract\.environment\?\.isolation\)/u.exec(source);
+        assert.ok(literal, 'contract-tool.mjs 里找不到 environment.isolation 的取值域字面量');
+        return literal[1]
+          .split(',')
+          .map((item) => item.trim().replace(/^'|'$/gu, ''))
+          .sort();
+      })(),
+    ],
+    [
+      'provenance.isolation_assurance',
+      [...schema('evidence-package').properties.provenance.properties.isolation_assurance.enum].sort(),
+    ],
+    [
+      'independent_context.assurance',
+      [...schema('embedded-verification-record').properties.independent_context.properties.assurance.enum].sort(),
+    ],
+    [
+      'verification_assurance',
+      [...schema('orchestration-ledger').$defs.node.properties.verification_assurance.enum].sort(),
+    ],
     ['network_isolation_assurance', networkValues],
   ]);
 
   // §11 的第一张表是能力对照表，保证等级字段表是第二张。
   const rows = new Map(tableRows(body, 1).map((row) => [codeSpans(row[0])[0], codeSpans(row[2]).sort()]));
   for (const [field, values] of expected) {
-    assert.deepEqual(rows.get(field), values, `§11 记录 ${field} 的取值为 ${(rows.get(field) ?? []).join('、') || '（缺这一行）'}，真源是 ${values.join('、')}`);
+    assert.deepEqual(
+      rows.get(field),
+      values,
+      `§11 记录 ${field} 的取值为 ${(rows.get(field) ?? []).join('、') || '（缺这一行）'}，真源是 ${values.join('、')}`,
+    );
   }
 
   // limitations 没有枚举，只断言它仍是 Evidence Package 的必填数组，且 §11 没给它编造取值域。
