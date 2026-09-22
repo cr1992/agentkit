@@ -108,7 +108,10 @@ verdicts:
 
 ```bash
 # Requires an installed agentkit (see Installation), plus git and Node.js 22+
+# Inside a clone of this repository:
 node examples/quickstart/run.mjs
+# With only the package installed globally (the example ships with it):
+node "$(npm root -g)/@cr1992/agentkit/examples/quickstart/run.mjs"
 ```
 
 The script calls the global `agentkit` by default; point `AGENTKIT_BIN` at a JS entry to use a

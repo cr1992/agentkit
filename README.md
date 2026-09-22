@@ -103,7 +103,10 @@ Skill 会根据当前宿主可用的 Agent、终端、Git 和任务控制能力�
 
 ```bash
 # 需要已安装 agentkit（见上文「安装」），以及 git 和 Node.js 22+
+# 在仓库里：
 node examples/quickstart/run.mjs
+# 只全局装了包、没有 clone 仓库时（示例随包分发）：
+node "$(npm root -g)/@cr1992/agentkit/examples/quickstart/run.mjs"
 ```
 
 脚本默认调用全局 `agentkit`；把 `AGENTKIT_BIN` 指向某个 JS 入口即可改用指定运行时（`npm test` 用它把
