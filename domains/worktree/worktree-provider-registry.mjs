@@ -5,6 +5,7 @@
 
 import { ChangeRequestSubmitError } from './worktree-provider-contract.mjs';
 import { gitlabChangeRequestProvider } from './worktree-provider-gitlab.mjs';
+import { githubChangeRequestProvider } from './worktree-provider-github.mjs';
 
 export { ChangeRequestSubmitError } from './worktree-provider-contract.mjs';
 
@@ -23,7 +24,7 @@ const manualChangeRequestProvider = {
 };
 
 /** 新增适配器只需在此登记一行；provider 名清单与分发都从这里派生。 */
-const PROVIDERS = [manualChangeRequestProvider, gitlabChangeRequestProvider];
+const PROVIDERS = [manualChangeRequestProvider, gitlabChangeRequestProvider, githubChangeRequestProvider];
 
 const PROVIDER_BY_NAME = new Map(PROVIDERS.map((adapter) => [adapter.name, adapter]));
 

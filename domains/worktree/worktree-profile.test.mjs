@@ -254,7 +254,7 @@ test('Profile 严格拒绝未知字段和未知 scan adapter', () => {
     (error) => error instanceof WorktreeProfileError && error.code === 'PROFILE_UNKNOWN_SCAN_SOURCE',
   );
   assert.throws(
-    () => validateProfile(genericProfile({ change_request: { provider: 'github' } })),
+    () => validateProfile(genericProfile({ change_request: { provider: 'bitbucket' } })),
     (error) => error instanceof WorktreeProfileError && error.code === 'PROFILE_UNKNOWN_CHANGE_REQUEST_PROVIDER',
   );
   assert.throws(
@@ -280,6 +280,13 @@ test('Profile 严格拒绝未知字段和未知 scan adapter', () => {
       ),
     (error) => error instanceof WorktreeProfileError && error.code === 'PROFILE_NAMING_DOD_FAILED',
   );
+});
+
+test('注册后 github 成为合法 change_request provider（沿用 remote/target 默认值）', () => {
+  const profile = validateProfile(genericProfile({ change_request: { provider: 'github' } }));
+  assert.equal(profile.change_request.provider, 'github');
+  assert.equal(profile.change_request.remote, 'origin');
+  assert.equal(profile.change_request.target_branch, null);
 });
 
 test('Profile 拒绝逃出仓库的 scan glob，并包含当前平台临时目录', () => {

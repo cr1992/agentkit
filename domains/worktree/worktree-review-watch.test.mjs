@@ -9,7 +9,7 @@ import { resolveChangeRequestProvider } from './worktree-provider-registry.mjs';
 // 不引入任何环境变量钩子或动态 import 外部路径。
 
 /** cmdSubmit 只需要下面这些 deps；未列出的项在 submit 路径上不会被调用。 */
-function buildSubmitHarness({ record, adapter, resolveProvider }) {
+function buildSubmitHarness({ record, adapter, resolveProvider, currentStatusOverride }) {
   const logs = [];
   const traceEvents = [];
   const watchedEvents = [];
@@ -19,7 +19,13 @@ function buildSubmitHarness({ record, adapter, resolveProvider }) {
 
   function fakeAppendTraceEvent(event) {
     traceEvents.push({ eventType: event.eventType, details: event.details });
-    const next = event.mutate ? event.mutate(latestRecord) : latestRecord;
+    // currentStatusOverride 只对 change_submitted 生效：模拟写 trace 时 record 状态被并发改动，
+    // 让 mutate 命中 SUBMIT_STATE_CHANGED；不传时行为与既有用例完全一致。
+    const base =
+      currentStatusOverride && event.eventType === 'change_submitted'
+        ? { ...latestRecord, task_status: currentStatusOverride }
+        : latestRecord;
+    const next = event.mutate ? event.mutate(base) : base;
     latestRecord = next;
     if (event.eventType === 'change_submitted') submittedRecord = next;
     return { record: next };
@@ -196,4 +202,33 @@ test('submit 在 provider 无提交能力（manual）时以平台中立文案 di
     },
   );
   assert.equal(gitCalls.length, 0);
+});
+
+test('submit 成功但写 trace 撞上 SUBMIT_STATE_CHANGED：die 文案给出可照抄的 watch --change-ref 恢复命令，record 未变 submitted', () => {
+  const record = {
+    worktree_id: '99999999-8888-4777-8666-555555555555',
+    task: 'race-submit',
+    agent: 'codex',
+    branch: 'codex/race-submit',
+    base_ref: 'origin/main',
+    base_sha: 'b'.repeat(40),
+    path: '/fake/worktree',
+    task_status: 'active',
+  };
+  // 平台中立：url 用非具体平台域名，证明恢复命令只依赖 result.url 非空，不感知具体 provider。
+  const changeUrl = 'https://example.test/change/9';
+  const adapter = {
+    name: 'fake',
+    precheck: () => null,
+    submit: () => ({ ok: true, change_ref: changeUrl, url: changeUrl, detail: null, message: 'fake change request 已提交' }),
+    SubmitError: class extends Error {},
+  };
+  const harness = buildSubmitHarness({ record, adapter, currentStatusOverride: 'integrating' });
+
+  assert.throws(
+    () => harness.commands.cmdSubmit({ flags: new Map(), positionals: ['race-submit'] }),
+    (error) => error.message.includes(`worktree watch ${record.worktree_id} --change-ref ${changeUrl}`),
+  );
+  // 写 trace 抛出后 record 未落成 submitted。
+  assert.equal(harness.getSubmittedRecord(), null);
 });
