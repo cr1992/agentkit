@@ -11,6 +11,7 @@ import { isHelpRequest, renderCliHelp, specOptionNames } from '../core/cli-help.
 const SCRIPTS = join(dirname(dirname(fileURLToPath(import.meta.url))), 'orchestrate-subagents', 'scripts');
 
 // 每个脚本至少验一条“真实命令 + 真实参数”的行，确保清单来自 CLI_SPEC 而不是占位文案。
+/** @type {[string, string[]][]} */
 const CLIS = [
   [
     'contract-tool.mjs',

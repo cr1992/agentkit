@@ -116,6 +116,11 @@ export function createReflectionKit({ strict = false } = {}) {
     });
   }
 
+  /**
+   * stateDir 与 runDir 二选一：前者用于 orchestrate，后者用于 verify/loop。
+   * @param {{ input: any, stateDir?: string, runDir?: string, scope: any, skill: any,
+   *   parseJsonStrict: any, canonicalJson: any, envelopeDigest: any }} options
+   */
   function buildReflection({ input, stateDir, runDir, scope, skill, parseJsonStrict, canonicalJson, envelopeDigest }) {
     const root = stateDir ?? runDir;
     if (strict) {

@@ -113,11 +113,11 @@ class StrictJsonParser {
     if (char === '[') return this.array();
     if (char === '"') return this.string();
     if (char === '-' || /[0-9]/u.test(char ?? '')) return this.number();
-    for (const [token, value] of [
+    for (const [token, value] of /** @type {[string, unknown][]} */ ([
       ['true', true],
       ['false', false],
       ['null', null],
-    ]) {
+    ])) {
       if (this.text.startsWith(token, this.index)) {
         this.index += token.length;
         return value;
@@ -220,7 +220,7 @@ function readJson(path) {
 
 /** @param {string} path @param {unknown} value */
 /** @param {string} path @param {string} value */
-/** @param {string} path @param {unknown} value */
+/** @param {number} pid */
 function processIsAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -344,7 +344,7 @@ export function releaseLock(path, owner) {
 
 /** @param {string} root */
 /** @param {string} [root] */
-/** @param {string[]} args @param {string} cwd @param {BufferEncoding} [encoding] */
+/** @param {string[]} args @param {string} cwd @param {BufferEncoding | 'buffer'} [encoding] */
 function git(args, cwd, encoding = 'utf8') {
   return execFileSync('git', args, { cwd, encoding, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 });
 }
@@ -604,7 +604,7 @@ function validateSkillBinding(contract, contentDigest) {
     throw new ValidationError('Task Contract 中 verify-agent-output content_digest 与当前安装不一致');
 }
 
-/** @param {string} candidate @param {string} parent */
+/** @param {string} path */
 function canonicalFuturePath(path) {
   let cursor = resolve(path);
   const suffix = [];
@@ -747,7 +747,7 @@ function executeChecks(snapshot, stage, runDir) {
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const timedOut = result.error?.code === 'ETIMEDOUT';
+    const timedOut = /** @type {NodeJS.ErrnoException | undefined} */ (result.error)?.code === 'ETIMEDOUT';
     const exitCode = Number.isInteger(result.status) ? result.status : null;
     const log = sanitizeLog(
       [result.stdout, result.stderr, result.error?.message].filter(Boolean).join('\n'),
@@ -975,6 +975,7 @@ function terminalSnapshot(snapshot, runDir, outcome) {
   };
   evidence.evidence_digest = envelopeDigest(evidence, 'evidence_digest');
   const evidencePath = join(runDir, 'evidence.json');
+  /** @type {Record<string, any>} */
   let persisted = evidence;
   if (existsSync(evidencePath)) {
     persisted = readJson(evidencePath);
@@ -2031,6 +2032,7 @@ function recordReview(options, flags) {
     const acceptanceIds = validateContract(contract);
     validateReview(review, snapshot, acceptanceIds);
     writeNewJson(join(runDir, 'review-result.json'), review);
+    /** @type {Record<string, any>} */
     let next = {
       ...snapshot,
       status: 'review_recorded',

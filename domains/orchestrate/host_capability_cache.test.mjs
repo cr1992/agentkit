@@ -53,7 +53,7 @@ test('Normalize observed schema validation', () => {
     /model\.discovery/,
   );
   for (const malformed of [null, 0]) {
-    const observed = structuredClone(OBSERVED_SAMPLE);
+    const observed = /** @type {any} */ (structuredClone(OBSERVED_SAMPLE));
     observed.tools[0].parameters = malformed;
     assert.throws(() => normalizeObserved(observed, 'codex'), /parameters must be a string array/);
   }

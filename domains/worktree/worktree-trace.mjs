@@ -214,7 +214,7 @@ function eventDirectory(commonDir, worktreeId) {
   return join(traceLayout(commonDir).events, worktreeId);
 }
 
-/** @param {unknown} event @param {string} source */
+/** @param {any} event @param {string} source */
 function validateEvent(event, source) {
   if (
     !event ||
@@ -318,7 +318,7 @@ export function listRecordCacheEntries(commonDir) {
     });
 }
 
-/** @param {string} commonDir @param {string} worktreeId @param {unknown} snapshot @param {unknown} tail @param {number} count */
+/** @param {string} commonDir @param {string} worktreeId @param {Record<string, any>} snapshot @param {Record<string, any>} tail @param {number} count */
 function writeRecordCache(commonDir, worktreeId, snapshot, tail, count) {
   const layout = traceLayout(commonDir);
   mkdirSync(layout.records, { recursive: true });

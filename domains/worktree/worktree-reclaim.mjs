@@ -783,8 +783,6 @@ export function createCommands(deps) {
     };
   }
 
-  /** @param {string} commonDir @param {Record<string,any>} record @param {string} token @param {string} eventType @param {string} targetSha */
-
   function cmdReclaim(args) {
     rejectUnknownFlags(args.flags, [
       'pushed',

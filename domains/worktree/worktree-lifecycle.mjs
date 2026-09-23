@@ -89,6 +89,10 @@ export function createCommands(deps) {
     return raw;
   }
 
+  /**
+   * 对已经存在的两棵树补登记双向 supersession。命令可幂等重跑；任何冲突关系均 fail-closed。
+   * @param {{positionals:string[],flags:Map<string,unknown>}} args
+   */
   function cmdSupersede(args) {
     rejectUnknownFlags(args.flags, ['by', 'reason', 'id', 'by-id', 'config']);
     const bySelector = flag(args.flags, 'by');
@@ -162,8 +166,6 @@ export function createCommands(deps) {
       `替代关系已登记 ${superseded.task} -> ${replacement.task}（${superseded.worktree_id.slice(0, 8)} -> ${replacement.worktree_id.slice(0, 8)}）。`,
     );
   }
-
-  /** @param {string} value */
 
   function prepareSpawnRequest(args) {
     rejectUnknownFlags(args.flags, [
@@ -727,8 +729,6 @@ export function createCommands(deps) {
     }
   }
 
-  /** @param {Record<string,any>} record @param {string} command */
-
   function cmdTouch(args) {
     rejectUnknownFlags(args.flags, [
       'status',
@@ -849,21 +849,6 @@ export function createCommands(deps) {
     if (requested === 'ready_for_review') autoArmReviewWatch(loaded, updated, args, snapshot);
   }
 
-  /**
-   * 进入 ready_for_review 时默认武装合入监听。
-   *
-   * 纪律来源：监听绑定的是「内容进主干」这一事实，与内容经哪个载体（自建 change request、
-   * 聚合 change request、他人代推）无关。靠人在建 change request 时手工挂 watch，一旦中途改成
-   * 由别的载体合入，监听就会漏挂、合入后无人回收——默认武装把这个洞堵死。
-   *
-   * 失败一律 fail-soft：touch 的主职是状态流转，不因为没有 remote / 未推送而失败，
-   * 但必须把未武装的原因说清楚，避免「以为挂上了」。
-   * @param {ReturnType<typeof loadRepositoryProfile>} loaded
-   * @param {Record<string,any>} record
-   * @param {{flags:Map<string,unknown>}} args
-   * @param {{present:boolean,head:string|null,dirty:boolean|null,upstream:string|null}} snapshot
-   */
-
   function cmdHandoff(args) {
     rejectUnknownFlags(args.flags, ['to-agent', 'to-agent-id', 'note', 'id', 'config']);
     const loaded = loadRepositoryProfile({ explicitConfigPath: flag(args.flags, 'config') });
@@ -967,8 +952,6 @@ export function createCommands(deps) {
         `  ${event.occurred_at} ${event.event_type} ${event.actor ? `${event.actor.host}/${event.actor.id}` : '-'}`,
       );
   }
-
-  /** @param {unknown} value */
 
   function cmdRebuild(args) {
     rejectUnknownFlags(args.flags, ['id', 'recover-lock', 'config']);

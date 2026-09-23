@@ -787,11 +787,6 @@ export function validateSupersessionPair(superseded, replacement) {
   }
 }
 
-/**
- * 对已经存在的两棵树补登记双向 supersession。命令可幂等重跑；任何冲突关系均 fail-closed。
- * @param {{positionals:string[],flags:Map<string,unknown>}} args
- */
-
 export function canonicalSelectorPath(value) {
   try {
     return existsSync(value) ? realpathSync(value) : resolve(value);

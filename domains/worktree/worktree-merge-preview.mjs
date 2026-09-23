@@ -206,7 +206,7 @@ function scanCommitPair(cwd, a, b) {
       reason: dryRun.reason,
     };
   }
-  const conflicted = new Map(dryRun.files.map((item) => [item.path, item.conflict_type]));
+  const conflicted = new Map(dryRun.files.map((item) => /** @type {[string, string]} */ ([item.path, item.conflict_type])));
   // 相邻面算不出来时保持 null（未知），绝不退化成空数组——空数组会被读成"确认没有相邻文件"。
   let adjacent = null;
   let adjacentReason = null;
