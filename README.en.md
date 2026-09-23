@@ -132,6 +132,8 @@ text and agentkit does not review code itself; the `limitations` in Evidence (su
 
 ## Requirements
 
+- macOS or Linux. `agentkit worktree watch-service` is macOS-only; on other platforms, use
+  `agentkit worktree resume-all` for manual recovery. Windows is not supported.
 - Git.
 - Node.js 22 or newer.
 - A globally available `agentkit` command; run `agentkit doctor` to validate the package version, entry points, and runtime manifest.
