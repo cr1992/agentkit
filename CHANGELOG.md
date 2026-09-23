@@ -4,6 +4,21 @@
 
 ## Unreleased
 
+## 1.5.0 - 2026-09-23
+
+本版改动了 `core/` 与 `domains/` 的 JSDoc 注解，内容摘要随之变化。升级后在途的 orchestration ledger、loop 与 verify run
+会以 `skill_drift` 终止（既有设计）：升级前先收尾在途任务，或升级后用 `ledger close --abandon` 记为放弃。
+运行时行为没有变化：全部改动文件经 `esbuild --minify-whitespace` 与 1.4.0 逐字节相同。
+
+- 类型检查进 CI：仓库根新增 `jsconfig.json`（只检查带 `// @ts-check` 的 86 个文件，`strict` 关），`ci.yml` 新增独立
+  `typecheck` job，用固定版本 `typescript@7.0.2` + `@types/node@22` 经 `npx` 运行，不往 `package.json` 加依赖。
+  78 个现存类型错误修到 0，其中 18 个是拆文件时孤儿化的 JSDoc 块；没有 `@ts-expect-error`。本地命令见
+  `docs/maintenance/source-of-truth.md`。
+- CI 矩阵增加 `macos-latest`（Node 22），darwin 专属的 LaunchAgent 路径首次在 CI 上执行。README 与
+  `docs/worktree/` 写明：支持 macOS 与 Linux；`watch-service` 仅 macOS，其他平台用 `resume-all`；不支持 Windows。
+- `worktree-mgr.test.mjs`（94 用例、单文件 135s）按主题拆成 11 个测试文件，辅助函数移到 `tests/helpers/`；
+  用例内容与标题不变。`npm test` 墙钟由约 150s 降到约 30s，CI 的 Linux job 由约 110s 降到约 90s。
+
 ## 1.4.0 - 2026-09-23
 
 本版改动了 `domains/` 与 `core/` 的内容摘要。升级后，所有在途的 orchestration ledger、loop 与 verify run
