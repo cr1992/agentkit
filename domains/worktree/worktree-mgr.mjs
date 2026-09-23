@@ -147,7 +147,7 @@ function cmdCapabilities(args) {
     JSON.stringify(
       {
         skill: 'manage-worktrees',
-        runtime_version: '1.6.0',
+        runtime_version: '1.7.0',
         contracts: {
           worktree_binding: [1],
           artifact_ref: [1],
@@ -175,6 +175,8 @@ function cmdCapabilities(args) {
           'managed-history-rewrite',
           'stack-parent-attribution',
           'structured-change-registration',
+          'change-request-provider-registry',
+          'github-change-request',
         ],
         content_digest: worktreeSkillDigest(),
       },

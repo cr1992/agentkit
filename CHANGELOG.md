@@ -4,6 +4,31 @@
 
 ## Unreleased
 
+## 1.4.0 - 2026-09-23
+
+本版改动了 `domains/` 与 `core/` 的内容摘要。升级后，所有在途的 orchestration ledger、loop 与 verify run
+会以 `skill_drift` 终止（既有设计）：升级前先收尾在途任务，或升级后用 `ledger close --abandon` 记为放弃。
+
+- 全部 133 个 `.mjs` 用 prettier 3.9.8（`--print-width 120 --single-quote --quote-props preserve`）
+  统一格式化；格式化前后每个文件经 `esbuild --minify-whitespace` 逐字节相同，机器可证只改了格式。
+  新增 `tests/line-width.test.mjs`：任何已跟踪 `.mjs` 的单行不得超过 200 个 Unicode 码点，
+  豁免按「文件 + 内容片段」登记且不得失效。此前 `orchestration-ledger.mjs` 的 `doctor()` 整个函数
+  写在一行 2,645 字符里，无法审 diff、无法按行引用。
+- `manage-worktrees` 的 change-request provider 改为按名分发：`worktree-provider-contract.mjs` 定义
+  适配器接口（`name` / `precheck` / `submit` / `SubmitError`），`worktree-provider-registry.mjs` 按
+  Profile 的 `change_request.provider` 解析；GitLab push-options 逻辑全部收回
+  `worktree-provider-gitlab.mjs`，通用层不再出现平台名。Profile 合法 provider 列表从注册表取。
+- 新增 GitHub change-request 适配器（`provider: github`）：经本机已登录的 `gh` CLI 建 PR，agentkit 不读、
+  不存、不打印任何凭据；`gh` 不存在或未登录时 `submit` 明确拒绝并指引改用 `manual`；
+  push 成功但建 PR 失败不写 trace、不 arm watcher。PR 已建成而 trace 因并发状态变化未写入时，
+  失败文案给出可照抄的 `agentkit worktree watch <selector> --change-ref <PR url>` 恢复命令（平台中立）。
+  `remove_source_branch` 对 GitHub 无效，由仓库 `delete_branch_on_merge` 决定，只打印一次提示。
+  `manage-worktrees` runtime 1.6.0 → 1.7.0。
+- 新增 `examples/quickstart/` 并随包分发：`node "$(npm root -g)/@cr1992/agentkit/examples/quickstart/run.mjs"`
+  在临时仓库里对一个缺陷版和一个修复版各跑完整的 `verify` 流程，输出两份可通过 `verify validate` 的
+  Evidence，并演示冻结 Artifact 拒绝漂移 HEAD（`stale_precondition`）。示例只调用公开 CLI，
+  由 `tests/quickstart-example.test.mjs` 接进 `npm test`。
+
 - `agentkit verify` 在 shallow clone 上明确拒绝并提示 `git fetch --unshallow`。shallow clone 会把 graft 点
   当成 root commit，算出的 repository identity 与完整 clone 不同，此前表现为一条费解的
   `repository identity 已变化`。
