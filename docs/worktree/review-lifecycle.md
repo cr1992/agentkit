@@ -35,7 +35,7 @@ macOS adapter 安装用户级 LaunchAgent，每 60 秒（可用 `--interval-seco
 运行一次 `resume-all`。安装是显式动作，不随 npm install 自动发生，不保存调用会话的环境变量或凭证。
 服务固定安装时的 Node 与 manager script 绝对路径；升级 agentkit 或切换 Node 安装位置后重跑 install，
 `status --json` 的 `program_available` 会检查这两个路径。卸载使用 `watch-service uninstall`。其他平台仍可
-手工运行 `resume-all`，在相应 service adapter 落地前不宣称跨会话保证。
+手工运行 `resume-all`，在相应 service adapter 落地前不宣称跨会话保证。不支持 Windows。
 
 人工 `watch --target` 可改默认目标；已经显式武装的 target 不被静默改写，换目标先 `unwatch`。陈旧
 watcher 不能覆盖并发 rearm 或 `merge_detected`。旧 SHA 合入不代表新 HEAD 已完成。

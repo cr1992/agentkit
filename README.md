@@ -123,6 +123,8 @@ agentkit 自己不审代码；Evidence 里的 `limitations`（如 `l1_not_run`�
 
 ## 环境要求
 
+- macOS 或 Linux。`agentkit worktree watch-service` 只支持 macOS，其他平台用 `agentkit worktree resume-all`
+  手工恢复；不支持 Windows。
 - Git。
 - Node.js 22 或更高版本。
 - 全局可用的 `agentkit` 命令；运行 `agentkit doctor` 可检查包版本、入口与运行时清单。

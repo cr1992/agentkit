@@ -14,6 +14,7 @@ agentkit worktree watch-service install
 
 维护器定期执行有限的 `resume-all`，实际 watcher 仍用 token/event CAS 与 heartbeat 裁决；它不放宽任何
 回收前置条件。`watch-service status` 检查 plist、launchd job 与当前 Node/runtime 路径，`uninstall` 解除。
+`watch-service` 只支持 macOS，其他平台用 `resume-all` 手工恢复；不支持 Windows。
 未安装时只有进程级自动回收，不得称作跨会话保证。change request 已关闭且明确不会合入时用 `unwatch`。
 
 `unwatch` 不只翻 record 状态：写入解除事件后，它按进程组终止该次租约的 watcher，把 worker 与它在途的
