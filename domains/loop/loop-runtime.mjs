@@ -96,11 +96,11 @@ class StrictParser {
     if (char === '[') return this.array();
     if (char === '"') return this.string();
     if (char === '-' || /[0-9]/u.test(char ?? '')) return this.number();
-    for (const [token, value] of [
+    for (const [token, value] of /** @type {[string, unknown][]} */ ([
       ['true', true],
       ['false', false],
       ['null', null],
-    ]) {
+    ])) {
       if (this.text.startsWith(token, this.index)) {
         this.index += token.length;
         return value;
@@ -310,6 +310,11 @@ export function releaseLock(path, owner) {
   return true;
 }
 
+/**
+ * @param {string[]} args
+ * @param {string} cwd
+ * @param {BufferEncoding | 'buffer'} [encoding]
+ */
 function git(args, cwd, encoding = 'utf8') {
   return execFileSync('git', args, { cwd, encoding, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 });
 }
@@ -733,7 +738,7 @@ function executeEmbeddedChecks(snapshot, loopDir) {
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const timedOut = result.error?.code === 'ETIMEDOUT';
+    const timedOut = /** @type {NodeJS.ErrnoException | undefined} */ (result.error)?.code === 'ETIMEDOUT';
     const exitCode = Number.isInteger(result.status) ? result.status : null;
     const log = sanitize(
       [result.stdout, result.stderr, result.error?.message].filter(Boolean).join('\n'),

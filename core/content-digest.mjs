@@ -59,6 +59,7 @@ export function distributionDigest(roots) {
  * @param {{ packageRoot: string, skillRoot: string, domainRoot?: string, docsRoot?: string }} options
  */
 export function skillDistributionRoots({ packageRoot, skillRoot, domainRoot, docsRoot }) {
+  /** @type {{ prefix: string, path: string, entries?: string[] }[]} */
   const roots = [{ prefix: 'skill', path: skillRoot, entries: SKILL_ENTRIES }];
   if (domainRoot) roots.push({ prefix: 'domain', path: domainRoot });
   if (docsRoot) roots.push({ prefix: 'docs', path: docsRoot });

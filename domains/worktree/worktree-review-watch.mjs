@@ -141,6 +141,20 @@ export function createCommands(deps) {
     }).record;
   }
 
+  /**
+   * 进入 ready_for_review 时默认武装合入监听。
+   *
+   * 纪律来源：监听绑定的是「内容进主干」这一事实，与内容经哪个载体（自建 change request、
+   * 聚合 change request、他人代推）无关。靠人在建 change request 时手工挂 watch，一旦中途改成
+   * 由别的载体合入，监听就会漏挂、合入后无人回收——默认武装把这个洞堵死。
+   *
+   * 失败一律 fail-soft：touch 的主职是状态流转，不因为没有 remote / 未推送而失败，
+   * 但必须把未武装的原因说清楚，避免「以为挂上了」。
+   * @param {ReturnType<typeof loadRepositoryProfile>} loaded
+   * @param {Record<string,any>} record
+   * @param {{flags:Map<string,unknown>}} args
+   * @param {{present:boolean,head:string|null,dirty:boolean|null,upstream:string|null}} snapshot
+   */
   function autoArmReviewWatch(loaded, record, args, snapshot) {
     const existing = activeAutoReclaim(record);
     const intent = reviewWatchIntent(loaded, record, args, snapshot);
@@ -230,6 +244,7 @@ export function createCommands(deps) {
     }
   }
 
+  /** @param {string} commonDir @param {Record<string,any>} record @param {string} token @param {string} eventType @param {string} targetSha */
   function appendAutoStatus(commonDir, record, token, eventType, targetSha) {
     return appendWatchedEvent(
       commonDir,
@@ -551,8 +566,6 @@ export function createCommands(deps) {
       throw error;
     }
   }
-
-  /** @param {Record<string,any>} record */
 
   function cmdWatch(args) {
     rejectUnknownFlags(args.flags, ['target', 'interval-ms', 'change-ref', 'notify', 'id', 'config']);

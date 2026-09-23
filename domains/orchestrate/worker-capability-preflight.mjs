@@ -288,7 +288,7 @@ function entry() {
 
 export function runCli(argv = process.argv.slice(2)) {
   try {
-    const result = main(argv);
+    const result = /** @type {Record<string, any>} */ (main(argv));
     process.stdout.write(typeof result?.help === 'string' ? result.help : `${JSON.stringify(result, null, 2)}\n`);
     return 0;
   } catch (error) {

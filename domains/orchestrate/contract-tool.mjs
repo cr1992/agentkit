@@ -50,11 +50,11 @@ class Parser {
     if (char === '[') return this.array();
     if (char === '"') return this.string();
     if (char === '-' || /[0-9]/u.test(char ?? '')) return this.number();
-    for (const [token, value] of [
+    for (const [token, value] of /** @type {[string, unknown][]} */ ([
       ['true', true],
       ['false', false],
       ['null', null],
-    ])
+    ]))
       if (this.text.startsWith(token, this.index)) {
         this.index += token.length;
         return value;

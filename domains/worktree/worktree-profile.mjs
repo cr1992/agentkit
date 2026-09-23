@@ -112,7 +112,7 @@ function gitTry(args, cwd) {
   }
 }
 
-/** @param {unknown} value */
+/** @param {unknown} value @returns {value is Record<string, any>} */
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -740,7 +740,7 @@ export function resolveSpawnPlan(options) {
   };
 }
 
-/** @param {ReturnType<typeof resolveGitContext>} context */
+/** @param {{common_dir:string}} context */
 export function readRepositoryIdentity(context) {
   const identityPath = join(context.common_dir, 'worktree-trace', 'v1', 'repository.json');
   if (!existsSync(identityPath)) return null;
@@ -755,7 +755,7 @@ export function readRepositoryIdentity(context) {
   throw new WorktreeProfileError('REPOSITORY_IDENTITY_INVALID', `repository identity 损坏: ${identityPath}`);
 }
 
-/** @param {ReturnType<typeof resolveGitContext>} context @param {string|null} [proposedId] */
+/** @param {{common_dir:string}} context @param {string|null} [proposedId] */
 export function ensureRepositoryIdentity(context, proposedId = null) {
   const existing = readRepositoryIdentity(context);
   if (existing) return existing;

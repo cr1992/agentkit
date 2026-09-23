@@ -33,6 +33,17 @@
 --dry-run` 文件清单，以及门禁、反装两段的 `agentkit doctor` 输出，连同 commit SHA 与版本号，作为
 Actions 产物存档。
 
+## 类型检查
+
+带 `// @ts-check` 的 `.mjs` 由仓库根的 `jsconfig.json` 统一配置，编辑器与 CI 的 `typecheck` job 共用这一份；
+本地复跑与 CI 同一条命令（固定版本，不在仓库里生成 `node_modules`）：
+
+```bash
+npx --yes -p typescript@7.0.2 -p @types/node@22 -c 'tsc -p jsconfig.json --typeRoots "$(dirname "$(command -v tsc)")/../@types"'
+```
+
+`--typeRoots` 指向同一次 npx 安装的 `@types`，因为 tsc 默认只在仓库的 `node_modules/@types` 里找 `node` 类型。
+
 ## 本机开发安装
 
 需要验证未发布改动时，可从仓库根目录建立本地 CLI 链接：
