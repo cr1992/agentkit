@@ -93,6 +93,10 @@ provenance、runtime 生成的 RFC3339 时间和 `evidence_digest`。
 terminal outcome 仅为：`pass | fail | undecidable | blocked_safety`。operational abort 不生成
 Evidence。日志先脱敏，再按内容摘要持久化；Evidence 只引用日志摘要和相对 ref。
 
+每个 L0 check 结果记 `exit_code`、`timed_out`、`passed`。runtime 在独立进程组内执行 check（见架构 §8.2）：
+`timed_out` 只反映真正超时，超时会回收整个进程组、不留孤儿后台进程；check 正常退出后即便仍有后台进程占着
+stdout / 端口，也按 check 自身退出码判定 `passed` 并回收残留进程，不再误记为超时。
+
 版本化 JSON Schema 位于 [schemas/](../../schemas/)；runtime 仍执行跨字段、Git 和 digest 机械校验，不能只靠
 结构 schema 宣称验证成立。
 

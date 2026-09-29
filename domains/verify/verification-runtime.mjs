@@ -10,7 +10,6 @@ import {
   constants as fsConstants,
   existsSync,
   fsyncSync,
-  linkSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
@@ -28,6 +27,8 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createReflectionKit } from '../../core/reflection.mjs';
+import { createLockKit } from '../../core/lock.mjs';
+import { runBoundedSync } from '../../core/bounded-exec.mjs';
 import { collectJsonSchemaErrors, validateJsonSchema } from '../../core/json-schema-lite.mjs';
 import { atomicWriteJson, atomicWriteText, writeNewJson } from '../../core/atomic-fs.mjs';
 import { createDigestKit } from '../../core/digest.mjs';
@@ -42,8 +43,10 @@ import {
 } from '../../core/contract-substance.mjs';
 import { buildScaffoldContract } from '../../core/contract-scaffold.mjs';
 
-export const RUNTIME_VERSION = '1.4.1';
+export const RUNTIME_VERSION = '1.5.0';
 export const PROTOCOL_VERSION = 1;
+// L0 check 超时后先 SIGTERM 整个进程组，宽限期后再 SIGKILL；见 core/bounded-exec.mjs。
+const CHECK_KILL_GRACE_MS = 2000;
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const FINDING_CLASSES = new Set(['functional', 'scope', 'verification_definition', 'safety']);
 const REVIEW_FINDING_FIELDS = ['contract_item_id', 'class', 'evidence', 'expected', 'actual'];
@@ -220,127 +223,11 @@ function readJson(path) {
 
 /** @param {string} path @param {unknown} value */
 /** @param {string} path @param {string} value */
-/** @param {number} pid */
-function processIsAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return Boolean(error && typeof error === 'object' && error.code === 'EPERM');
-  }
-}
-
-function recoverOrphanReclaim(path) {
-  const reclaimPath = `${path}.reclaim`;
-  if (!existsSync(reclaimPath)) return;
-  let owner;
-  try {
-    owner = parseJsonStrict(readFileSync(reclaimPath, 'utf8'));
-  } catch {
-    throw new ValidationError('run lock reclaim 内容损坏；拒绝自动接管');
-  }
-  if (!Number.isInteger(Number(owner.pid)) || Number(owner.pid) <= 0 || typeof owner.token !== 'string' || !owner.token)
-    throw new ValidationError('run lock reclaim owner 无效；拒绝自动接管');
-  if (processIsAlive(Number(owner.pid))) throw new ValidationError('run lock 正在执行 stale recovery');
-  let latest;
-  try {
-    latest = parseJsonStrict(readFileSync(reclaimPath, 'utf8'));
-  } catch (error) {
-    if (error && typeof error === 'object' && error.code === 'ENOENT') return;
-    throw new ValidationError('run lock reclaim 内容损坏；拒绝自动接管');
-  }
-  if (Number(latest.pid) !== Number(owner.pid) || latest.token !== owner.token) return;
-  try {
-    unlinkSync(reclaimPath);
-  } catch (error) {
-    if (!error || typeof error !== 'object' || error.code !== 'ENOENT') throw error;
-  }
-}
-
-export function acquireLock(path) {
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    recoverOrphanReclaim(path);
-    const owner = { pid: process.pid, token: randomUUID(), acquired_at: new Date().toISOString() };
-    const candidate = `${path}.${owner.pid}.${owner.token}.candidate`;
-    const fd = openSync(candidate, 'wx', 0o600);
-    try {
-      writeFileSync(fd, `${JSON.stringify(owner)}\n`);
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    try {
-      if (existsSync(`${path}.reclaim`)) throw new ValidationError('run lock 正在执行 stale recovery');
-      linkSync(candidate, path);
-      unlinkSync(candidate);
-      return owner;
-    } catch (error) {
-      try {
-        unlinkSync(candidate);
-      } catch {}
-      if (error instanceof ValidationError) throw error;
-      if (!error || typeof error !== 'object' || error.code !== 'EEXIST') throw error;
-      let current;
-      try {
-        current = parseJsonStrict(readFileSync(path, 'utf8'));
-      } catch {
-        throw new ValidationError('run lock 内容损坏；拒绝自动接管');
-      }
-      if (!Number.isInteger(Number(current.pid)) || Number(current.pid) <= 0)
-        throw new ValidationError('run lock owner 无效；拒绝自动接管');
-      if (processIsAlive(Number(current.pid))) throw new ValidationError(`run lock 正被 PID ${current.pid} 持有`);
-      const reclaimPath = `${path}.reclaim`;
-      const reclaimOwner = { pid: process.pid, token: randomUUID(), acquired_at: new Date().toISOString() };
-      const reclaimCandidate = `${reclaimPath}.${reclaimOwner.pid}.${reclaimOwner.token}.candidate`;
-      const reclaimFd = openSync(reclaimCandidate, 'wx', 0o600);
-      try {
-        writeFileSync(reclaimFd, `${JSON.stringify(reclaimOwner)}\n`);
-        fsyncSync(reclaimFd);
-      } finally {
-        closeSync(reclaimFd);
-      }
-      try {
-        linkSync(reclaimCandidate, reclaimPath);
-      } catch (reclaimError) {
-        if (!reclaimError || typeof reclaimError !== 'object' || reclaimError.code !== 'EEXIST') throw reclaimError;
-        throw new ValidationError('run lock 正在执行 stale recovery');
-      } finally {
-        try {
-          unlinkSync(reclaimCandidate);
-        } catch {}
-      }
-      try {
-        let latest;
-        try {
-          latest = parseJsonStrict(readFileSync(path, 'utf8'));
-        } catch (latestError) {
-          if (latestError && typeof latestError === 'object' && latestError.code === 'ENOENT') continue;
-          throw new ValidationError('run lock 内容损坏；拒绝自动接管');
-        }
-        if (Number(latest.pid) !== Number(current.pid) || latest.token !== current.token) continue;
-        if (processIsAlive(Number(latest.pid))) throw new ValidationError(`run lock 正被 PID ${latest.pid} 持有`);
-        unlinkSync(path);
-      } finally {
-        releaseLock(reclaimPath, reclaimOwner);
-      }
-    }
-  }
-  throw new ValidationError('无法获取 run lock');
-}
-
-export function releaseLock(path, owner) {
-  let current;
-  try {
-    current = parseJsonStrict(readFileSync(path, 'utf8'));
-  } catch (error) {
-    if (error && typeof error === 'object' && error.code === 'ENOENT') return false;
-    throw new ValidationError('run lock 在持有期间损坏；拒绝删除未知 owner 的 lock');
-  }
-  if (current.pid !== owner.pid || current.token !== owner.token) return false;
-  unlinkSync(path);
-  return true;
-}
+// 进程级 run lock 原语统一来自 core/lock.mjs；注入本域的 ValidationError、中文 label 与 readJson，
+// 使算法与原实现逐步等价（candidate 硬链接 + .reclaim 两阶段接管 + 4 次重试 + token 校验）。
+const lockKit = createLockKit({ ErrorClass: ValidationError, label: 'run lock', readJson });
+export const acquireLock = lockKit.acquireLock;
+export const releaseLock = lockKit.releaseLock;
 
 /** @param {string} root */
 /** @param {string} [root] */
@@ -738,14 +625,12 @@ function executeChecks(snapshot, stage, runDir) {
     verifyArgvFiles(snapshot, check);
     const cwd = resolve(snapshot.workdir, check.cwd_rel);
     if (!pathInside(cwd, snapshot.workdir)) throw new ValidationError(`${check.check_id} cwd_rel 越出 workdir`);
-    const result = spawnSync(executable, check.argv.slice(1), {
+    const result = runBoundedSync(executable, check.argv.slice(1), {
       cwd,
       env: environment,
-      encoding: 'utf8',
-      timeout: check.timeout_ms,
+      timeoutMs: check.timeout_ms,
       maxBuffer: Math.max(profile.runtime.max_log_bytes * 4, 1024 * 1024),
-      shell: false,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      killGraceMs: CHECK_KILL_GRACE_MS,
     });
     const timedOut = /** @type {NodeJS.ErrnoException | undefined} */ (result.error)?.code === 'ETIMEDOUT';
     const exitCode = Number.isInteger(result.status) ? result.status : null;
@@ -843,13 +728,7 @@ function persistTransition(runDir, snapshot, kind) {
 
 /** @param {string} runDir @param {() => any} callback */
 function withLock(runDir, callback) {
-  const path = join(runDir, '.lock');
-  const owner = acquireLock(path);
-  try {
-    return callback();
-  } finally {
-    releaseLock(path, owner);
-  }
+  return lockKit.withLock(join(runDir, '.lock'), callback);
 }
 
 /** @param {string} runDir @param {number|null} expectedRevision @param {(snapshot:Record<string,any>)=>{snapshot:Record<string,any>,kind:string}} callback */

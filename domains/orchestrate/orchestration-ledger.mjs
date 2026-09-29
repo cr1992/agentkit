@@ -7,7 +7,6 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
-  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -47,6 +46,7 @@ import {
   resolveGitCommonDir,
 } from '../../core/ledger-pointer.mjs';
 import { createReflectionKit } from '../../core/reflection.mjs';
+import { createLockKit } from '../../core/lock.mjs';
 import { substanceWarnings } from '../../core/contract-substance.mjs';
 
 const { buildProposal, buildReflection } = createReflectionKit({ strict: true });
@@ -127,130 +127,12 @@ function atomicJson(path, value) {
 function writeNew(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
 }
-function alive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return Boolean(error?.code === 'EPERM');
-  }
-}
-function recoverReclaim(path) {
-  const reclaimPath = `${path}.reclaim`;
-  if (!existsSync(reclaimPath)) return;
-  let owner;
-  try {
-    owner = readJson(reclaimPath);
-  } catch {
-    throw new LedgerError('ledger reclaim lock malformed；拒绝自动接管');
-  }
-  if (!Number.isInteger(Number(owner.pid)) || Number(owner.pid) <= 0 || typeof owner.token !== 'string' || !owner.token)
-    throw new LedgerError('ledger reclaim owner 无效；拒绝自动接管');
-  if (alive(Number(owner.pid))) throw new LedgerError('ledger lock stale recovery in progress');
-  let latest;
-  try {
-    latest = readJson(reclaimPath);
-  } catch (error) {
-    if (error?.code === 'ENOENT') return;
-    throw new LedgerError('ledger reclaim lock malformed；拒绝自动接管');
-  }
-  if (Number(latest.pid) !== Number(owner.pid) || latest.token !== owner.token) return;
-  try {
-    unlinkSync(reclaimPath);
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error;
-  }
-}
-function lock(path) {
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    recoverReclaim(path);
-    const owner = { pid: process.pid, token: randomUUID(), acquired_at: new Date().toISOString() };
-    const candidate = `${path}.${owner.pid}.${owner.token}.candidate`;
-    const fd = openSync(candidate, 'wx', 0o600);
-    try {
-      writeFileSync(fd, `${JSON.stringify(owner)}\n`);
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    try {
-      if (existsSync(`${path}.reclaim`)) throw new LedgerError('ledger lock stale recovery in progress');
-      linkSync(candidate, path);
-      unlinkSync(candidate);
-      return owner;
-    } catch (error) {
-      try {
-        unlinkSync(candidate);
-      } catch {}
-      if (error instanceof LedgerError) throw error;
-      if (error?.code !== 'EEXIST') throw error;
-      let current;
-      try {
-        current = readJson(path);
-      } catch {
-        throw new LedgerError('ledger lock malformed；拒绝自动接管');
-      }
-      if (!Number.isInteger(Number(current.pid)) || Number(current.pid) <= 0)
-        throw new LedgerError('ledger lock owner 无效；拒绝自动接管');
-      if (alive(Number(current.pid))) throw new LedgerError(`ledger lock held by ${current.pid}`);
-      const reclaimPath = `${path}.reclaim`;
-      const reclaimOwner = { pid: process.pid, token: randomUUID(), acquired_at: new Date().toISOString() };
-      const reclaimCandidate = `${reclaimPath}.${reclaimOwner.pid}.${reclaimOwner.token}.candidate`;
-      const reclaimFd = openSync(reclaimCandidate, 'wx', 0o600);
-      try {
-        writeFileSync(reclaimFd, `${JSON.stringify(reclaimOwner)}\n`);
-        fsyncSync(reclaimFd);
-      } finally {
-        closeSync(reclaimFd);
-      }
-      try {
-        linkSync(reclaimCandidate, reclaimPath);
-      } catch (reclaimError) {
-        if (reclaimError?.code !== 'EEXIST') throw reclaimError;
-        throw new LedgerError('ledger lock stale recovery in progress');
-      } finally {
-        try {
-          unlinkSync(reclaimCandidate);
-        } catch {}
-      }
-      try {
-        let latest;
-        try {
-          latest = readJson(path);
-        } catch (latestError) {
-          if (latestError?.code === 'ENOENT') continue;
-          throw new LedgerError('ledger lock malformed；拒绝自动接管');
-        }
-        if (Number(latest.pid) !== Number(current.pid) || latest.token !== current.token) continue;
-        if (alive(Number(latest.pid))) throw new LedgerError(`ledger lock held by ${latest.pid}`);
-        unlinkSync(path);
-      } finally {
-        release(reclaimPath, reclaimOwner);
-      }
-    }
-  }
-  throw new LedgerError('无法获取 ledger lock');
-}
-function release(path, owner) {
-  let current;
-  try {
-    current = readJson(path);
-  } catch (error) {
-    if (error?.code === 'ENOENT') return false;
-    throw new LedgerError('ledger lock 在持有期间损坏；拒绝删除未知 owner 的 lock');
-  }
-  if (current.pid !== owner.pid || current.token !== owner.token) return false;
-  unlinkSync(path);
-  return true;
-}
+// 进程级 ledger lock 原语统一来自 core/lock.mjs；注入本域的 LedgerError、中文 label 与 readJson。
+// 报错文案由原来的中英混杂统一为中文并带 label；算法与原实现逐步等价（candidate 硬链接 + .reclaim
+// 两阶段接管 + 4 次重试 + token 校验），readJson 保持对损坏 / 重复 key 锁文件的处理不变。
+const lockKit = createLockKit({ ErrorClass: LedgerError, label: 'ledger lock', readJson });
 function withLock(dir, callback) {
-  const path = join(dir, '.lock');
-  const owner = lock(path);
-  try {
-    return callback();
-  } finally {
-    release(path, owner);
-  }
+  return lockKit.withLock(join(dir, '.lock'), callback);
 }
 function future(path) {
   let cursor = resolve(path);
