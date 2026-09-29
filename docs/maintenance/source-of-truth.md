@@ -33,6 +33,10 @@
 --dry-run` 文件清单，以及门禁、反装两段的 `agentkit doctor` 输出，连同 commit SHA 与版本号，作为
 Actions 产物存档。
 
+npm 发布成功、但反装或打 tag 阶段失败时（例如 registry 传播超过等待窗口），不要重新触发整个 workflow：
+同一版本不能再次 `npm publish`。确认 `npm view @cr1992/agentkit@<版本>` 可见后，对原 run 执行
+`gh run rerun <run-id> --failed`，只重跑失败的反装与其后的 tag / Release。
+
 ## 类型检查
 
 带 `// @ts-check` 的 `.mjs` 由仓库根的 `jsconfig.json` 统一配置，编辑器与 CI 的 `typecheck` job 共用这一份；

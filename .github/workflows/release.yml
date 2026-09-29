@@ -139,16 +139,22 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       # AGENTS.md：「发布物必须能从 registry 反装并通过 agentkit doctor」，Node 22/24 双版本矩阵反装；
-      # registry 有传播延迟，反装前先等该精确版本可见。
+      # registry 有传播延迟，反装前先等该精确版本可见。1.6.1 实测发布后约 5 分 10 秒才可见，
+      # 原先 5 分钟窗口刚好错过；放宽到 15 分钟，超时显式报错而不是落到 npm i 的 ETARGET。
       - name: 等待版本可见并反装
         env:
           VERSION: ${{ inputs.version }}
         run: |
           set -e
-          for i in $(seq 1 30); do
-            npm view "@cr1992/agentkit@$VERSION" version >/dev/null 2>&1 && break
-            echo "等待 registry 可见 ($i/30)"; sleep 10
+          visible=0
+          for i in $(seq 1 60); do
+            if npm view "@cr1992/agentkit@$VERSION" version >/dev/null 2>&1; then visible=1; break; fi
+            echo "等待 registry 可见 ($i/60)"; sleep 15
           done
+          if [ "$visible" -ne 1 ]; then
+            echo "::error::@cr1992/agentkit@$VERSION 发布后 15 分钟 registry 仍不可见；确认可见后对本 run 执行 gh run rerun --failed。"
+            exit 1
+          fi
           npm i -g "@cr1992/agentkit@$VERSION"
 
       # 反装后的 doctor 输出存档为发布证据，同时核对反装到的版本号。
