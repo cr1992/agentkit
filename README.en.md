@@ -47,9 +47,15 @@ agentkit worktree watch-service install
 agentkit worktree watch-service status
 ```
 
-The npm install does not create a persistent service. The service pins the Node and agentkit paths present at install
-time; rerun `watch-service install` after moving either installation, and inspect `program_available` in
-`status --json`. Other platforms currently use `agentkit worktree resume-all` for manual recovery.
+The npm install does not create a persistent service. `install` pins a more stable Node path (the PATH `node`
+symlink when it resolves to the running runtime and differs from `process.execPath`, otherwise `process.execPath`)
+together with the agentkit entry. Rerun `watch-service install` after upgrading agentkit or moving Node: `status`
+reads the paths actually pinned in the installed plist (`installed_node_path` / `installed_manager_script`), and
+`program_available` reflects whether both still exist (`null` when nothing is installed). It reports `stale` with a
+`stale_reason` when the pinned Node or entry is gone, or the plist is missing while the job stays loaded, and non-JSON
+output prints a copy-paste `agentkit worktree watch-service install`. A pinned entry that differs from the one being
+run is only reported in `manager_script_matches_current` and does not count as stale.
+Other platforms currently use `agentkit worktree resume-all` for manual recovery.
 
 ### Skills
 

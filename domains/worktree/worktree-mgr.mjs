@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // ledger id 的格式规则下沉在 core/：worktree 域只做格式校验，不 import orchestrate 域。
@@ -85,11 +85,13 @@ const dependencies = {
   dirname,
   join,
   resolve,
+  delimiter,
   fileURLToPath,
   managerScript,
   processPlatform: process.platform,
   processExecPath: process.execPath,
   processGetuid: () => (typeof process.getuid === 'function' ? process.getuid() : 0),
+  processEnv: process.env,
   LEDGER_ID_PATTERN,
   isLedgerId,
   ...mergePreview,
@@ -147,7 +149,7 @@ function cmdCapabilities(args) {
     JSON.stringify(
       {
         skill: 'manage-worktrees',
-        runtime_version: '1.7.1',
+        runtime_version: '1.7.2',
         contracts: {
           worktree_binding: [1],
           artifact_ref: [1],

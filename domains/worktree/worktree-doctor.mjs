@@ -709,7 +709,7 @@ export function createCommands(deps) {
     );
     if (expectsDurableWatch) {
       const service = watchServiceStatus(loaded);
-      if (service.supported && (!service.installed || !service.loaded || !service.program_available)) {
+      if (service.supported && (!service.installed || !service.loaded || !service.program_available || service.stale)) {
         findings.push({
           code: 'AUTO_RECLAIM_SERVICE_INACTIVE',
           severity: 'warning',
