@@ -4,6 +4,24 @@
 
 ## Unreleased
 
+## 1.6.1 - 2026-09-29
+
+本版改动了 `core/` 与 `domains/` 的内容摘要，在途的 ledger、loop 与 verify run 会以 `skill_drift` 终止（既有设计）。
+已安装的 watch-service 建议执行一次 `agentkit worktree watch-service install`，改钉更稳定的 node 路径。
+
+- 修复 `watch-service status` 看不出服务已失效：此前 `program_available` 检查的是当前进程的 node 路径，而不是
+  服务里钉住的路径。Homebrew 升级 node 删掉旧 Cellar 目录后，LaunchAgent 已经 spawn failed，`status` 仍报
+  `program_available: true`。现在 `status` 读已安装 plist 的 `ProgramArguments`，新增 `installed_node_path`、
+  `installed_manager_script`、`manager_script_matches_current`、`stale`、`stale_reason`；`program_available`
+  表示钉住的两条路径都存在（无安装时为 `null`）。stale 时非 JSON 输出给出可照抄的修复命令，`worktree doctor`
+  的 `AUTO_RECLAIM_SERVICE_INACTIVE` 也会报出。
+- `watch-service install` 在 PATH 里的 `node` 与当前运行时是同一文件时钉 PATH 路径（如 `/opt/homebrew/bin/node`），
+  node 小版本升级后服务不再失效。`manage-worktrees` runtime 1.7.1 → 1.7.2。
+- `core/lock.mjs` 的 owner 记录 `hostname`：state root 跨主机共享时，其他主机持有的锁一律拒绝自动接管，报错给出
+  对方主机、PID 与锁文件路径；旧版本写下的无 hostname 锁仍按本机 PID 判定。verify 1.5.0 → 1.5.1，
+  loop 1.2.0 → 1.2.1，orchestrate 1.8.1 → 1.8.2。
+- CI 的 `actions/checkout`、`actions/setup-node`、`actions/upload-artifact` 升到 v7（dependabot #74，仍钉 SHA）。
+
 ## 1.6.0 - 2026-09-29
 
 本版改动了 `core/` 与 `domains/` 的内容摘要。升级后在途的 orchestration ledger、loop 与 verify run 会以 `skill_drift`
