@@ -44,6 +44,18 @@ npx --yes -p typescript@7.0.2 -p @types/node@22 -c 'tsc -p jsconfig.json --typeR
 
 `--typeRoots` 指向同一次 npx 安装的 `@types`，因为 tsc 默认只在仓库的 `node_modules/@types` 里找 `node` 类型。
 
+## 覆盖率门槛
+
+`npm run coverage` 用 Node 内置覆盖率（`--experimental-test-coverage`）跑 `tests/` 与 `domains/` 的用例，只统计运行时
+代码（排除测试、`evals/`、`examples/`、`scripts/`），行、分支、函数任一低于 `package.json` 里 `coverage` 脚本的门槛即
+非零退出。CI 的 `coverage` job 在 Node.js 24 上执行同一条命令。门槛只升不降：补测试后按实测值下调 1 个百分点左右
+重设，给不同 Node 版本的统计差异留余量。
+
+## CI 依赖
+
+workflow 里的第三方 action 一律钉到 commit SHA，行尾注释对应的版本 tag；`.github/dependabot.yml` 每周为
+`github-actions` 提更新 PR。升级时同时改 SHA 与注释，不回退到浮动 tag。
+
 ## 本机开发安装
 
 需要验证未发布改动时，可从仓库根目录建立本地 CLI 链接：

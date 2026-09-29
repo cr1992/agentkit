@@ -57,11 +57,13 @@ export function parseGithubPullRequestUrl(output) {
  * @returns {string|null}
  */
 function precheck(ctx) {
-  const probe = ctx.runFileCapture('gh', ['--version']);
+  // 两次探测都走只读探测超时：`gh auth status` 会访问网络，不设上限时网络卡住会让 submit 无限期挂起。
+  const probeOptions = { cwd: ctx.cwd, timeoutMs: ctx.fetchTimeoutMs };
+  const probe = ctx.runFileCapture('gh', ['--version'], probeOptions);
   if (!probe.ok) {
     return '未找到 gh CLI；可改用 provider=manual，手工建 PR 后运行 `worktree watch <selector> --change-ref <url>` 登记。';
   }
-  const auth = ctx.runFileCapture('gh', ['auth', 'status']);
+  const auth = ctx.runFileCapture('gh', ['auth', 'status'], probeOptions);
   if (!auth.ok) {
     return 'gh 未登录（gh auth status 退出码非 0）；请先 `gh auth login`，或改用 provider=manual 手工建 PR 后 `worktree watch <selector> --change-ref <url>`。';
   }

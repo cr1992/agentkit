@@ -16,8 +16,8 @@ const HEAD = 'a'.repeat(40);
 /** @param {{handler:(call:{command:string,args:string[]})=>any, description?:string|null, removeSourceBranch?:boolean}} options */
 function makeCtx(options) {
   const calls = [];
-  function record(command, args) {
-    calls.push({ command, args });
+  function record(command, args, callOptions) {
+    calls.push({ command, args, options: callOptions });
     const reply = options.handler({ command, args }) ?? {};
     return { ok: true, status: 0, out: '', stdout: '', stderr: '', error: null, ...reply };
   }
@@ -32,8 +32,8 @@ function makeCtx(options) {
     cwd: '/fake/wt',
     fetchTimeoutMs: 5000,
     submitPushTimeoutMs: 5000,
-    gitTry: (args) => record('git', args),
-    runFileCapture: (command, args) => record(command, args),
+    gitTry: (args, _cwd, callOptions) => record('git', args, callOptions),
+    runFileCapture: (command, args, callOptions) => record(command, args, callOptions),
   };
   return { ctx, calls };
 }
@@ -194,4 +194,12 @@ test('GitHub adapter：provider 名与 SubmitError 契约稳定', () => {
   const error = new githubChangeRequestProvider.SubmitError('GITHUB_X', 'boom');
   assert.equal(error.code, 'GITHUB_X');
   assert.equal(error instanceof GithubSubmitError, true);
+});
+
+test('GitHub adapter：precheck 的 gh --version 与 gh auth status 都带只读探测超时，网络卡住时不会无限挂起', () => {
+  const { ctx, calls } = makeCtx({ handler: () => ({ ok: true }) });
+
+  assert.equal(githubChangeRequestProvider.precheck(ctx), null);
+  assert.deepEqual(stepKeys(calls), ['gh --version', 'gh auth']);
+  for (const call of calls) assert.equal(call.options?.timeoutMs, ctx.fetchTimeoutMs, `${call.command} ${call.args[0]}`);
 });

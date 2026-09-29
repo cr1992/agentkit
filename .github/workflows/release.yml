@@ -28,8 +28,8 @@ jobs:
       matrix:
         node: [22, 24]
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: ${{ matrix.node }}
           registry-url: https://registry.npmjs.org
@@ -101,7 +101,7 @@ jobs:
 
       - name: 上传门禁发布证据
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: release-evidence-verify-node${{ matrix.node }}
           path: |
@@ -116,8 +116,8 @@ jobs:
       contents: read
       id-token: write        # trusted publisher 的 OIDC 换取发布凭据，provenance 证明也靠它
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
@@ -135,7 +135,7 @@ jobs:
       matrix:
         node: [22, 24]
     steps:
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: ${{ matrix.node }}
       # AGENTS.md：「发布物必须能从 registry 反装并通过 agentkit doctor」，Node 22/24 双版本矩阵反装；
@@ -174,7 +174,7 @@ jobs:
 
       - name: 上传反装发布证据
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: release-evidence-attest-node${{ matrix.node }}
           path: attest-doctor-node${{ matrix.node }}.txt
@@ -186,7 +186,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
 

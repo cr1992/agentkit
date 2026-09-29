@@ -1,0 +1,11 @@
+# 只跟踪 GitHub Actions：workflow 里的 action 钉在 commit SHA，由 dependabot 按周提更新 PR。
+# npm 生态不配置：运行时零依赖，package.json 没有 dependencies/devDependencies。
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']

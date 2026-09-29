@@ -1,3 +1,4 @@
+// @ts-check
 // canonical JSON 与 envelope 摘要。
 //
 // 三个 Skill 此前各带一份实现，行为并不完全相同：
