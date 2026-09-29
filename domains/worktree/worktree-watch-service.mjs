@@ -66,6 +66,55 @@ export function parseServiceInterval(raw) {
 }
 
 /**
+ * 选出要钉进 LaunchAgent 的 node 路径。纯函数：realpath 与 PATH 探测都由调用方注入以便单测。
+ *
+ * 规则：仅当 PATH 中第一个 `node` 与 process.execPath 指向同一真实文件（realpath 相等），且该 PATH
+ * 路径本身不同于 execPath 时，才钉这个更稳定的 PATH 软链（典型 /opt/homebrew/bin/node →
+ * /opt/homebrew/Cellar/node/<ver>/bin/node；node 升级后 Cellar 版本目录会被删，直接钉 execPath 会
+ * spawn failed）；其余一律回退 execPath。realpath 抛错时同样 fail closed 回退 execPath。
+ * @param {{execPath:string, pathNode:(string|null|undefined), realpath:(path:string)=>string}} input
+ */
+export function selectPinnedNodePath({ execPath, pathNode, realpath }) {
+  if (!pathNode || pathNode === execPath) return execPath;
+  try {
+    if (realpath(pathNode) === realpath(execPath)) return pathNode;
+  } catch {
+    return execPath;
+  }
+  return execPath;
+}
+
+/**
+ * 找 PATH 中第一个存在的 `node` 可执行文件路径；找不到返回 null。依赖注入以便单测。
+ * @param {{pathEnv:(string|null|undefined), delimiter:string, join:(...parts:string[])=>string, existsSync:(path:string)=>boolean}} input
+ */
+export function resolveFirstPathNode({ pathEnv, delimiter, join, existsSync }) {
+  if (!pathEnv) return null;
+  for (const dir of pathEnv.split(delimiter)) {
+    if (!dir) continue;
+    const candidate = join(dir, 'node');
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * 从 `launchctl print` 输出的 `arguments = { ... }` 块解析 ProgramArguments；解析不到返回 null。
+ * 仅在已安装 plist 缺失、无法用 plutil 解析时作兜底。
+ * @param {string} text
+ */
+export function parseLaunchctlProgramArguments(text) {
+  if (!text) return null;
+  const block = text.match(/arguments\s*=\s*\{([\s\S]*?)\}/u);
+  if (!block) return null;
+  const args = block[1]
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return args.length ? args : null;
+}
+
+/**
  * @param {Record<string,any>} deps
  */
 export function createCommands(deps) {
@@ -81,6 +130,9 @@ export function createCommands(deps) {
     renameSync,
     rmSync,
     writeFileSync,
+    realpathSync,
+    processEnv,
+    delimiter,
     dirname,
     join,
     managerScript,
@@ -114,6 +166,41 @@ export function createCommands(deps) {
     };
   }
 
+  /** 本次 install 会钉的 node 路径：优先 PATH 稳定软链，否则回退 execPath。 */
+  function resolvePinnedNodePath() {
+    const pathNode = resolveFirstPathNode({ pathEnv: processEnv?.PATH ?? '', delimiter, join, existsSync });
+    return selectPinnedNodePath({ execPath: processExecPath, pathNode, realpath: realpathSync });
+  }
+
+  /**
+   * 读出已安装服务真正钉住的 ProgramArguments：优先用 plutil 解析 plist；plist 缺失（或解析失败）
+   * 再退到 launchctl print 的 arguments 块；两者都不成立返回 null。
+   * @param {{plist_path:string, service_target:string, working_directory:string}} value
+   * @param {boolean} installed
+   * @param {{ok:boolean, out:string}} probe
+   */
+  function readInstalledProgramArguments(value, installed, probe) {
+    if (installed) {
+      const converted = runFileCapture('/usr/bin/plutil', ['-convert', 'json', '-o', '-', value.plist_path], {
+        cwd: value.working_directory,
+      });
+      if (converted.ok) {
+        try {
+          const parsed = JSON.parse(converted.stdout || converted.out || '');
+          if (Array.isArray(parsed?.ProgramArguments) && parsed.ProgramArguments.length)
+            return parsed.ProgramArguments.map((entry) => String(entry));
+        } catch {
+          // plutil 输出不可解析 → 落到 launchctl print 兜底。
+        }
+      }
+    }
+    if (probe.ok) {
+      const parsed = parseLaunchctlProgramArguments(probe.out);
+      if (parsed) return parsed;
+    }
+    return null;
+  }
+
   /** @param {ReturnType<typeof loadRepositoryProfile>} loaded */
   function watchServiceStatus(loaded) {
     if (processPlatform !== 'darwin') {
@@ -136,20 +223,53 @@ export function createCommands(deps) {
       };
     }
     const probe = runFileCapture('/bin/launchctl', ['print', value.service_target], {
-      cwd: loaded.context.primary_worktree,
+      cwd: value.working_directory,
     });
+    const installed = existsSync(value.plist_path);
+    const jobLoaded = probe.ok;
+    // 关键修复：program_available / stale 判定已安装服务里真正钉住的路径，而不是当前进程的 execPath。
+    const installedArgs = readInstalledProgramArguments(value, installed, probe);
+    const installedNodePath = installedArgs ? (installedArgs[0] ?? null) : null;
+    const installedManagerScript = installedArgs ? (installedArgs[1] ?? null) : null;
+    // 无任何安装（plist 与 job 都不在）时为 null；否则钉住的 node 与 manager 都在场才为 true。
+    let programAvailable = null;
+    if (installed || jobLoaded) {
+      programAvailable = Boolean(
+        installedNodePath &&
+          installedManagerScript &&
+          existsSync(installedNodePath) &&
+          existsSync(installedManagerScript),
+      );
+    }
+    const reasons = [];
+    if (installed || jobLoaded) {
+      if (!installed && jobLoaded) reasons.push('plist_missing_but_loaded');
+      if (installedNodePath && !existsSync(installedNodePath)) reasons.push('pinned_node_missing');
+      if (installedManagerScript && !existsSync(installedManagerScript)) reasons.push('pinned_manager_missing');
+      if (installed && (!installedNodePath || !installedManagerScript)) reasons.push('program_arguments_unreadable');
+    }
+    // 钉的入口与本次调用的入口不同（例如从开发 checkout 运行、服务钉的是全局包）只是提示：
+    // 两条路径都在时服务照常可用，不算 stale，也不让 doctor 报服务失效。
+    const managerScriptMatchesCurrent = installedManagerScript ? installedManagerScript === managerScript : null;
     return {
       supported: true,
-      installed: existsSync(value.plist_path),
-      loaded: probe.ok,
+      installed,
+      loaded: jobLoaded,
       platform: processPlatform,
       label: value.label,
       plist_path: value.plist_path,
       log_path: value.log_path,
-      node_path: processExecPath,
+      // node_path / manager_script 表示「本次 install 会钉的路径」，供与 installed_* 对照。
+      node_path: resolvePinnedNodePath(),
       manager_script: managerScript,
-      program_available: existsSync(processExecPath) && existsSync(managerScript),
-      reason: probe.ok ? null : probe.out || 'launchd job not loaded',
+      // installed_* 是已安装服务里真正钉住的路径（可能指向已被删除的旧 Node/旧包）。
+      installed_node_path: installedNodePath,
+      installed_manager_script: installedManagerScript,
+      manager_script_matches_current: managerScriptMatchesCurrent,
+      program_available: programAvailable,
+      stale: reasons.length > 0,
+      stale_reason: reasons.length ? reasons.join(', ') : null,
+      reason: jobLoaded ? null : probe.out || 'launchd job not loaded',
     };
   }
 
@@ -158,9 +278,10 @@ export function createCommands(deps) {
     if (processPlatform !== 'darwin')
       die(`watch-service install 当前只支持 macOS；${processPlatform} 可继续手工运行 resume-all。`, 2);
     const value = descriptor(loaded, true);
+    const nodePath = resolvePinnedNodePath();
     const plist = renderLaunchAgentPlist({
       label: value.label,
-      nodePath: processExecPath,
+      nodePath,
       managerScript,
       workingDirectory: value.working_directory,
       intervalSeconds,
@@ -254,12 +375,20 @@ export function createCommands(deps) {
     }
     if (args.flags.get('json')) console.log(JSON.stringify(result, null, 2));
     else if (action === 'install')
-      log(`跨会话 watch-service 已安装 label=${result.label} interval=${result.interval_seconds}s`);
-    else if (action === 'uninstall') log(`跨会话 watch-service ${result.removed ? '已卸载' : '原本未安装'}`);
-    else
       log(
-        `watch-service supported=${result.supported} installed=${result.installed} loaded=${result.loaded}${result.reason ? ` reason=${result.reason}` : ''}`,
+        `跨会话 watch-service 已安装 label=${result.label} interval=${result.interval_seconds}s node=${result.node_path}`,
       );
+    else if (action === 'uninstall') log(`跨会话 watch-service ${result.removed ? '已卸载' : '原本未安装'}`);
+    else {
+      const parts = [`supported=${result.supported}`, `installed=${result.installed}`, `loaded=${result.loaded}`];
+      if (result.supported && 'program_available' in result) {
+        parts.push(`program_available=${result.program_available}`, `stale=${Boolean(result.stale)}`);
+        if (result.stale_reason) parts.push(`stale_reason=${result.stale_reason}`);
+      }
+      if (result.reason) parts.push(`reason=${result.reason}`);
+      log(`watch-service ${parts.join(' ')}`);
+      if (result.stale) log('修复（照抄即可）：agentkit worktree watch-service install');
+    }
   }
 
   return { cmdWatchService, watchServiceStatus };

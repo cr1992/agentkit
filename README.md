@@ -44,8 +44,13 @@ agentkit worktree watch-service install
 agentkit worktree watch-service status
 ```
 
-它不会随 npm install 自动常驻。服务固定安装时的 Node 与 agentkit 路径；升级 agentkit、切换 Node
-安装位置后应重新执行 `watch-service install`，`status --json` 的 `program_available` 可检查原路径。
+它不会随 npm install 自动常驻。install 会尽量钉更稳定的 Node 路径（当 PATH 里的 `node` 软链解析到当前
+运行时、且该软链不同于 `process.execPath` 时钉这个软链，否则钉 `process.execPath`），并把 agentkit 入口
+一并固定。升级 agentkit、切换 Node 安装位置后应重新执行 `watch-service install`：`status` 会直接读已安装
+plist 里真正钉住的 `installed_node_path` / `installed_manager_script`，`program_available` 表示这两条路径
+当前是否都还在（无安装时为 `null`）；钉的 Node 或入口被删、plist 丢失但 job 仍 loaded 时报 `stale` 与
+`stale_reason`，非 JSON 输出还会打印一行可照抄的 `agentkit worktree watch-service install`。钉的入口与本次
+调用的入口不同只记在 `manager_script_matches_current`，不算失效。
 其他平台当前使用 `agentkit worktree resume-all` 手工恢复。
 
 ### Skill
