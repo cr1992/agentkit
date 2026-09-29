@@ -37,7 +37,7 @@ import {
   substanceWarnings,
 } from '../../core/contract-substance.mjs';
 
-export const RUNTIME_VERSION = '1.2.0';
+export const RUNTIME_VERSION = '1.2.1';
 // L0 check 超时后先 SIGTERM 整个进程组，宽限期后再 SIGKILL；见 core/bounded-exec.mjs。
 const CHECK_KILL_GRACE_MS = 2000;
 const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'run-agent-verify-loop');

@@ -43,7 +43,7 @@ import {
 } from '../../core/contract-substance.mjs';
 import { buildScaffoldContract } from '../../core/contract-scaffold.mjs';
 
-export const RUNTIME_VERSION = '1.5.0';
+export const RUNTIME_VERSION = '1.5.1';
 export const PROTOCOL_VERSION = 1;
 // L0 check 超时后先 SIGTERM 整个进程组，宽限期后再 SIGKILL；见 core/bounded-exec.mjs。
 const CHECK_KILL_GRACE_MS = 2000;
