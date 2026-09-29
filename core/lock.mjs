@@ -4,6 +4,8 @@
 // 报错文案与 JSON 解析函数不同的实现，这里抽成一份注入式工厂。算法逐步等价于原三份：
 //   - candidate 文件先 openSync('wx')+fsync，再 linkSync 到目标路径做原子占用；
 //   - 目标已存在时读取当前 owner：owner 无效或存活 → fail closed；owner 已死 → 走 .reclaim 两阶段接管；
+//   - owner 记录 hostname：跨主机共享 state root 时，owner.hostname 与本机不同则一律 fail closed，不按
+//     pid 判活、不做基于时长的自动接管（无法验证异机进程存活）；缺 hostname 的旧锁按本机 pid 判定，保持兼容；
 //   - .reclaim 自身也用 candidate+link 抢占，接管完成在 finally 里释放；
 //   - 最多重试 4 次，token 校验保证只有写入者本人能释放锁。
 //
@@ -15,6 +17,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, linkSync, openSync, unlinkSync, writeFileSync } from 'node:fs';
+import { hostname } from 'node:os';
 
 /** @param {number} pid */
 export function processIsAlive(pid) {
@@ -40,6 +43,10 @@ export function createLockKit({ ErrorClass, label, readJson }) {
   const cannotAcquire = `无法获取 ${label}`;
   /** @param {unknown} pid */
   const heldBy = (pid) => `${label} 正被 PID ${pid} 持有`;
+  /** @param {unknown} host @param {unknown} pid @param {string} lockPath */
+  const heldByOtherHost = (host, pid, lockPath) =>
+    `${label} 由其他主机 ${host} 上的 PID ${pid} 持有；state root 跨主机共享时无法验证该进程存活，拒绝自动接管。` +
+    `请人工确认该进程确已退出后，手动删除锁文件 ${lockPath} 再重试`;
 
   /** @param {unknown} error */
   const isEnoent = (error) =>
@@ -60,6 +67,8 @@ export function createLockKit({ ErrorClass, label, readJson }) {
     }
     if (!Number.isInteger(Number(owner.pid)) || Number(owner.pid) <= 0 || typeof owner.token !== 'string' || !owner.token)
       throw new ErrorClass(reclaimOwnerInvalid);
+    if (typeof owner.hostname === 'string' && owner.hostname && owner.hostname !== hostname())
+      throw new ErrorClass(heldByOtherHost(owner.hostname, owner.pid, reclaimPath));
     if (processIsAlive(Number(owner.pid))) throw new ErrorClass(staleRecovery);
     let latest;
     try {
@@ -91,7 +100,7 @@ export function createLockKit({ ErrorClass, label, readJson }) {
   function acquireLock(path) {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       recoverOrphanReclaim(path);
-      const owner = { pid: process.pid, token: randomUUID(), acquired_at: new Date().toISOString() };
+      const owner = { pid: process.pid, hostname: hostname(), token: randomUUID(), acquired_at: new Date().toISOString() };
       const candidate = `${path}.${owner.pid}.${owner.token}.candidate`;
       writeOwnerCandidate(candidate, owner);
       try {
@@ -115,9 +124,11 @@ export function createLockKit({ ErrorClass, label, readJson }) {
         }
         if (!Number.isInteger(Number(current.pid)) || Number(current.pid) <= 0)
           throw new ErrorClass(lockOwnerInvalid);
+        if (typeof current.hostname === 'string' && current.hostname && current.hostname !== hostname())
+          throw new ErrorClass(heldByOtherHost(current.hostname, current.pid, path));
         if (processIsAlive(Number(current.pid))) throw new ErrorClass(heldBy(current.pid));
         const reclaimPath = `${path}.reclaim`;
-        const reclaimOwner = { pid: process.pid, token: randomUUID(), acquired_at: new Date().toISOString() };
+        const reclaimOwner = { pid: process.pid, hostname: hostname(), token: randomUUID(), acquired_at: new Date().toISOString() };
         const reclaimCandidate = `${reclaimPath}.${reclaimOwner.pid}.${reclaimOwner.token}.candidate`;
         writeOwnerCandidate(reclaimCandidate, reclaimOwner);
         try {

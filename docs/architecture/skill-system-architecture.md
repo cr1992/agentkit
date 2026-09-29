@@ -447,7 +447,8 @@ Artifact，以及 embedded 模式缺少标准 Evidence 时哪些保证不成立�
   SIGKILL 时无法执行清理；
 - 进程级 run / state-root / ledger lock 的原子占用（candidate 硬链接）、`.reclaim` 两阶段接管、4 次重试与
   token 校验统一由 `core/lock.mjs`（`createLockKit` + `processIsAlive`）提供，各域只注入错误类型、中文 label
-  与 JSON 解析函数；
+  与 JSON 解析函数；owner 记录 hostname，state root 跨主机共享时异机 owner（主锁与 `.reclaim`）一律 fail
+  closed、不按 pid 判活也不做时长自动接管，缺 hostname 的旧锁仍按本机 pid 判定以保持升级兼容；
 - 默认不向业务仓库写运行状态；
 - 状态目录必须显式授权；
 - event journal 追加写，snapshot 可重建；

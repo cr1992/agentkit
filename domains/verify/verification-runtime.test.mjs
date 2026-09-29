@@ -13,7 +13,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -810,6 +810,81 @@ test('dead owner 遗留的 reclaim 子锁可自愈，live 或 malformed reclaim 
     unlinkSync(`${lockPath}.reclaim`);
     writeFileSync(`${lockPath}.reclaim`, '{');
     assert.throws(() => acquireLock(lockPath), /reclaim 内容损坏/);
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+test('异机 owner 一律 fail closed，不按 pid 接管且锁文件字节不变', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'verification-crosshost-test-'));
+  const lockPath = join(sandbox, '.lock');
+  try {
+    const otherHost = `${hostname()}-other`;
+    /** @param {Error} error */
+    const expectCrossHost = (error) => {
+      assert.ok(error instanceof ValidationError);
+      assert.match(error.message, /由其他主机/);
+      assert.ok(error.message.includes(otherHost), 'message 含对方 hostname');
+      assert.ok(error.message.includes(lockPath), 'message 含锁文件路径供人工删除');
+      return true;
+    };
+    // 活 pid：本机同号进程存活，但 owner 属于其他主机 → 无法验证异机存活，拒绝接管。
+    const aliveOwner = `${JSON.stringify({ pid: process.pid, hostname: otherHost, token: 'alive-remote' })}\n`;
+    writeFileSync(lockPath, aliveOwner);
+    assert.throws(() => acquireLock(lockPath), (error) => expectCrossHost(error) && error.message.includes(String(process.pid)));
+    assert.equal(readFileSync(lockPath, 'utf8'), aliveOwner);
+
+    // 死 pid：即便对方 pid 在本机已不存在，跨主机也不做自动接管。
+    const deadOwner = `${JSON.stringify({ pid: 99999999, hostname: otherHost, token: 'dead-remote' })}\n`;
+    writeFileSync(lockPath, deadOwner);
+    assert.throws(() => acquireLock(lockPath), expectCrossHost);
+    assert.equal(readFileSync(lockPath, 'utf8'), deadOwner);
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+test('异机 .reclaim 一律 fail closed，不清理孤儿 reclaim', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'verification-crosshost-reclaim-test-'));
+  const lockPath = join(sandbox, '.lock');
+  const reclaimPath = `${lockPath}.reclaim`;
+  try {
+    const otherHost = `${hostname()}-other`;
+    const remoteReclaim = `${JSON.stringify({ pid: 99999999, hostname: otherHost, token: 'dead-remote-reclaimer' })}\n`;
+    writeFileSync(reclaimPath, remoteReclaim);
+    assert.throws(
+      () => acquireLock(lockPath),
+      (error) => {
+        assert.ok(error instanceof ValidationError);
+        assert.match(error.message, /由其他主机/);
+        assert.ok(error.message.includes(reclaimPath), 'message 含 reclaim 路径');
+        return true;
+      },
+    );
+    assert.equal(readFileSync(reclaimPath, 'utf8'), remoteReclaim);
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+test('无 hostname 的旧锁仍按死 pid 回收，新锁写入本机 hostname', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'verification-legacy-lock-test-'));
+  const lockPath = join(sandbox, '.lock');
+  try {
+    // 旧版本写的锁没有 hostname 字段：dead pid 按本机 pid 判定，可被接管，保证升级兼容。
+    writeFileSync(lockPath, '{"pid":99999999,"token":"legacy-dead"}\n');
+    const owner = acquireLock(lockPath);
+    assert.equal(owner.hostname, hostname());
+    const persisted = JSON.parse(readFileSync(lockPath, 'utf8'));
+    assert.equal(persisted.hostname, hostname());
+    assert.equal(persisted.pid, process.pid);
+    assert.equal(releaseLock(lockPath, owner), true);
+
+    // 全新锁：owner 与落盘内容都带本机 hostname。
+    const fresh = acquireLock(lockPath);
+    assert.equal(fresh.hostname, hostname());
+    assert.equal(JSON.parse(readFileSync(lockPath, 'utf8')).hostname, hostname());
+    assert.equal(releaseLock(lockPath, fresh), true);
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
   }
