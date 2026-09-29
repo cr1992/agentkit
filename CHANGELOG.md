@@ -4,6 +4,30 @@
 
 ## Unreleased
 
+## 1.6.0 - 2026-09-29
+
+本版改动了 `core/` 与 `domains/` 的内容摘要。升级后在途的 orchestration ledger、loop 与 verify run 会以 `skill_drift`
+终止（既有设计）：升级前先收尾在途任务，或升级后用 `ledger close --abandon` 记为放弃。
+
+- 修复 `verify` 与 `loop` 的 L0 check 超时后孙进程存活。此前用 `spawnSync(..., { timeout })`，超时只杀直接子进程：
+  `sh -c 'sleep 8 & …; wait'` 超时返回后 `sleep 8` 继续运行，可能在 final L0 期间写 workdir、占端口。现在 check 经
+  `core/bounded-exec.mjs` 在独立进程组内执行：超时对整组 SIGTERM，2 秒宽限后 SIGKILL；输出超过上限时杀整组并报
+  `ENOBUFS`；check 的环境仍严格等于 `env_allowlist` 解析结果。已知边界：check 自己 `setsid` 出去的子孙不在回收范围；
+  执行 supervisor 被 SIGKILL 时无法清理。
+- 修复 check 正常退出、但留下的后台进程占着 stdout 时被误记为超时：此前要等满 `timeout_ms`，Evidence 记
+  `timed_out: true`、`passed: false`；现在 check 一退出就回收残留进程，按 check 自身退出码判定。
+  `verify-agent-output` runtime 1.4.1 → 1.5.0，`run-agent-verify-loop` runtime 1.1.0 → 1.2.0。
+- loop / verify / orchestration ledger 各自复制的一份进程锁（candidate 硬链接 + `.reclaim` 两阶段接管）收敛到
+  `core/lock.mjs`，算法不变；ledger 原先中英混杂的锁报错统一为中文（如 `ledger lock held by <pid>` →
+  `ledger lock 正被 PID <pid> 持有`）。`orchestrate-subagents` runtime 1.8.0 → 1.8.1。
+- `worktree submit`（`provider: github`）的 `gh --version` / `gh auth status` 探测加上只读探测超时；此前网络卡住时
+  `submit` 会无限期挂起。`manage-worktrees` runtime 1.7.0 → 1.7.1。
+- 补 `manage-worktrees` 破坏性操作（reclaim、batch-result / batch-integrate、refresh-review、history rebase、watch）
+  的拒绝路径测试 23 组：每条断言退出码、守卫专属文案，以及 record 字节、worktree 目录与 ref 均未被改动。
+- CI 与供应链：workflow 里的 action 全部钉到 commit SHA，新增 dependabot 按周跟踪 `github-actions`；新增
+  `npm run coverage`（Node 内置覆盖率，行 / 分支 / 函数门槛 91 / 67 / 96）与对应的 CI `coverage` job；
+  `bin/cli.mjs`、`core/digest.mjs`、`core/atomic-fs.mjs` 纳入类型检查。
+
 ## 1.5.0 - 2026-09-23
 
 本版改动了 `core/` 与 `domains/` 的 JSDoc 注解，内容摘要随之变化。升级后在途的 orchestration ledger、loop 与 verify run
