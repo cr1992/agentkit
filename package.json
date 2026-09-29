@@ -25,6 +25,7 @@
   "scripts": {
     "validate": "node tools/validate-skills.mjs",
     "test": "node tools/validate-skills.mjs && node --test tests/*.test.mjs domains/*/*.test.mjs scripts/*.test.mjs evals/*/tests/*.test.mjs",
+    "coverage": "node --test --experimental-test-coverage --test-coverage-exclude=\"**/*.test.mjs\" --test-coverage-exclude=\"tests/**\" --test-coverage-exclude=\"evals/**\" --test-coverage-exclude=\"examples/**\" --test-coverage-exclude=\"scripts/**\" --test-coverage-lines=91 --test-coverage-branches=66 --test-coverage-functions=96 tests/*.test.mjs domains/*/*.test.mjs",
     "pack:check": "npm pack --dry-run"
   },
   "files": [

@@ -1,3 +1,4 @@
+// @ts-check
 // 文件写入原语。五处 writeNewJson 此前各带一份，两种写法只有选项顺序差异，语义相同。
 import { randomUUID } from 'node:crypto';
 import { renameSync, writeFileSync } from 'node:fs';

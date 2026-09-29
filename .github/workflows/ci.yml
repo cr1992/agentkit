@@ -25,8 +25,8 @@ jobs:
           - os: macos-latest
             node: 22
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: ${{ matrix.node }}
           registry-url: https://registry.npmjs.org
@@ -38,10 +38,22 @@ jobs:
     name: Typecheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 22
           package-manager-cache: false
       # npx 把 @types/node 装在自身缓存目录，tsc 默认只查仓库内 node_modules/@types，故用 --typeRoots 指过去。
       - run: npx --yes -p typescript@7.0.2 -p @types/node@22 -c 'tsc -p jsconfig.json --typeRoots "$(dirname "$(command -v tsc)")/../@types"'
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      # 门槛写在 package.json 的 coverage 脚本里，本地与 CI 共用一条命令；低于门槛即非零退出。
+      - run: npm run coverage
