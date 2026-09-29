@@ -33,7 +33,13 @@ function git(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
-function makeFixture({ humanGate = 'none', protectedPaths = [], allowedPaths = [] } = {}) {
+function makeFixture({
+  humanGate = 'none',
+  protectedPaths = [],
+  allowedPaths = [],
+  checkScript = 'process.stdout.write("ok\\n")',
+  checkTimeoutMs = 10_000,
+} = {}) {
   const sandbox = mkdtempSync(join(tmpdir(), 'loop-runtime-test-'));
   const repo = join(sandbox, 'repo');
   mkdirSync(repo);
@@ -75,10 +81,10 @@ function makeFixture({ humanGate = 'none', protectedPaths = [], allowedPaths = [
     l0_checks: [
       {
         check_id: 'unit',
-        argv: ['node', '-e', 'process.stdout.write("ok\\n")'],
+        argv: ['node', '-e', checkScript],
         cwd_rel: '.',
         stage: 'both',
-        timeout_ms: 10_000,
+        timeout_ms: checkTimeoutMs,
         expected_exit_codes: [0],
       },
     ],
@@ -824,4 +830,85 @@ test('复制 state root、CLI typo 与伪造 journal 都 fail closed', () => {
 test('capabilities --json 保持统一能力发现兼容', () => {
   const output = execFileSync(process.execPath, [LOOP_SCRIPT, 'capabilities', '--json'], { encoding: 'utf8' });
   assert.equal(JSON.parse(output).skill, 'run-agent-verify-loop');
+});
+
+// --- embedded L0 进程组执行与回收（core/bounded-exec.mjs）端到端 ---
+
+function pidAliveE2E(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+async function waitDeadE2E(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!pidAliveE2E(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  }
+  return !pidAliveE2E(pid);
+}
+const timeoutCheck = (pidFile) =>
+  `const cp=require('child_process');const fs=require('fs');` +
+  `const c=cp.spawn(process.execPath,['-e','setInterval(()=>{},1e9)'],{stdio:'ignore'});` +
+  `fs.writeFileSync(${JSON.stringify(pidFile)},String(c.pid));process.stdout.write('started');setInterval(()=>{},1e9);`;
+const backgroundCheck = (pidFile) =>
+  `const cp=require('child_process');const fs=require('fs');` +
+  `const c=cp.spawn(process.execPath,['-e','setInterval(()=>{},1e9)'],{stdio:['ignore','inherit','inherit']});` +
+  `fs.writeFileSync(${JSON.stringify(pidFile)},String(c.pid));process.stdout.write('ok');process.exit(0);`;
+
+test('超时 embedded L0：结果记为 timed_out、passed=false，且无存活孙进程', async () => {
+  const probe = mkdtempSync(join(tmpdir(), 'loop-e2e-timeout-'));
+  const pidFile = join(probe, 'pid');
+  const fixture = makeFixture({ checkScript: timeoutCheck(pidFile), checkTimeoutMs: 800 });
+  try {
+    const loop = initLoop(fixture, 'embedded');
+    loopMain(['record-artifact', '--loop', loop.loop_dir, '--artifact', fixture.artifactPath]);
+    loopMain(['run-embedded-l0', '--loop', loop.loop_dir]);
+    const snapshot = JSON.parse(readFileSync(join(loop.loop_dir, 'snapshot.json'), 'utf8'));
+    const check = snapshot.current_iteration.embedded_l0.checks[0];
+    assert.equal(check.timed_out, true);
+    assert.equal(check.passed, false);
+    const bgPid = Number(readFileSync(pidFile, 'utf8').trim());
+    const reaped = await waitDeadE2E(bgPid, 3000);
+    if (!reaped)
+      try {
+        process.kill(bgPid, 'SIGKILL');
+      } catch {}
+    assert.ok(reaped, '超时后孙进程必须被回收');
+  } finally {
+    fixture.cleanup();
+    rmSync(probe, { recursive: true, force: true });
+  }
+});
+
+test('正常退出但后台占管道的 embedded L0：判为 passed，且后台被回收', async () => {
+  const probe = mkdtempSync(join(tmpdir(), 'loop-e2e-bg-'));
+  const pidFile = join(probe, 'pid');
+  const fixture = makeFixture({ checkScript: backgroundCheck(pidFile), checkTimeoutMs: 3000 });
+  try {
+    const loop = initLoop(fixture, 'embedded');
+    loopMain(['record-artifact', '--loop', loop.loop_dir, '--artifact', fixture.artifactPath]);
+    const started = Date.now();
+    loopMain(['run-embedded-l0', '--loop', loop.loop_dir]);
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 2500, `不应等满 timeout，实际 ${elapsed}ms`);
+    const snapshot = JSON.parse(readFileSync(join(loop.loop_dir, 'snapshot.json'), 'utf8'));
+    const check = snapshot.current_iteration.embedded_l0.checks[0];
+    assert.equal(check.timed_out, false);
+    assert.equal(check.passed, true);
+    const bgPid = Number(readFileSync(pidFile, 'utf8').trim());
+    const reaped = await waitDeadE2E(bgPid, 3000);
+    if (!reaped)
+      try {
+        process.kill(bgPid, 'SIGKILL');
+      } catch {}
+    assert.ok(reaped, '正常退出后残留的后台进程必须被回收');
+  } finally {
+    fixture.cleanup();
+    rmSync(probe, { recursive: true, force: true });
+  }
 });

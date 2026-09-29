@@ -77,7 +77,7 @@ function makeFixture(options = {}) {
         argv: ['node', '-e', script],
         cwd_rel: '.',
         stage: 'both',
-        timeout_ms: 10_000,
+        timeout_ms: options.timeoutMs ?? 10_000,
         expected_exit_codes: [0],
       },
     ],
@@ -1347,5 +1347,87 @@ test('冻结 executable 在执行前消失时记录 operational abort，不判 A
     assert.equal(status.operational_abort.code, 'check_runtime_failure');
   } finally {
     fixture.cleanup();
+  }
+});
+
+// --- L0 进程组执行与回收（core/bounded-exec.mjs）端到端 ---
+
+function pidAliveE2E(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+async function waitDeadE2E(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!pidAliveE2E(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  }
+  return !pidAliveE2E(pid);
+}
+// node -e 脚本：派生一个后台孙进程并把其 pid 写进 pidFile。timeout 版自身常驻直到被回收；
+// background 版让孙进程继承 stdout 后自己 exit 0，复现「正常退出但后台占管道」。
+const timeoutScript = (pidFile) =>
+  `const cp=require('child_process');const fs=require('fs');` +
+  `const c=cp.spawn(process.execPath,['-e','setInterval(()=>{},1e9)'],{stdio:'ignore'});` +
+  `fs.writeFileSync(${JSON.stringify(pidFile)},String(c.pid));process.stdout.write('started');setInterval(()=>{},1e9);`;
+const backgroundScript = (pidFile) =>
+  `const cp=require('child_process');const fs=require('fs');` +
+  `const c=cp.spawn(process.execPath,['-e','setInterval(()=>{},1e9)'],{stdio:['ignore','inherit','inherit']});` +
+  `fs.writeFileSync(${JSON.stringify(pidFile)},String(c.pid));process.stdout.write('ok');process.exit(0);`;
+
+test('超时 L0：Evidence 记为 timed_out、passed=false，且无存活孙进程', async () => {
+  const probe = mkdtempSync(join(tmpdir(), 'verify-e2e-timeout-'));
+  const pidFile = join(probe, 'pid');
+  const fixture = makeFixture({ script: timeoutScript(pidFile), timeoutMs: 800 });
+  try {
+    const initialized = initialize(fixture);
+    main(['run-smoke', '--run', initialized.run_dir]);
+    const snapshot = JSON.parse(readFileSync(join(initialized.run_dir, 'snapshot.json'), 'utf8'));
+    const check = snapshot.stages.smoke_l0.checks[0];
+    assert.equal(check.timed_out, true);
+    assert.equal(check.passed, false);
+    const bgPid = Number(readFileSync(pidFile, 'utf8').trim());
+    const reaped = await waitDeadE2E(bgPid, 3000);
+    if (!reaped)
+      try {
+        process.kill(bgPid, 'SIGKILL');
+      } catch {}
+    assert.ok(reaped, '超时后孙进程必须被回收');
+  } finally {
+    fixture.cleanup();
+    rmSync(probe, { recursive: true, force: true });
+  }
+});
+
+test('正常退出但后台占管道的 L0：判为 passed，且后台被回收', async () => {
+  const probe = mkdtempSync(join(tmpdir(), 'verify-e2e-bg-'));
+  const pidFile = join(probe, 'pid');
+  const fixture = makeFixture({ script: backgroundScript(pidFile), timeoutMs: 3000 });
+  try {
+    const initialized = initialize(fixture);
+    const started = Date.now();
+    const result = main(['run-smoke', '--run', initialized.run_dir]);
+    const elapsed = Date.now() - started;
+    assert.equal(result.status, 'smoke_passed');
+    assert.ok(elapsed < 2500, `不应等满 timeout，实际 ${elapsed}ms`);
+    const snapshot = JSON.parse(readFileSync(join(initialized.run_dir, 'snapshot.json'), 'utf8'));
+    const check = snapshot.stages.smoke_l0.checks[0];
+    assert.equal(check.timed_out, false);
+    assert.equal(check.passed, true);
+    const bgPid = Number(readFileSync(pidFile, 'utf8').trim());
+    const reaped = await waitDeadE2E(bgPid, 3000);
+    if (!reaped)
+      try {
+        process.kill(bgPid, 'SIGKILL');
+      } catch {}
+    assert.ok(reaped, '正常退出后残留的后台进程必须被回收');
+  } finally {
+    fixture.cleanup();
+    rmSync(probe, { recursive: true, force: true });
   }
 });

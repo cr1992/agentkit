@@ -439,6 +439,15 @@ Artifact，以及 embedded 模式缺少标准 Evidence 时哪些保证不成立�
 - init 冻结相关 Skill manifest；provider 派发、Evidence 接收和 Loop `next` 前重算摘要；
 - 运行中 Skill 摘要变化以 `skill_drift` abort，必须 re-contract；
 - 不接受任意 shell 字符串，命令使用 argv 数组；
+- L0 check 在独立进程组内执行（`core/bounded-exec.mjs` 经同包内 supervisor 以 `spawn(detached)` 让 check
+  成为进程组组长）：超时回收**整个进程组**而非仅直接子进程，孤儿后台进程不会存活污染后续 final L0；
+  check 正常退出后仍占着 stdout / 端口的后台进程被回收，退出码按 check 自身计，不再误判为超时；输出超过
+  `max_log_bytes` 派生的 maxBuffer 时杀整组并报 `ENOBUFS`；check 的 env 严格等于 profile allowlist 解析出的
+  集合，不泄漏父进程环境。已知边界：check 自己 `setsid` / 另起进程组的子孙不在回收范围；supervisor 被
+  SIGKILL 时无法执行清理；
+- 进程级 run / state-root / ledger lock 的原子占用（candidate 硬链接）、`.reclaim` 两阶段接管、4 次重试与
+  token 校验统一由 `core/lock.mjs`（`createLockKit` + `processIsAlive`）提供，各域只注入错误类型、中文 label
+  与 JSON 解析函数；
 - 默认不向业务仓库写运行状态；
 - 状态目录必须显式授权；
 - event journal 追加写，snapshot 可重建；
