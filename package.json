@@ -1,6 +1,6 @@
 {
   "name": "@cr1992/agentkit",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Agent engineering toolkit: orchestration, git worktree isolation, independent verification and bounded verify loops.",
   "license": "MIT",
   "repository": {
@@ -25,7 +25,7 @@
   "scripts": {
     "validate": "node tools/validate-skills.mjs",
     "test": "node tools/validate-skills.mjs && node --test tests/*.test.mjs domains/*/*.test.mjs scripts/*.test.mjs evals/*/tests/*.test.mjs",
-    "coverage": "node --test --experimental-test-coverage --test-coverage-exclude=\"**/*.test.mjs\" --test-coverage-exclude=\"tests/**\" --test-coverage-exclude=\"evals/**\" --test-coverage-exclude=\"examples/**\" --test-coverage-exclude=\"scripts/**\" --test-coverage-lines=91 --test-coverage-branches=66 --test-coverage-functions=96 tests/*.test.mjs domains/*/*.test.mjs",
+    "coverage": "node --test --experimental-test-coverage --test-coverage-exclude=\"**/*.test.mjs\" --test-coverage-exclude=\"tests/**\" --test-coverage-exclude=\"evals/**\" --test-coverage-exclude=\"examples/**\" --test-coverage-exclude=\"scripts/**\" --test-coverage-lines=91 --test-coverage-branches=67 --test-coverage-functions=96 tests/*.test.mjs domains/*/*.test.mjs",
     "pack:check": "npm pack --dry-run"
   },
   "files": [
