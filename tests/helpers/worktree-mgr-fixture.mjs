@@ -55,6 +55,28 @@ export function managerWithEnvironment(cwd, args, overrides) {
   }).trim();
 }
 
+/** 期望命令拒绝：一次 spawn 同时拿到退出码、stdout 与 stderr，供守卫用例断言专属文案与副作用。
+ * @param {string} cwd @param {string[]} args */
+export function managerResult(cwd, args) {
+  const result = spawnSync(process.execPath, [MANAGER, ...args], {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, WORKTREE_ROOT: join(dirname(cwd), '.worktrees') },
+  });
+  return {
+    status: result.status,
+    stdout: String(result.stdout ?? '').trim(),
+    stderr: String(result.stderr ?? '').trim(),
+  };
+}
+
+/** record cache 文件路径 .git/worktree-trace/v1/records/<id>.json；配合 contentSha 做前后字节比对。
+ * @param {{repo:string}} fixture @param {string} worktreeId */
+export function recordFilePath(fixture, worktreeId) {
+  return join(fixture.repo, '.git', 'worktree-trace', 'v1', 'records', `${worktreeId}.json`);
+}
+
 /** @param {string} cwd @param {string[]} args */
 export function managerKeep(cwd, args) {
   try {
